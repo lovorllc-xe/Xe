@@ -1,0 +1,78 @@
+uses syscall
+
+module net
+begin
+    fn socket(domain: int, socket_type: int, protocol: int): int
+    begin
+        return syscall.raw.invoke3(41, domain, socket_type, protocol)
+    end
+
+    fn parse.ipv4(ip: string): int
+    begin
+        var packed: int := 0
+        var octet: int := 0
+        var octets: int := 0
+        var digits: int := 0
+        var index: int := 0
+        var length: int := str.length(ip)
+        while index <= length {
+            var character: int := -1
+            if index < length { character := str.char(ip, index) }
+            if character = 46 || index = length {
+                if digits = 0 || octet > 255 || octets >= 4 { return -1 }
+                packed := packed | (octet << (octets * 8))
+                octets := octets + 1
+                octet := 0
+                digits := 0
+            } else {
+                if character < 48 || character > 57 { return -1 }
+                octet := octet * 10 + character - 48
+                digits := digits + 1
+                if digits > 3 || octet > 255 { return -1 }
+            }
+            index := index + 1
+        }
+        if octets != 4 { return -1 }
+        return packed
+    end
+
+    fn make.address(port: int, address: int): *void
+    begin
+        var result: *void := alloc(16)
+        runtime.mem.set(result, 0, 16)
+        var port_word: int := 2 | ((port / 256) << 16) | ((port % 256) << 24)
+        runtime.hw.write32(result, port_word)
+        runtime.hw.write32(result + 4, address)
+        return result
+    end
+
+    fn connect(fd: int, ip: string, port: int): int
+    begin
+        if port < 0 || port > 65535 { return -22 }
+        var address_value: int := net.parse.ipv4(ip)
+        if address_value < 0 { return -22 }
+        var address: *void := net.make.address(port, address_value)
+        var result: int := syscall.raw.invoke3(42, fd, @address, 16)
+        free(address)
+        return result
+    end
+
+    fn bind(fd: int, port: int): int
+    begin
+        if port < 0 || port > 65535 { return -22 }
+        var address: *void := net.make.address(port, 0)
+        var result: int := syscall.raw.invoke3(49, fd, @address, 16)
+        free(address)
+        return result
+    end
+
+    fn listen(fd: int, backlog: int): int
+    begin
+        return syscall.raw.invoke3(50, fd, backlog, 0)
+    end
+
+    fn accept(fd: int): int
+    begin
+        return syscall.raw.invoke3(43, fd, 0, 0)
+    end
+end

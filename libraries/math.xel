@@ -1,0 +1,58 @@
+module math
+begin
+    fn abs_int(value: int): int
+    begin
+        if value < 0 { return -value }
+        return value
+    end
+
+    fn abs_flt(value: flt): flt
+    begin
+        if value < 0 { return -value }
+        return value
+    end
+
+    fn pow(base: flt, exponent: int): flt
+    begin
+        var count: int := exponent
+        var factor: flt := base
+        if count < 0 { count := -count }
+        var result: flt := 1.0
+        while count > 0 {
+            result := result * factor
+            count := count - 1
+        }
+        if exponent < 0 { return 1.0 / result }
+        return result
+    end
+
+    // Newton iteration. Negative inputs return zero. The loop also handles
+    // subnormal positive values; it stops early once binary64 stops changing.
+    fn sqrt(value: flt): flt
+    begin
+        if value <= 0 { return 0.0 }
+        var guess: flt := value
+        if guess < 1.0 { guess := 1.0 }
+        var iteration: int := 0
+        while iteration < 1100 {
+            var next: flt := (guess + value / guess) / 2.0
+            if next = guess { return next }
+            guess := next
+            iteration := iteration + 1
+        }
+        return guess
+    end
+
+    fn clamp(value: int, minimum: int, maximum: int): int
+    begin
+        var low: int := minimum
+        var high: int := maximum
+        if low > high {
+            low := maximum
+            high := minimum
+        }
+        if value < low { return low }
+        if value > high { return high }
+        return value
+    end
+end

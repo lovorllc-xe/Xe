@@ -1,0 +1,844 @@
+module checker
+begin
+    fn functionSignature(source: string, pool: *[524288]int, functionId: int, finish: int): int
+    begin
+        var opening: [4]int := parser.significant(source, finish, 1)
+        if opening[0] != 40 { return 0 }
+        var item: [4]int := parser.significant(source, opening[2], opening[3])
+        var parameters: int := 0
+        while item[0] != 41 && item[0] != token.endKind() {
+            var name: [4]int := item
+            var colon: [4]int := parser.significant(source, name[2], name[3])
+            var typeStart: [4]int := parser.significant(source, colon[2], colon[3])
+            if name[0] != token.nameKind() || colon[0] != 58 { return 0 }
+            var typeFinish: [4]int := typeStart
+            while typeFinish[0] != 44 && typeFinish[0] != 41 && typeFinish[0] != token.endKind() {
+                typeFinish := parser.significant(source, typeFinish[2], typeFinish[3])
+            }
+            if str.length(codegen.typeTextForFunction(source, pool, functionId, typeStart[1], typeFinish[1], typeStart[3])) = 0 { return 0 }
+            parameters := parameters + 1
+            if parameters > 32 { return 0 }
+            item := typeFinish
+            if item[0] = 44 { item := parser.significant(source, item[2], item[3]) }
+            else { if item[0] != 41 { return 0 } }
+        }
+        var colon: [4]int := parser.significant(source, item[2], item[3])
+        var result: [4]int := parser.significant(source, colon[2], colon[3])
+        var body: [4]int := result
+        if item[0] != 41 { return 0 }
+        if colon[0] = 58 {
+            while str.slice(source, body[1], body[2]) != "begin" && body[0] != token.endKind() {
+                body := parser.significant(source, body[2], body[3])
+            }
+            if body[0] = token.endKind() { return 0 }
+            if body[1] <= result[1] || str.length(codegen.typeTextForFunction(source, pool, functionId, result[1], body[1], result[3])) = 0 { return 0 }
+        }
+        else { body := colon }
+        if str.slice(source, body[1], body[2]) != "begin" { return 0 }
+        return 1
+    end
+
+    fn failStatement(source: string, pool: *[524288]int, statement: int, kind: int): int
+    begin
+        return 0
+    end
+
+    fn isNullPointerValue(source: string, pool: *[524288]int, expression: int): int
+    begin
+        if expression < 0 { return 0 }
+        if ast.read(pool, expression, 0) = ast.literalKind() && ast.read(pool, expression, 10) = token.numberKind() && str.slice(source, ast.read(pool, expression, 1), ast.read(pool, expression, 2)) = "0" { return 1 }
+        return 0
+    end
+
+    fn assignmentRootName(pool: *[524288]int, expression: int): int
+    begin
+        if expression < 0 { return -1 }
+        var kind: int := ast.read(pool, expression, 0)
+        if kind = ast.nameKind() { return expression }
+        if kind = ast.memberKind() || kind = ast.indexKind() { return assignmentRootName(pool, ast.read(pool, expression, 3)) }
+        return -1
+    end
+
+    fn spanEquals(source: string, first: int, finish: int, wantedFirst: int, wantedFinish: int): int
+    begin
+        if finish - first != wantedFinish - wantedFirst { return 0 }
+        var index: int := 0
+        while first + index < finish {
+            if str.char(source, first + index) != str.char(source, wantedFirst + index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn spanIs(source: string, first: int, finish: int, wanted: string): int
+    begin
+        if finish - first != str.length(wanted) { return 0 }
+        var index: int := 0
+        while first + index < finish {
+            if str.char(source, first + index) != str.char(wanted, index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn sameFunctionName(source: string, pool: *[524288]int, left: int, right: int): int
+    begin
+        var leftModule: int := ast.read(pool, left, 9)
+        var rightModule: int := ast.read(pool, right, 9)
+        var sameName: int := spanEquals(source, ast.read(pool, left, 3), ast.read(pool, left, 4), ast.read(pool, right, 3), ast.read(pool, right, 4))
+        if sameName = 0 { return 0 }
+        if leftModule = rightModule { return 1 }
+        if leftModule < 0 || rightModule < 0 { return 0 }
+        if codegen.qualifiedFunctionName(source, pool, left) = codegen.qualifiedFunctionName(source, pool, right) { return 1 }
+        return 0
+    end
+
+    fn parameterIndex(source: string, pool: *[524288]int, functionId: int, wantedFirst: int, wantedFinish: int): int
+    begin
+        if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return -1 }
+        var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
+        var parameter: [4]int := parser.significant(source, opening[2], opening[3])
+        var index: int := 0
+        while parameter[0] != 41 && parameter[0] != token.endKind() {
+            if spanEquals(source, parameter[1], parameter[2], wantedFirst, wantedFinish) = 1 { return index }
+            var colon: [4]int := parser.significant(source, parameter[2], parameter[3])
+            var type: [4]int := parser.significant(source, colon[2], colon[3])
+            while type[0] != 44 && type[0] != 41 && type[0] != token.endKind() { type := parser.significant(source, type[2], type[3]) }
+            parameter := type
+            if parameter[0] = 44 { parameter := parser.significant(source, parameter[2], parameter[3]) }
+            index := index + 1
+        }
+        return -1
+    end
+
+    fn parametersUnique(source: string, pool: *[524288]int, functionId: int): int
+    begin
+        if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return 1 }
+        var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
+        var parameter: [4]int := parser.significant(source, opening[2], opening[3])
+        var starts: [32]int
+        var finishes: [32]int
+        var count: int := 0
+        while parameter[0] != 41 && parameter[0] != token.endKind() && count < 32 {
+            if parameter[0] != token.nameKind() { return 0 }
+            var prior: int := 0
+            while prior < count {
+                if spanEquals(source, starts[prior], finishes[prior], parameter[1], parameter[2]) = 1 { return 0 }
+                prior := prior + 1
+            }
+            starts[count] := parameter[1]
+            finishes[count] := parameter[2]
+            count := count + 1
+            var colon: [4]int := parser.significant(source, parameter[2], parameter[3])
+            var type: [4]int := parser.significant(source, colon[2], colon[3])
+            while type[0] != 44 && type[0] != 41 && type[0] != token.endKind() { type := parser.significant(source, type[2], type[3]) }
+            parameter := type
+            if parameter[0] = 44 { parameter := parser.significant(source, parameter[2], parameter[3]) }
+        }
+        return parameter[0] = 41
+    end
+
+    fn pointerRegionDepth(source: string, pool: *[524288]int, functionId: int, expression: int, currentDepth: int): int
+    begin
+        if expression < 0 { return 0 }
+        var kind: int := ast.read(pool, expression, 0)
+        if kind = ast.nameKind() {
+            var declaration: int := ast.read(pool, expression, 11)
+            if declaration >= 0 { return ast.read(pool, declaration, 10) % 32768 }
+            return 0
+        }
+        if kind = ast.callKind() {
+            var called: int := ast.read(pool, expression, 3)
+            if called >= 0 {
+                var name: string := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2))
+                if name = "alloc" { return currentDepth }
+                if currentDepth > 0 && str.length(codegen.expressionType(source, pool, functionId, expression)) > 0 && str.char(codegen.expressionType(source, pool, functionId, expression), 0) = 42 { return currentDepth }
+            }
+            return 0
+        }
+        if kind = ast.unaryKind() && ast.read(pool, expression, 10) = 38 { return currentDepth }
+        return 0
+    end
+
+    fn expressionIsParameter(source: string, pool: *[524288]int, expression: int, parameterName: string): int
+    begin
+        if expression < 0 { return 0 }
+        var kind: int := ast.read(pool, expression, 0)
+        if kind = ast.nameKind() {
+            return str.slice(source, ast.read(pool, expression, 1), ast.read(pool, expression, 2)) = parameterName
+        }
+        if kind = ast.unaryKind() && ast.read(pool, expression, 10) = 38 {
+            var operand: int := ast.read(pool, expression, 3)
+            if operand >= 0 && ast.read(pool, operand, 0) = ast.unaryKind() && ast.read(pool, operand, 10) = 42 {
+                return expressionIsParameter(source, pool, ast.read(pool, operand, 3), parameterName)
+            }
+        }
+        return 0
+    end
+
+    fn callMayRetainParameter(source: string, pool: *[524288]int, callerId: int, calledName: string, parameterIndex: int): int
+    begin
+        if calledName = "alloc" || calledName = "free" || calledName = "write" || calledName = "writeln" || calledName = "read" || calledName = "readln" || str.find(calledName, "str.") = 0 || str.find(calledName, "file.") = 0 || str.find(calledName, "arg.") = 0 || calledName = "process.run" || calledName = "flt.format" { return 0 }
+        var lookup: string := calledName
+        if str.find(lookup, ".") < 0 {
+            var module: string := codegen.functionModule(source, pool, callerId)
+            if str.length(module) > 0 { lookup := module + lookup }
+        }
+        var candidate: int := ast.read(pool, callerId, 10)
+        var callee: int := -1
+        var visited: int := 0
+        while candidate >= 0 && visited < 32768 && callee < 0 {
+            if codegen.qualifiedFunctionName(source, pool, candidate) = lookup { callee := candidate }
+            else { candidate := ast.read(pool, candidate, 5) }
+            visited := visited + 1
+        }
+        if callee < 0 || visited > 32768 { return 1 }
+        var opening: [4]int := parser.significant(source, ast.read(pool, callee, 4), 1)
+        if opening[0] != 40 { return 1 }
+        var parameter: [4]int := parser.significant(source, opening[2], opening[3])
+        var index: int := 0
+        while parameter[0] != 41 && parameter[0] != token.endKind() && index < parameterIndex {
+            var colon: [4]int := parser.significant(source, parameter[2], parameter[3])
+            var type: [4]int := parser.significant(source, colon[2], colon[3])
+            while type[0] != 44 && type[0] != 41 && type[0] != token.endKind() { type := parser.significant(source, type[2], type[3]) }
+            parameter := type
+            if parameter[0] = 44 { parameter := parser.significant(source, parameter[2], parameter[3]) }
+            index := index + 1
+        }
+        if parameter[0] != token.nameKind() || index != parameterIndex { return 1 }
+        var parameterName: string := str.slice(source, parameter[1], parameter[2])
+        var statement: int := callee
+        var finish: int := ast.read(pool, callee, 11)
+        while statement < finish {
+            if ast.read(pool, statement, 9) = callee {
+                var kind: int := ast.read(pool, statement, 0)
+                if kind = ast.returnKind() && expressionIsParameter(source, pool, ast.read(pool, statement, 6), parameterName) = 1 { return 1 }
+                if kind = ast.variableKind() && expressionIsParameter(source, pool, ast.read(pool, statement, 6), parameterName) = 1 { return 1 }
+                if kind = ast.assignKind() && expressionIsParameter(source, pool, ast.read(pool, statement, 4), parameterName) = 1 { return 1 }
+                if kind = ast.assemblyKind() { return 1 }
+                if kind = ast.callKind() {
+                    var called: int := ast.read(pool, statement, 3)
+                    var nestedName: string := ""
+                    if called >= 0 { nestedName := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2)) }
+                    var argument: int := ast.read(pool, statement, 6)
+                    while argument >= 0 {
+                        if expressionIsParameter(source, pool, argument, parameterName) = 1 && nestedName != "alloc" && nestedName != "free" && nestedName != "write" && nestedName != "writeln" && nestedName != "read" && nestedName != "readln" && str.find(nestedName, "str.") != 0 && str.find(nestedName, "file.") != 0 && str.find(nestedName, "arg.") != 0 && nestedName != "process.run" && nestedName != "flt.format" { return 1 }
+                        argument := ast.read(pool, argument, 5)
+                    }
+                }
+            }
+            statement := statement + 1
+        }
+        return 0
+    end
+
+    fn bindExpression(source: string, pool: *[524288]int, functionId: int, expression: int, symbols: *[4096]int, symbolCount: *int, regionDepth: int): int
+    begin
+        if expression < 0 { return 1 }
+        var kind: int := ast.read(pool, expression, 0)
+        if kind = ast.nameKind() {
+            var nameFirst: int := ast.read(pool, expression, 1)
+            var nameFinish: int := ast.read(pool, expression, 2)
+            var rootFinish: int := nameFinish
+            var dot: int := str.find(str.slice(source, nameFirst, nameFinish), ".")
+            if dot >= 0 { rootFinish := nameFirst + dot }
+            if spanIs(source, nameFirst, nameFinish, "true") = 1 || spanIs(source, nameFirst, nameFinish, "false") = 1 {
+                ast.write(pool, expression, 11, -1)
+                return 1
+            }
+            var index: int := *symbolCount - 1
+            while index >= 0 {
+                var declaration: int := (*symbols)[index]
+                if spanEquals(source, ast.read(pool, declaration, 3), ast.read(pool, declaration, 4), nameFirst, rootFinish) = 1 {
+                    ast.write(pool, expression, 11, declaration)
+                    return 1
+                }
+                index := index - 1
+            }
+            var parameter: int := parameterIndex(source, pool, functionId, nameFirst, rootFinish)
+            if parameter >= 0 {
+                ast.write(pool, expression, 11, -2 - parameter)
+                return 1
+            }
+            ast.write(pool, expression, 11, -1)
+            return 0
+        }
+        if kind = ast.callKind() {
+            var calleeNode: int := ast.read(pool, expression, 3)
+            if calleeNode >= 0 {
+                var name: string := str.slice(source, ast.read(pool, calleeNode, 1), ast.read(pool, calleeNode, 2))
+                if codegen.builtinParameterCount(name) < 0 && name != "write" && name != "writeln" && name != "read" && name != "readln" {
+                    var resolvedFunction: int := codegen.functionNode(source, pool, functionId, name)
+                    if resolvedFunction >= 0 { ast.write(pool, calleeNode, 11, resolvedFunction + 1) }
+                }
+            }
+            var argument: int := ast.read(pool, expression, 6)
+            var visited: int := 0
+            while argument >= 0 && visited < 32768 {
+                if bindExpression(source, pool, functionId, argument, symbols, symbolCount, regionDepth) = 0 { return 0 }
+                argument := ast.read(pool, argument, 5)
+                visited := visited + 1
+            }
+            var called: int := ast.read(pool, expression, 3)
+            if called >= 0 {
+                var name: string := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2))
+                var argumentIndex: int := 0
+                argument := ast.read(pool, expression, 6)
+                while argument >= 0 {
+                    var argumentType: string := codegen.expressionType(source, pool, functionId, argument)
+                    if str.length(argumentType) > 0 && str.char(argumentType, 0) = 42 && pointerRegionDepth(source, pool, functionId, argument, regionDepth) > 0 && callMayRetainParameter(source, pool, functionId, name, argumentIndex) != 0 { return 0 }
+                    argument := ast.read(pool, argument, 5)
+                    argumentIndex := argumentIndex + 1
+                }
+            }
+            if argument < 0 { ast.write(pool, expression, 11, codegen.arrayCallWords(source, pool, functionId, expression)) }
+            return 1
+        }
+        if kind = ast.unaryKind() { return bindExpression(source, pool, functionId, ast.read(pool, expression, 3), symbols, symbolCount, regionDepth) }
+        if kind = ast.memberKind() { return bindExpression(source, pool, functionId, ast.read(pool, expression, 3), symbols, symbolCount, regionDepth) }
+        if kind = ast.binaryKind() || kind = ast.indexKind() || kind = ast.sliceKind() {
+            if bindExpression(source, pool, functionId, ast.read(pool, expression, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
+            if ast.read(pool, expression, 4) >= 0 && bindExpression(source, pool, functionId, ast.read(pool, expression, 4), symbols, symbolCount, regionDepth) = 0 { return 0 }
+            if kind = ast.sliceKind() && ast.read(pool, expression, 6) >= 0 && bindExpression(source, pool, functionId, ast.read(pool, expression, 6), symbols, symbolCount, regionDepth) = 0 { return 0 }
+        }
+        return 1
+    end
+
+    fn bindBlock(source: string, pool: *[524288]int, functionId: int, blockId: int, symbols: *[4096]int, symbolCount: *int, offsetWords: *int, nodeCount: int, regionDepth: int): int
+    begin
+        if blockId < 0 || blockId >= nodeCount || ast.read(pool, blockId, 0) != ast.blockKind() { return 0 }
+        var savedCount: int := *symbolCount
+        var result: int := bindStatements(source, pool, functionId, ast.read(pool, blockId, 6), symbols, symbolCount, offsetWords, nodeCount, regionDepth)
+        *symbolCount := savedCount
+        return result
+    end
+
+    fn bindStatements(source: string, pool: *[524288]int, functionId: int, first: int, symbols: *[4096]int, symbolCount: *int, offsetWords: *int, nodeCount: int, regionDepth: int): int
+    begin
+        var statement: int := first
+        var visited: int := 0
+        var scopeBase: int := *symbolCount
+        while statement >= 0 && visited < nodeCount {
+            if statement >= nodeCount || ast.read(pool, statement, 9) != functionId { return 0 }
+            var kind: int := ast.read(pool, statement, 0)
+            if kind = ast.variableKind() {
+                var value: int := ast.read(pool, statement, 6)
+                if value >= 0 && bindExpression(source, pool, functionId, value, symbols, symbolCount, regionDepth) = 0 { return 0 }
+                var duplicate: int := scopeBase
+                while duplicate < *symbolCount {
+                    var previous: int := (*symbols)[duplicate]
+                    if spanEquals(source, ast.read(pool, previous, 3), ast.read(pool, previous, 4), ast.read(pool, statement, 3), ast.read(pool, statement, 4)) = 1 { return 0 }
+                    duplicate := duplicate + 1
+                }
+                var type: string := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
+                var immutable: int := ast.read(pool, statement, 10) % 65536
+                ast.write(pool, statement, 10, immutable)
+                if str.length(type) > 0 && str.char(type, 0) = 42 {
+                    var valueRegion: int := 0
+                    if value >= 0 { valueRegion := pointerRegionDepth(source, pool, functionId, value, regionDepth) }
+                    immutable := immutable - (immutable % 32768)
+                    ast.write(pool, statement, 10, regionDepth * 65536 + valueRegion + immutable)
+                }
+                *offsetWords := *offsetWords + codegen.typeWords(source, type)
+                ast.write(pool, statement, 11, *offsetWords * 8)
+                if *symbolCount >= 4096 { return 0 }
+                (*symbols)[*symbolCount] := statement
+                *symbolCount := *symbolCount + 1
+            }
+            else {
+                if kind = ast.assignKind() {
+                    if bindExpression(source, pool, functionId, ast.read(pool, statement, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
+                    var rootName: int := assignmentRootName(pool, ast.read(pool, statement, 3))
+                    if rootName >= 0 {
+                        var rootDeclaration: int := ast.read(pool, rootName, 11)
+                        if rootDeclaration >= 0 && ast.read(pool, rootDeclaration, 10) % 65536 >= 32768 { return 0 }
+                    }
+                    if bindExpression(source, pool, functionId, ast.read(pool, statement, 4), symbols, symbolCount, regionDepth) = 0 { return 0 }
+                    var target: int := ast.read(pool, statement, 3)
+                    if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() {
+                        var declaration: int := ast.read(pool, target, 11)
+                        if declaration >= 0 {
+                            var targetType: string := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, declaration, 7), ast.read(pool, declaration, 8), 1)
+                            if str.length(targetType) > 0 && str.char(targetType, 0) = 42 {
+                                var sourceRegion: int := pointerRegionDepth(source, pool, functionId, ast.read(pool, statement, 4), regionDepth)
+                                var destinationRegion: int := ast.read(pool, declaration, 10) / 65536
+                                if sourceRegion > destinationRegion { return 0 }
+                                var immutable: int := ast.read(pool, declaration, 10) % 65536
+                                immutable := immutable - (immutable % 32768)
+                                ast.write(pool, declaration, 10, destinationRegion * 65536 + sourceRegion + immutable)
+                            }
+                        }
+                    }
+                }
+                else {
+                    if kind = ast.returnKind() || kind = ast.expressionKind() || kind = ast.deferKind() {
+                        var value: int := ast.read(pool, statement, 6)
+                        if value >= 0 && bindExpression(source, pool, functionId, value, symbols, symbolCount, regionDepth) = 0 { return 0 }
+                    }
+                    else {
+                        if kind = ast.branchKind() {
+                            if bindExpression(source, pool, functionId, ast.read(pool, statement, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
+                            if bindBlock(source, pool, functionId, ast.read(pool, statement, 6), symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
+                            var otherwise: int := ast.read(pool, statement, 4)
+                            if otherwise >= 0 && bindBlock(source, pool, functionId, otherwise, symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
+                        }
+                        else {
+                            if kind = ast.loopKind() {
+                                if bindExpression(source, pool, functionId, ast.read(pool, statement, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
+                                if bindBlock(source, pool, functionId, ast.read(pool, statement, 6), symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
+                            }
+                            else {
+                                if kind = ast.gcKind() {
+                                    if bindBlock(source, pool, functionId, ast.read(pool, statement, 6), symbols, symbolCount, offsetWords, nodeCount, regionDepth + 1) = 0 { return 0 }
+                                }
+                                else {
+                                    if kind = ast.switchKind() {
+                                        if bindExpression(source, pool, functionId, ast.read(pool, statement, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
+                                        var arm: int := ast.read(pool, statement, 6)
+                                        var arms: int := 0
+                                        while arm >= 0 && arms < nodeCount {
+                                            if bindExpression(source, pool, functionId, ast.read(pool, arm, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
+                                            if bindBlock(source, pool, functionId, ast.read(pool, arm, 6), symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
+                                            arm := ast.read(pool, arm, 5)
+                                            arms := arms + 1
+                                        }
+                                        if arm >= 0 { return 0 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            statement := ast.read(pool, statement, 5)
+            visited := visited + 1
+        }
+        return statement < 0
+    end
+
+    fn bindFunction(source: string, pool: *[524288]int, functionId: int, nodeCount: int): int
+    begin
+        var symbols: [4096]int
+        var symbolCount: int := 0
+        var functionName: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
+        var resultType: string := codegen.functionResultType(source, pool, functionId, functionName)
+        var hidden: int := 0
+        if codegen.indirectResult(source, resultType) = 1 { hidden := 1 }
+        var offsetWords: int := codegen.parameterCount(source, pool, functionId) + hidden
+        return bindStatements(source, pool, functionId, ast.read(pool, functionId, 6), &symbols, &symbolCount, &offsetWords, nodeCount, 0)
+    end
+
+    fn integerCodeAvailable(source: string, pool: *[524288]int, functionId: int, expression: int, cache: *[43690]int): int
+    begin
+        if expression < 0 { return 0 }
+        var state: int := (*cache)[expression]
+        if state % 2 = 1 { return (state / 2) % 2 }
+        var result: int := 0
+        if str.length(codegen.integerExpression(source, pool, functionId, expression)) > 0 { result := 1 }
+        (*cache)[expression] := state + 1 + result * 2
+        return result
+    end
+
+    fn floatCodeAvailable(source: string, pool: *[524288]int, functionId: int, expression: int, cache: *[43690]int): int
+    begin
+        if expression < 0 { return 0 }
+        var state: int := (*cache)[expression]
+        if (state / 4) % 2 = 1 { return (state / 8) % 2 }
+        var result: int := 0
+        if str.length(codegen.floatExpression(source, pool, functionId, expression)) > 0 { result := 1 }
+        (*cache)[expression] := state + 4 + result * 8
+        return result
+    end
+
+    fn stringCodeAvailable(source: string, pool: *[524288]int, functionId: int, expression: int, cache: *[43690]int): int
+    begin
+        if expression < 0 { return 0 }
+        var state: int := (*cache)[expression]
+        if (state / 16) % 2 = 1 { return (state / 32) % 2 }
+        var result: int := 0
+        if str.length(codegen.stringExpression(source, pool, functionId, expression)) > 0 { result := 1 }
+        (*cache)[expression] := state + 16 + result * 32
+        return result
+    end
+
+    fn validateBlock(source: string, pool: *[524288]int, functionId: int, blockId: int, nodeCount: int, regionDepth: int, cache: *[43690]int): int
+    begin
+        if blockId < 0 || blockId >= nodeCount || ast.read(pool, blockId, 0) != ast.blockKind() { return 0 }
+        if ast.read(pool, blockId, 9) != functionId { return 0 }
+        return validateStatements(source, pool, functionId, ast.read(pool, blockId, 6), nodeCount, regionDepth, cache)
+    end
+
+    fn validateStatements(source: string, pool: *[524288]int, functionId: int, first: int, nodeCount: int, regionDepth: int, cache: *[43690]int): int
+    begin
+        var statement: int := first
+        var visited: int := 0
+        while statement >= 0 && visited < nodeCount {
+            if statement >= nodeCount || ast.read(pool, statement, 9) != functionId { return 0 }
+            var kind: int := ast.read(pool, statement, 0)
+            if kind = ast.variableKind() {
+                var type: string := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
+                var value: int := ast.read(pool, statement, 6)
+                if ast.read(pool, statement, 10) % 65536 >= 32768 && value < 0 { return failStatement(source, pool, statement, kind) }
+                if str.length(type) > 0 && str.char(type, 0) = 91 {
+                    if value >= 0 && codegen.arrayExpressionType(source, pool, functionId, value) = 0 { return failStatement(source, pool, statement, kind) }
+                }
+                else {
+                if type = "int" {
+                    if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0) {
+                        return failStatement(source, pool, statement, kind)
+                    }
+                }
+                else {
+                    if type = "flt" {
+                        if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                    }
+                    else {
+                        if type = "string" || type = "str" {
+                            if value >= 0 && (codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                        }
+                        else {
+                            if codegen.recordWordCount(source, type) > 0 {
+                                if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != type || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0) { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if str.char(type, 0) = 42 {
+                                    if value >= 0 && ((codegen.argumentTypeMatches(type, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                                }
+                                else { return failStatement(source, pool, statement, kind) }
+                            }
+                        }
+                    }
+                }
+                }
+            }
+            else {
+                if kind = ast.assignKind() {
+                    var target: int := ast.read(pool, statement, 3)
+                    var value: int := ast.read(pool, statement, 4)
+                    if target < 0 || value < 0 { return failStatement(source, pool, statement, kind) }
+                    if ast.read(pool, target, 0) = ast.indexKind() {
+                        var elementType: string := codegen.expressionType(source, pool, functionId, target)
+                        if str.length(codegen.arrayElementAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
+                        if elementType = "flt" {
+                            if codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                        }
+                        else {
+                            if elementType = "string" || elementType = "str" {
+                                if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if str.length(elementType) > 0 && str.char(elementType, 0) = 42 {
+                                    if (codegen.argumentTypeMatches(elementType, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                if codegen.recordWordCount(source, elementType) > 0 {
+                                    if codegen.expressionType(source, pool, functionId, value) != elementType || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                    if elementType != "int" || codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        if ast.read(pool, target, 0) = ast.unaryKind() && (ast.read(pool, target, 10) = 42 || ast.read(pool, target, 10) = 35) {
+                            var targetType: string := codegen.expressionType(source, pool, functionId, target)
+                            if targetType = "string" || targetType = "str" {
+                                if integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                            if targetType = "flt" {
+                                if integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if str.length(targetType) = 0 || (targetType != "int" && str.char(targetType, 0) != 42) || integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.argumentTypeMatches(targetType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                        }
+                            }
+                        else {
+                        if ast.read(pool, target, 0) = ast.memberKind() {
+                            var memberType: string := codegen.expressionType(source, pool, functionId, target)
+                            if str.length(codegen.memberAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
+                            if memberType = "flt" {
+                                if codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if memberType = "int" {
+                                    if codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                    if memberType = "string" || memberType = "str" {
+                                        if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else {
+                                        if str.length(memberType) > 0 && str.char(memberType, 0) = 42 {
+                                            if codegen.argumentTypeMatches(memberType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                        }
+                                        else { return failStatement(source, pool, statement, kind) }
+                                    }
+                                }
+                            }
+                        }
+                        else {
+                            if ast.read(pool, target, 0) != ast.nameKind() { return failStatement(source, pool, statement, kind) }
+                            var name: string := str.slice(source, ast.read(pool, target, 1), ast.read(pool, target, 2))
+                            var offset: int := codegen.boundLocalOffset(source, pool, functionId, target)
+                            var type: string := codegen.boundLocalType(source, pool, functionId, target)
+                            if offset < 0 { return failStatement(source, pool, statement, kind) }
+                            var declaration: int := ast.read(pool, target, 11)
+                            if str.length(type) > 0 && str.char(type, 0) = 42 && declaration >= 0 && pointerRegionDepth(source, pool, functionId, value, regionDepth) > ast.read(pool, declaration, 10) / 65536 { return failStatement(source, pool, statement, kind) }
+                            if str.length(type) > 0 && str.char(type, 0) = 91 {
+                                if codegen.arrayExpressionType(source, pool, functionId, value) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if type = "flt" {
+                                    if codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                    if type = "string" || type = "str" {
+                                        if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else {
+                                        if type = "int" {
+                                            if codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                        }
+                                        else {
+                            if codegen.recordWordCount(source, type) > 0 {
+                                if codegen.expressionType(source, pool, functionId, value) != type || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else { if str.length(type) = 0 || str.char(type, 0) != 42 || (codegen.argumentTypeMatches(type, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        }
+                    }
+                }
+                else {
+                    if kind = ast.returnKind() {
+                        var value: int := ast.read(pool, statement, 6)
+                        var resultType: string := codegen.functionResultType(source, pool, functionId, str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)))
+                        if str.length(resultType) > 0 && str.char(resultType, 0) = 42 && value >= 0 && pointerRegionDepth(source, pool, functionId, value, regionDepth) > 0 { return failStatement(source, pool, statement, kind) }
+                        if resultType = "flt" {
+                            if value < 0 || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                        }
+                        else {
+                            if codegen.indirectResult(source, resultType) = 1 {
+                                if str.char(resultType, 0) = 91 {
+                                    if value < 0 || codegen.arrayExpressionType(source, pool, functionId, value) = 0 || str.length(codegen.arrayAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else { if value < 0 || codegen.expressionType(source, pool, functionId, value) != resultType || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) } }
+                            }
+                            else {
+                            if resultType = "string" || resultType = "str" {
+                                if value < 0 || codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if resultType = "int" {
+                                if value < 0 || codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                    if str.length(resultType) > 0 && str.char(resultType, 0) = 42 {
+                                        if value < 0 || codegen.argumentTypeMatches(resultType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else { if resultType = "void" && value >= 0 { return failStatement(source, pool, statement, kind) } }
+                                }
+                            }
+                            }
+                        }
+                    }
+                    else {
+                        if kind = ast.expressionKind() || kind = ast.deferKind() {
+                            var expression: int := ast.read(pool, statement, 6)
+                            if expression < 0 { return failStatement(source, pool, statement, kind) }
+                            if ast.read(pool, expression, 0) = ast.callKind() {
+                                var called: int := ast.read(pool, expression, 3)
+                                if called >= 0 && ast.read(pool, called, 0) = ast.nameKind() {
+                                    var name: string := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2))
+                                    if name = "write" || name = "writeln" {
+                                        var argument: int := ast.read(pool, expression, 6)
+                                        if str.length(writeCodeForValidation(source, pool, functionId, name, argument, ast.read(pool, statement, 1))) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else {
+                                        if name = "read" || name = "readln" {
+                                            var argument: int := ast.read(pool, expression, 6)
+                                            if argument < 0 || ast.read(pool, argument, 5) >= 0 || str.length(codegen.readArgumentCode(source, pool, functionId, name, argument)) = 0 { return failStatement(source, pool, statement, kind) }
+                                        }
+                                        else { if integerCodeAvailable(source, pool, functionId, expression, cache) = 0 { return failStatement(source, pool, statement, kind) } }
+                                    }
+                                }
+                                else { return failStatement(source, pool, statement, kind) }
+                            }
+                            else { if integerCodeAvailable(source, pool, functionId, expression, cache) = 0 { return failStatement(source, pool, statement, kind) } }
+                        }
+                        else {
+                            if kind = ast.branchKind() {
+                                if codegen.expressionType(source, pool, functionId, ast.read(pool, statement, 3)) != "int" || integerCodeAvailable(source, pool, functionId, ast.read(pool, statement, 3), cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                if validateBlock(source, pool, functionId, ast.read(pool, statement, 6), nodeCount, regionDepth, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                var other: int := ast.read(pool, statement, 4)
+                                if other >= 0 && validateBlock(source, pool, functionId, other, nodeCount, regionDepth, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            }
+                            else {
+                                if kind = ast.loopKind() {
+                                    if codegen.expressionType(source, pool, functionId, ast.read(pool, statement, 3)) != "int" || integerCodeAvailable(source, pool, functionId, ast.read(pool, statement, 3), cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    if validateBlock(source, pool, functionId, ast.read(pool, statement, 6), nodeCount, regionDepth, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                    if kind = ast.gcKind() {
+                                        if validateBlock(source, pool, functionId, ast.read(pool, statement, 6), nodeCount, regionDepth + 1, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else {
+                                        if kind = ast.switchKind() {
+                                            if codegen.expressionType(source, pool, functionId, ast.read(pool, statement, 3)) != "int" || integerCodeAvailable(source, pool, functionId, ast.read(pool, statement, 3), cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                            var arm: int := ast.read(pool, statement, 6)
+                                            var arms: int := 0
+                                            var fallback: int := 0
+                                            while arm >= 0 && arms < nodeCount {
+                                                if ast.read(pool, arm, 0) != ast.switchArmKind() || ast.read(pool, arm, 9) != functionId { return failStatement(source, pool, statement, kind) }
+                                                if ast.read(pool, arm, 10) = 1 { fallback := fallback + 1 }
+                                                else { if codegen.integerValue(source, pool, ast.read(pool, arm, 3))[0] = 0 { return failStatement(source, pool, statement, kind) } }
+                                                if validateBlock(source, pool, functionId, ast.read(pool, arm, 6), nodeCount, regionDepth, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                                arm := ast.read(pool, arm, 5)
+                                                arms := arms + 1
+                                            }
+                                            if arm >= 0 || fallback > 1 { return failStatement(source, pool, statement, kind) }
+                                        }
+                                        else { if kind != ast.assemblyKind() { return failStatement(source, pool, statement, kind) } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            statement := ast.read(pool, statement, 5)
+            visited := visited + 1
+        }
+        if statement >= 0 { return 0 }
+        return 1
+    end
+
+    fn alwaysReturnsBlock(pool: *[524288]int, blockId: int, nodeCount: int): int
+    begin
+        if blockId < 0 || blockId >= nodeCount { return 0 }
+        var statement: int := blockId
+        if ast.read(pool, blockId, 0) = ast.blockKind() { statement := ast.read(pool, blockId, 6) }
+        var last: int := -1
+        var visited: int := 0
+        while statement >= 0 && visited < nodeCount {
+            if statement >= nodeCount { return 0 }
+            last := statement
+            statement := ast.read(pool, statement, 5)
+            visited := visited + 1
+        }
+        if statement >= 0 || last < 0 { return 0 }
+        var kind: int := ast.read(pool, last, 0)
+        if kind = ast.returnKind() { return 1 }
+        if kind = ast.branchKind() {
+            var otherwise: int := ast.read(pool, last, 4)
+            if otherwise < 0 { return 0 }
+            return alwaysReturnsBlock(pool, ast.read(pool, last, 6), nodeCount) && alwaysReturnsBlock(pool, otherwise, nodeCount)
+        }
+        if kind = ast.switchKind() {
+            var arm: int := ast.read(pool, last, 6)
+            var foundDefault: int := 0
+            var arms: int := 0
+            while arm >= 0 && arms < nodeCount {
+                if ast.read(pool, arm, 10) = 1 { foundDefault := 1 }
+                if alwaysReturnsBlock(pool, ast.read(pool, arm, 6), nodeCount) = 0 { return 0 }
+                arm := ast.read(pool, arm, 5)
+                arms := arms + 1
+            }
+            return arm < 0 && foundDefault = 1
+        }
+        if kind = ast.blockKind() { return alwaysReturnsBlock(pool, last, nodeCount) }
+        return 0
+    end
+
+    fn writeCodeForValidation(source: string, pool: *[524288]int, functionId: int, word: string, argument: int, callStart: int): string
+    begin
+        return codegen.writeCallCode(source, pool, functionId, word, argument, callStart)
+    end
+
+    fn mainSignature(source: string, finish: int): int
+    begin
+        var opening: [4]int := parser.significant(source, finish, 1)
+        var closing: [4]int := parser.significant(source, opening[2], opening[3])
+        var colon: [4]int := parser.significant(source, closing[2], closing[3])
+        var result: [4]int := parser.significant(source, colon[2], colon[3])
+        var body: [4]int := parser.significant(source, result[2], result[3])
+        if opening[0] != 40 || closing[0] != 41 || colon[0] != 58 { return 0 }
+        if str.slice(source, result[1], result[2]) != "int" || str.slice(source, body[1], body[2]) != "begin" { return 0 }
+        return 1
+    end
+
+    fn validate(source: string, pool: *[524288]int, program: [4]int, nodeCount: int): int
+    begin
+        if lexer.valid(source) = 0 {
+            return 0
+        }
+        if parser.validate(source) = 0 {
+            return 0
+        }
+        if program[0] != 1 || program[1] < 0 || program[2] < 1 || program[2] > 512 || program[3] < 0 || nodeCount < program[2] || nodeCount > 43690 {
+            return 0
+        }
+        var id: int := program[1]
+        var visited: int := 0
+        var mainFound: int := 0
+        var cache: [43690]int
+        var cacheIndex: int := 0
+        while cacheIndex < nodeCount {
+            cache[cacheIndex] := 0
+            cacheIndex := cacheIndex + 1
+        }
+        while id >= 0 && visited < program[2] {
+            if id >= nodeCount || ast.read(pool, id, 0) != ast.functionKind() { return 0 }
+            var start: int := ast.read(pool, id, 1)
+            var finish: int := ast.read(pool, id, 2)
+            var nameStart: int := ast.read(pool, id, 3)
+            var nameFinish: int := ast.read(pool, id, 4)
+            var bodyStart: int := ast.read(pool, id, 7)
+            var bodyFinish: int := ast.read(pool, id, 8)
+            if start < 0 || finish <= start || finish > str.length(source) { return 0 }
+            if nameStart < start || nameFinish <= nameStart || nameFinish > finish { return 0 }
+            if bodyStart <= nameFinish || bodyFinish <= bodyStart || bodyFinish > finish { return 0 }
+            var name: string := str.slice(source, nameStart, nameFinish)
+            var other: int := ast.read(pool, id, 5)
+            while other >= 0 {
+                if sameFunctionName(source, pool, other, id) = 1 {
+                    return 0
+                }
+                other := ast.read(pool, other, 5)
+            }
+            if name = "main" {
+                if id != program[3] { return 0 }
+                mainFound := mainFound + 1
+                var signature: int := mainSignature(source, nameFinish)
+                if signature = 0 {
+                    return 0
+                }
+            }
+            else {
+                if functionSignature(source, pool, id, nameFinish) = 0 {
+                    return 0
+                }
+                if parametersUnique(source, pool, id) = 0 { return 0 }
+            }
+            var resultType: string := codegen.functionResultType(source, pool, id, name)
+            if resultType != "void" && alwaysReturnsBlock(pool, ast.read(pool, id, 6), nodeCount) = 0 { return 0 }
+            if bindFunction(source, pool, id, nodeCount) = 0 {
+                return 0
+            }
+            if validateStatements(source, pool, id, ast.read(pool, id, 6), nodeCount, 0, &cache) = 0 {
+                return 0
+            }
+            id := ast.read(pool, id, 5)
+            visited := visited + 1
+        }
+        if id >= 0 || visited != program[2] || mainFound != 1 { return 0 }
+        return 1
+    end
+end

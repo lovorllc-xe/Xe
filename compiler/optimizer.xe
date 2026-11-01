@@ -1,0 +1,260 @@
+module optimizer
+begin
+    fn textEquals(source: string, first: int, finish: int, wanted: string): int
+    begin
+        var length: int := finish - first
+        if length != str.length(wanted) { return 0 }
+        var index: int := 0
+        while index < length {
+            if str.char(source, first + index) != str.char(wanted, index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn sameSpan(source: string, first: int, finish: int, wantedFirst: int, wantedFinish: int): int
+    begin
+        if finish - first != wantedFinish - wantedFirst { return 0 }
+        var index: int := 0
+        while first + index < finish {
+            if str.char(source, first + index) != str.char(source, wantedFirst + index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn findCharacter(source: string, wanted: int, start: int, finish: int): int
+    begin
+        var position: int := start
+        while position < finish {
+            if str.char(source, position) = wanted { return position }
+            position := position + 1
+        }
+        return -1
+    end
+
+    fn localLastUse(source: string, start: int, finish: int, wantedFirst: int, wantedFinish: int, declaration: int): int
+    begin
+        var position: int := start
+        var line: int := 1
+        var last: int := declaration
+        var hasLoop: int := 0
+        while position < finish {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.nameKind() {
+                    if textEquals(source, item[1], item[2], "while") = 1 { hasLoop := 1 }
+                    if item[1] >= declaration && sameSpan(source, item[1], item[2], wantedFirst, wantedFinish) = 1 { last := item[2] }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        // Lexical last-use intervals are not enough across a loop backedge:
+        // every local may still be needed on the next iteration. Keep them
+        // live to the function end so register slots cannot alias unsafely.
+        if hasLoop = 1 { return finish }
+        return last
+    end
+
+    fn registerIndex(source: string, start: int, finish: int, wanted: string, before: int): int
+    begin
+        if finish - start > 512 { return -1 }
+        var target: int := -1
+        var position: int := start
+        var line: int := 1
+        while position < finish && position <= before {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], "var") = 1 {
+                    var name: [4]int := parser.significant(source, item[2], item[3])
+                    var colon: [4]int := parser.significant(source, name[2], name[3])
+                    var kind: [4]int := parser.significant(source, colon[2], colon[3])
+                    if textEquals(source, name[1], name[2], wanted) = 1 && textEquals(source, kind[1], kind[2], "int") = 1 && name[1] <= before { target := name[1] }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        if target < 0 { return -1 }
+        var declarations: int := 0
+        position := start
+        line := 1
+        while position < finish {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], "var") = 1 {
+                    var declaration: [4]int := parser.significant(source, item[2], item[3])
+                    if declaration[0] = token.nameKind() && textEquals(source, declaration[1], declaration[2], wanted) = 1 { declarations := declarations + 1 }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        if declarations > 1 { return -1 }
+        // Address-taken locals must stay in their stack slot. Code that uses
+        // `&name` may update that slot through a pointer, so keeping the local
+        // in a register would make later reads observe a stale value.
+        position := start
+        line := 1
+        while position < finish {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = 38 {
+                    var addressed: [4]int := parser.significant(source, item[2], item[3])
+                    if addressed[0] = token.nameKind() && textEquals(source, addressed[1], addressed[2], wanted) = 1 { return -1 }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        var ends: [5]int
+        var slotInit: int := 0
+        while slotInit < 5 {
+            ends[slotInit] := 0
+            slotInit := slotInit + 1
+        }
+        var result: int := -1
+        position := start
+        line := 1
+        while position < finish {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], "var") = 1 {
+                    var name: [4]int := parser.significant(source, item[2], item[3])
+                    var colon: [4]int := parser.significant(source, name[2], name[3])
+                    var kind: [4]int := parser.significant(source, colon[2], colon[3])
+                    if textEquals(source, kind[1], kind[2], "int") = 1 {
+                        var slot: int := 0
+                        while slot < 5 && ends[slot] >= name[1] { slot := slot + 1 }
+                        if slot < 5 {
+                            ends[slot] := localLastUse(source, start, finish, name[1], name[2], name[1])
+                            if name[1] = target { result := slot }
+                        }
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        return result
+    end
+
+    fn registerCount(source: string, start: int, finish: int): int
+    begin
+        if finish - start > 512 { return 0 }
+        var ends: [5]int
+        var slotInit: int := 0
+        while slotInit < 5 {
+            ends[slotInit] := 0
+            slotInit := slotInit + 1
+        }
+        var count: int := 0
+        var position: int := start
+        var line: int := 1
+        while position < finish {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], "var") = 1 {
+                    var name: [4]int := parser.significant(source, item[2], item[3])
+                    var colon: [4]int := parser.significant(source, name[2], name[3])
+                    var kind: [4]int := parser.significant(source, colon[2], colon[3])
+                    if textEquals(source, kind[1], kind[2], "int") = 1 {
+                        var slot: int := 0
+                        while slot < 5 && ends[slot] >= name[1] { slot := slot + 1 }
+                        if slot < 5 {
+                            ends[slot] := localLastUse(source, start, finish, name[1], name[2], name[1])
+                            if slot + 1 > count { count := slot + 1 }
+                        }
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        return count
+    end
+
+    fn replaceAll(source: string, search: string, replacement: string): string
+    begin
+        var output: string := str.builder("")
+        var cursor: int := 0
+        var found: int := str.find(source, search)
+        while found >= 0 {
+            output := str.append(output, str.slice(source, cursor, found) + replacement)
+            cursor := found + str.length(search)
+            found := str.find(str.slice(source, cursor, str.length(source)), search)
+            if found >= 0 { found := found + cursor }
+        }
+        return output + str.slice(source, cursor, str.length(source))
+    end
+
+    fn nasm(source: string): string
+    begin
+        var output: string := str.builder("")
+        var start: int := 0
+        var size: int := str.length(source)
+        while start < size {
+            var tail: string := str.slice(source, start, size)
+            var newline: int := str.find(tail, token.character(10))
+            var line: string := tail
+            var next: int := size
+            var hasNewline: int := 0
+            if newline >= 0 {
+                line := str.slice(source, start, start + newline)
+                next := start + newline + 1
+                hasNewline := 1
+            }
+            if str.find(line, ".type ") < 0 && str.find(line, ".section .note.") < 0 {
+                if line = ".intel" + token.character(95) + "syntax noprefix" { line := "bits 64" }
+                line := replaceAll(line, ".section ", "section ")
+                line := replaceAll(line, ".global ", "global ")
+                line := replaceAll(line, ".byte ", "db ")
+                line := replaceAll(line, ".quad 0", "resq 1")
+                line := replaceAll(line, ".quad ", "dq ")
+                line := replaceAll(line, ".double ", "dq ")
+                line := replaceAll(line, ".align ", "align ")
+                line := replaceAll(line, ".skip ", "resb ")
+                line := replaceAll(line, " ptr ", " ")
+                line := replaceAll(line, "[rip+", "[rel ")
+                line := replaceAll(line, ".L", "L")
+                line := replaceAll(line, " = .-", " equ $-")
+                output := str.append(output, line)
+                if hasNewline = 1 { output := str.append(output, token.character(10)) }
+            }
+            start := next
+        }
+        return output
+    end
+
+    fn assembly(source: string): string
+    begin
+        var output: string := str.builder("")
+        var start: int := 0
+        var size: int := str.length(source)
+        while start < size {
+            var newline: int := findCharacter(source, 10, start, size)
+            var finish: int := size
+            var next: int := size
+            var hasNewline: int := 0
+            if newline >= 0 {
+                finish := newline
+                next := newline + 1
+                hasNewline := 1
+            }
+            var nop: int := 0
+            if finish - start = 3 && textEquals(source, start, finish, "nop") = 1 { nop := 1 }
+            if finish - start = 4 && str.char(source, start) = 32 && textEquals(source, start + 1, finish, "nop") = 1 { nop := 1 }
+            if nop = 0 { output := str.append(output, str.slice(source, start, finish)) }
+            if hasNewline = 1 { output := str.append(output, token.character(10)) }
+            start := next
+        }
+        return output
+    end
+end

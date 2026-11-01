@@ -1,0 +1,100 @@
+module token
+begin
+    type Kind: int
+    type Token: [4]int
+
+    fn endKind(): int
+    begin
+        return 0
+    end
+
+    fn nameKind(): int
+    begin
+        return 1
+    end
+
+    fn numberKind(): int
+    begin
+        return 2
+    end
+
+    fn stringKind(): int
+    begin
+        return 3
+    end
+
+    fn assemblyKind(): int
+    begin
+        return 4
+    end
+
+    fn equalKind(): int
+    begin
+        return 256
+    end
+
+    fn notEqualKind(): int
+    begin
+        return 257
+    end
+
+    fn lessEqualKind(): int
+    begin
+        return 258
+    end
+
+    fn greaterEqualKind(): int
+    begin
+        return 259
+    end
+
+    fn andKind(): int
+    begin
+        return 260
+    end
+
+    fn orKind(): int
+    begin
+        return 261
+    end
+
+    fn errorKind(): int
+    begin
+        return -1
+    end
+
+    fn assignKind(): int
+    begin
+        return 262
+    end
+
+    fn shiftLeftKind(): int
+    begin
+        return 263
+    end
+
+    fn shiftRightKind(): int
+    begin
+        return 264
+    end
+
+    fn number(value: int): string
+    begin
+        return str.number(value)
+    end
+
+    fn character(value: int): string
+    begin
+        return str.fromchar(value)
+    end
+
+    fn make(kind: int, start: int, finish: int, line: int): [4]int
+    begin
+        var result: [4]int
+        result[0] := kind
+        result[1] := start
+        result[2] := finish
+        result[3] := line
+        return result
+    end
+end

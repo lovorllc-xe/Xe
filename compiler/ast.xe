@@ -1,0 +1,230 @@
+module ast
+begin
+    type Node: [12]int
+    type Program: [4]int
+    type Pool: [524288]int
+
+    fn literalKind(): int
+    begin
+        return 1
+    end
+
+    fn nameKind(): int
+    begin
+        return 2
+    end
+
+    fn unaryKind(): int
+    begin
+        return 3
+    end
+
+    fn binaryKind(): int
+    begin
+        return 4
+    end
+
+    fn callKind(): int
+    begin
+        return 5
+    end
+
+    fn indexKind(): int
+    begin
+        return 6
+    end
+
+    fn sliceKind(): int
+    begin
+        return 7
+    end
+
+    fn memberKind(): int
+    begin
+        return 8
+    end
+
+    fn functionKind(): int
+    begin
+        return 10
+    end
+
+    fn variableKind(): int
+    begin
+        return 11
+    end
+
+    fn assignKind(): int
+    begin
+        return 12
+    end
+
+    fn expressionKind(): int
+    begin
+        return 13
+    end
+
+    fn returnKind(): int
+    begin
+        return 14
+    end
+
+    fn gcKind(): int
+    begin
+        return 15
+    end
+
+    fn assemblyKind(): int
+    begin
+        return 17
+    end
+
+    fn deferKind(): int
+    begin
+        return 25
+    end
+
+    fn branchKind(): int
+    begin
+        return 18
+    end
+
+    fn loopKind(): int
+    begin
+        return 19
+    end
+
+    fn switchKind(): int
+    begin
+        return 20
+    end
+
+    fn blockKind(): int
+    begin
+        return 21
+    end
+
+    fn moduleKind(): int
+    begin
+        return 22
+    end
+
+    fn switchArmKind(): int
+    begin
+        return 24
+    end
+
+    fn aliasKind(): int
+    begin
+        return 23
+    end
+
+    fn make(kind: int, start: int, finish: int, left: int, right: int, next: int, child: int, bodyStart: int, bodyFinish: int, owner: int, flags: int, reserved: int): [12]int
+    begin
+        var result: [12]int
+        result[0] := kind
+        result[1] := start
+        result[2] := finish
+        result[3] := left
+        result[4] := right
+        result[5] := next
+        result[6] := child
+        result[7] := bodyStart
+        result[8] := bodyFinish
+        result[9] := owner
+        result[10] := flags
+        result[11] := reserved
+        return result
+    end
+
+    fn store(pool: *[524288]int, count: *int, node: [12]int): int
+    begin
+        var id: int := *count
+        if id < 0 || id >= 43690 { return -1 }
+        var field: int := 0
+        while field < 12 {
+            (*pool)[id * 12 + field] := node[field]
+            field := field + 1
+        }
+        *count := id + 1
+        return id
+    end
+
+    fn read(pool: *[524288]int, id: int, field: int): int
+    begin
+        if id < 0 || id >= 43690 || field < 0 || field >= 12 { return -1 }
+        return (*pool)[id * 12 + field]
+    end
+
+    fn write(pool: *[524288]int, id: int, field: int, value: int): int
+    begin
+        if id < 0 || id >= 43690 || field < 0 || field >= 12 { return 0 }
+        (*pool)[id * 12 + field] := value
+        return 1
+    end
+
+    fn program(first: int, functions: int, aliases: int, modules: int): [4]int
+    begin
+        var result: [4]int
+        result[0] := first
+        result[1] := functions
+        result[2] := aliases
+        result[3] := modules
+        return result
+    end
+
+    fn kind(node: [12]int): int
+    begin
+        return node[0]
+    end
+
+    fn start(node: [12]int): int
+    begin
+        return node[1]
+    end
+
+    fn finish(node: [12]int): int
+    begin
+        return node[2]
+    end
+
+    fn left(node: [12]int): int
+    begin
+        return node[3]
+    end
+
+    fn right(node: [12]int): int
+    begin
+        return node[4]
+    end
+
+    fn next(node: [12]int): int
+    begin
+        return node[5]
+    end
+
+    fn auxiliary(node: [12]int): int
+    begin
+        return node[6]
+    end
+
+    fn bodyStart(node: [12]int): int
+    begin
+        return node[7]
+    end
+
+    fn bodyFinish(node: [12]int): int
+    begin
+        return node[8]
+    end
+
+    fn owner(node: [12]int): int
+    begin
+        return node[9]
+    end
+
+    fn flags(node: [12]int): int
+    begin
+        return node[10]
+    end
+end

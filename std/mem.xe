@@ -1,0 +1,12 @@
+module mem
+begin
+    fn allocate(bytes: int): *void
+    begin
+        return alloc(bytes)
+    end
+
+    fn release(pointer: *void)
+    begin
+        free(pointer)
+    end
+end

@@ -1,0 +1,725 @@
+module parser
+begin
+    fn significant(source: string, position: int, line: int): [4]int
+    begin
+        var item: [4]int := lexer.scan(source, position, line)
+        while item[0] = 10 { item := lexer.scan(source, item[2], item[3]) }
+        return item
+    end
+
+    fn statementSpan(source: string, start: int, line: int, limit: int): [4]int
+    begin
+        var result: [4]int
+        var first: [4]int := significant(source, start, line)
+        if first[0] = token.endKind() || first[1] >= limit { return result }
+        var word: string := str.slice(source, first[1], first[2])
+        var mode: int := 0
+        if word = "gc" || word = "switch" { mode := 1 }
+        if word = "if" || word = "while" { mode := 2 }
+        if first[0] = token.assemblyKind() { mode := 3 }
+        var position: int := first[2]
+        var row: int := first[3]
+        var finish: int := first[2]
+        var depth: int := 0
+        var round: int := 0
+        var square: int := 0
+        var curly: int := 0
+        var kind: int := ast.expressionKind()
+        var done: int := 0
+        if word = "var" || word = "const" { kind := ast.variableKind() }
+        if word = "return" { kind := ast.returnKind() }
+        if word = "defer" { kind := ast.deferKind() }
+        if word = "gc" { kind := ast.gcKind() }
+        if word = "if" { kind := ast.branchKind() }
+        if word = "while" { kind := ast.loopKind() }
+        if word = "switch" { kind := ast.switchKind() }
+        if first[0] = token.assemblyKind() {
+            kind := ast.assemblyKind()
+            done := 1
+        }
+        var sawBlock: int := 0
+        while position < limit && done = 0 {
+            var item: [4]int := lexer.scan(source, position, row)
+            var jumped: int := 0
+            if item[0] = token.endKind() { done := 1 }
+            else {
+                var text: string := str.slice(source, item[1], item[2])
+                if mode = 1 {
+                    if item[0] = token.nameKind() && text = "begin" {
+                        depth := depth + 1
+                        sawBlock := 1
+                    }
+                    if item[0] = token.nameKind() && text = "end" && sawBlock = 1 {
+                        depth := depth - 1
+                        if depth = 0 {
+                            finish := item[2]
+                            done := 1
+                        }
+                    }
+                }
+                else {
+                    if mode = 2 {
+                        if item[0] = 123 {
+                            curly := curly + 1
+                            sawBlock := 1
+                        }
+                        if item[0] = 125 && sawBlock = 1 {
+                            curly := curly - 1
+                            if curly = 0 {
+                                finish := item[2]
+                                var following: [4]int := significant(source, item[2], item[3])
+                                if str.slice(source, following[1], following[2]) = "else" {
+                                    var brace: [4]int := significant(source, following[2], following[3])
+                                    if brace[0] = 123 {
+                                        curly := 1
+                                        position := brace[2]
+                                        row := brace[3]
+                                        jumped := 1
+                                    }
+                                    else { done := 1 }
+                                }
+                                else { done := 1 }
+                            }
+                        }
+                    }
+                    else {
+                        if item[0] = 10 { done := 1 }
+                        else {
+                            if item[0] = 40 { round := round + 1 }
+                            if item[0] = 41 { round := round - 1 }
+                            if item[0] = 91 { square := square + 1 }
+                            if item[0] = 93 { square := square - 1 }
+                            if item[0] = 123 { curly := curly + 1 }
+                            if item[0] = 125 { curly := curly - 1 }
+                            if item[0] = token.assignKind() && kind != ast.variableKind() { kind := ast.assignKind() }
+                        }
+                    }
+                }
+                if done = 0 {
+                    finish := item[2]
+                    if jumped = 0 {
+                        position := item[2]
+                        row := item[3]
+                    }
+                }
+            }
+        }
+        if finish < first[2] { finish := first[2] }
+        result[0] := finish
+        result[1] := row
+        result[2] := kind
+        result[3] := 1
+        return result
+    end
+
+    fn expressionPrecedence(kind: int): int
+    begin
+        if kind = token.orKind() { return 1 }
+        if kind = token.andKind() { return 2 }
+        if kind = 124 { return 3 }
+        if kind = 94 { return 4 }
+        if kind = 38 { return 5 }
+        if kind = token.equalKind() || kind = token.notEqualKind() { return 6 }
+        if kind = 60 || kind = 62 || kind = token.lessEqualKind() || kind = token.greaterEqualKind() { return 7 }
+        if kind = token.shiftLeftKind() || kind = token.shiftRightKind() { return 8 }
+        if kind = 43 || kind = 45 { return 9 }
+        if kind = 42 || kind = 47 || kind = 37 { return 10 }
+        return 0
+    end
+
+    fn expressionPrimary(source: string, pool: *[524288]int, count: *int, position: *int, line: *int, limit: int, owner: int): int
+    begin
+        if *position >= limit { return -1 }
+        var item: [4]int := lexer.scan(source, *position, *line)
+        if item[0] = token.endKind() || item[0] = 10 || item[0] = token.errorKind() { return -1 }
+        var first: int := item[1]
+        var result: int := -1
+        if item[0] = 45 || item[0] = 33 || item[0] = 126 || item[0] = 42 || item[0] = 38 || item[0] = 64 || item[0] = 35 {
+            *position := item[2]
+            *line := item[3]
+            var operand: int := expression(source, pool, count, position, line, limit, owner, 11)
+            if operand < 0 { return -1 }
+            var unary: [12]int := ast.make(ast.unaryKind(), first, ast.read(pool, operand, 2), operand, -1, -1, -1, 0, 0, owner, item[0], 0)
+            return ast.store(pool, count, unary)
+        }
+        if item[0] = 40 {
+            *position := item[2]
+            *line := item[3]
+            var nested: int := expression(source, pool, count, position, line, limit, owner, 1)
+            if nested < 0 { return -1 }
+            var closing: [4]int := lexer.scan(source, *position, *line)
+            if closing[0] != 41 { return -1 }
+            ast.write(pool, nested, 1, first)
+            ast.write(pool, nested, 2, closing[2])
+            *position := closing[2]
+            *line := closing[3]
+            result := nested
+        }
+        if item[0] = token.numberKind() || item[0] = token.stringKind() {
+            var literal: [12]int := ast.make(ast.literalKind(), item[1], item[2], -1, -1, -1, -1, 0, 0, owner, item[0], 0)
+            result := ast.store(pool, count, literal)
+            *position := item[2]
+            *line := item[3]
+        }
+        else {
+            if item[0] = token.nameKind() {
+                var finish: int := item[2]
+                var next: [4]int := lexer.scan(source, finish, item[3])
+                while next[0] = 46 {
+                    var part: [4]int := lexer.scan(source, next[2], next[3])
+                    if part[0] != token.nameKind() { return -1 }
+                    finish := part[2]
+                    next := lexer.scan(source, finish, part[3])
+                }
+                var name: [12]int := ast.make(ast.nameKind(), item[1], finish, -1, -1, -1, -1, 0, 0, owner, 0, 0)
+                result := ast.store(pool, count, name)
+                *position := finish
+                *line := item[3]
+                if next[0] = 40 {
+                    *position := next[2]
+                    *line := next[3]
+                    var firstArgument: int := -1
+                    var lastArgument: int := -1
+                    var closing: [4]int := lexer.scan(source, *position, *line)
+                    while closing[0] != 41 {
+                        var argument: int := expression(source, pool, count, position, line, limit, owner, 1)
+                        if argument < 0 { return -1 }
+                        if firstArgument < 0 { firstArgument := argument }
+                        else { ast.write(pool, lastArgument, 5, argument) }
+                        lastArgument := argument
+                        closing := lexer.scan(source, *position, *line)
+                        if closing[0] = 44 {
+                            *position := closing[2]
+                            *line := closing[3]
+                            closing := lexer.scan(source, *position, *line)
+                        }
+                        else { if closing[0] != 41 { return -1 } }
+                    }
+                    var call: [12]int := ast.make(ast.callKind(), first, closing[2], result, -1, -1, firstArgument, 0, 0, owner, 0, 0)
+                    result := ast.store(pool, count, call)
+                    *position := closing[2]
+                    *line := closing[3]
+                }
+            }
+        }
+        if result < 0 { return -1 }
+        var postfix: int := 1
+        while postfix = 1 && *position < limit {
+            var opening: [4]int := lexer.scan(source, *position, *line)
+            if opening[0] = 46 {
+                var field: [4]int := lexer.scan(source, opening[2], opening[3])
+                if field[0] != token.nameKind() { return -1 }
+                var member: [12]int := ast.make(ast.memberKind(), ast.read(pool, result, 1), field[2], result, -1, -1, -1, field[1], field[2], owner, 0, 0)
+                result := ast.store(pool, count, member)
+                *position := field[2]
+                *line := field[3]
+            }
+            else {
+            if opening[0] = 91 {
+                *position := opening[2]
+                *line := opening[3]
+                var separator: [4]int := lexer.scan(source, *position, *line)
+                var first: int := -1
+                if separator[0] != 58 {
+                    first := expression(source, pool, count, position, line, limit, owner, 1)
+                    if first < 0 { return -1 }
+                    separator := lexer.scan(source, *position, *line)
+                }
+                if separator[0] = 58 {
+                    *position := separator[2]
+                    *line := separator[3]
+                    var finish: int := -1
+                    var next: [4]int := lexer.scan(source, *position, *line)
+                    if next[0] != 93 {
+                        finish := expression(source, pool, count, position, line, limit, owner, 1)
+                        if finish < 0 { return -1 }
+                        next := lexer.scan(source, *position, *line)
+                    }
+                    if next[0] != 93 { return -1 }
+                    var sliced: [12]int := ast.make(ast.sliceKind(), ast.read(pool, result, 1), next[2], result, first, -1, finish, 0, 0, owner, 0, 0)
+                    result := ast.store(pool, count, sliced)
+                    *position := next[2]
+                    *line := next[3]
+                }
+                else {
+                    if first < 0 || separator[0] != 93 { return -1 }
+                    var indexed: [12]int := ast.make(ast.indexKind(), ast.read(pool, result, 1), separator[2], result, first, -1, -1, 0, 0, owner, 0, 0)
+                    result := ast.store(pool, count, indexed)
+                    *position := separator[2]
+                    *line := separator[3]
+                }
+            }
+            else { postfix := 0 }
+            }
+        }
+        return result
+    end
+
+    fn expression(source: string, pool: *[524288]int, count: *int, position: *int, line: *int, limit: int, owner: int, minimum: int): int
+    begin
+        var left: int := expressionPrimary(source, pool, count, position, line, limit, owner)
+        if left < 0 { return -1 }
+        var finished: int := 0
+        while *position < limit && finished = 0 {
+            var operation: [4]int := lexer.scan(source, *position, *line)
+            var priority: int := expressionPrecedence(operation[0])
+            if priority < minimum { finished := 1 }
+            else {
+                *position := operation[2]
+                *line := operation[3]
+                var right: int := expression(source, pool, count, position, line, limit, owner, priority + 1)
+                if right < 0 { return -1 }
+                var binary: [12]int := ast.make(ast.binaryKind(), ast.read(pool, left, 1), ast.read(pool, right, 2), left, right, -1, -1, 0, 0, owner, operation[0], 0)
+                left := ast.store(pool, count, binary)
+                if left < 0 { return -1 }
+            }
+        }
+        return left
+    end
+
+    fn curlyBounds(source: string, start: int, limit: int, line: int): [5]int
+    begin
+        var result: [5]int
+        var opening: [4]int := lexer.scan(source, start, line)
+        while opening[0] != 123 && opening[0] != token.endKind() && opening[1] < limit {
+            opening := lexer.scan(source, opening[2], opening[3])
+        }
+        if opening[0] != 123 { return result }
+        var depth: int := 1
+        var item: [4]int := lexer.scan(source, opening[2], opening[3])
+        while item[0] != token.endKind() && item[1] < limit && depth > 0 {
+            if item[0] = 123 { depth := depth + 1 }
+            if item[0] = 125 { depth := depth - 1 }
+            if depth > 0 { item := lexer.scan(source, item[2], item[3]) }
+        }
+        if depth != 0 { return result }
+        result[0] := opening[2]
+        result[1] := item[1]
+        result[2] := item[2]
+        result[3] := opening[3]
+        result[4] := item[3]
+        return result
+    end
+
+    fn switchArms(source: string, pool: *[524288]int, count: *int, owner: int, statement: int, keyword: [4]int, finish: int): int
+    begin
+        var first: int := -1
+        var last: int := -1
+        var position: int := keyword[2]
+        var row: int := keyword[3]
+        var opening: [4]int := significant(source, position, row)
+        while opening[0] != token.endKind() && str.slice(source, opening[1], opening[2]) != "begin" && opening[1] < finish {
+            position := opening[2]
+            row := opening[3]
+            opening := significant(source, position, row)
+        }
+        if opening[0] = token.endKind() || opening[1] >= finish { return -2 }
+        position := opening[2]
+        row := opening[3]
+        var valuePosition: int := position
+        var valueLine: int := row
+        while position < finish {
+            var label: [4]int := significant(source, position, row)
+            var labelWord: string := str.slice(source, label[1], label[2])
+            if label[0] = token.endKind() || labelWord = "end" { position := finish }
+            else {
+                var fallback: int := 0
+                if labelWord = "default" { fallback := 1 }
+                else { if labelWord != "case" { return -2 } }
+                var labelValue: int := -1
+                var bodyPosition: int := label[2]
+                var bodyLine: int := label[3]
+                if fallback = 0 {
+                    valuePosition := label[2]
+                    valueLine := label[3]
+                    labelValue := expression(source, pool, count, &valuePosition, &valueLine, finish, owner, 1)
+                    if labelValue < 0 { return -2 }
+                    bodyPosition := valuePosition
+                    bodyLine := valueLine
+                }
+                var bodyStart: int := bodyPosition
+                var cursor: int := bodyPosition
+                var cursorLine: int := bodyLine
+                var done: int := 0
+                while cursor < finish && done = 0 {
+                    var next: [4]int := significant(source, cursor, cursorLine)
+                    var nextWord: string := str.slice(source, next[1], next[2])
+                    if next[0] = token.endKind() || nextWord = "case" || nextWord = "default" || nextWord = "end" { done := 1 }
+                    else {
+                        var span: [4]int := statementSpan(source, next[1], next[3], finish)
+                        if span[3] = 0 || span[0] <= next[1] { return -2 }
+                        cursor := span[0]
+                        cursorLine := span[1]
+                    }
+                }
+                if done = 0 { return -2 }
+                var body: int := blockBody(source, pool, count, owner, bodyStart, cursor, bodyLine)
+                if body < 0 { return -2 }
+                var arm: [12]int := ast.make(ast.switchArmKind(), label[1], cursor, labelValue, -1, -1, body, bodyStart, cursor, owner, fallback, 0)
+                var armId: int := ast.store(pool, count, arm)
+                if armId < 0 { return -2 }
+                if first < 0 { first := armId } else { ast.write(pool, last, 5, armId) }
+                last := armId
+                position := cursor
+                row := cursorLine
+            }
+        }
+        return first
+    end
+
+    fn blockBody(source: string, pool: *[524288]int, count: *int, owner: int, start: int, finish: int, line: int): int
+    begin
+        var node: [12]int := ast.make(ast.blockKind(), start, finish, -1, -1, -1, -1, start, finish, owner, 0, 0)
+        var id: int := ast.store(pool, count, node)
+        if id < 0 { return -1 }
+        var first: int := statementList(source, pool, count, owner, start, finish, line)
+        if first = -2 { return -1 }
+        ast.write(pool, id, 6, first)
+        return id
+    end
+
+    fn statementList(source: string, pool: *[524288]int, count: *int, owner: int, start: int, finish: int, line: int): int
+    begin
+        var first: int := -1
+        var last: int := -1
+        var position: int := start
+        var row: int := line
+        while position < finish {
+            var item: [4]int := significant(source, position, row)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                var span: [4]int := statementSpan(source, item[1], item[3], finish)
+                if span[3] = 0 || span[0] <= item[1] { return -2 }
+                var node: [12]int := ast.make(span[2], item[1], span[0], -1, -1, -1, -1, 0, 0, owner, 0, 0)
+                var id: int := ast.store(pool, count, node)
+                if id < 0 { return -2 }
+                if span[2] = ast.variableKind() {
+                    var name: [4]int := significant(source, item[2], item[3])
+                    var colon: [4]int := significant(source, name[2], name[3])
+                    if name[0] != token.nameKind() || colon[0] != 58 { return -2 }
+                    var typeStart: int := colon[2]
+                    var typeLine: int := colon[3]
+                    var assignment: [4]int := lexer.scan(source, typeStart, typeLine)
+                    while assignment[0] != token.assignKind() && assignment[0] != token.endKind() && assignment[1] < span[0] {
+                        assignment := lexer.scan(source, assignment[2], assignment[3])
+                    }
+                    ast.write(pool, id, 3, name[1])
+                    ast.write(pool, id, 4, name[2])
+                    ast.write(pool, id, 7, typeStart)
+                    ast.write(pool, id, 8, assignment[1])
+                    if str.slice(source, item[1], item[2]) = "const" { ast.write(pool, id, 10, 32768) }
+                    if assignment[0] = token.assignKind() {
+                        var valuePosition: int := assignment[2]
+                        var valueLine: int := assignment[3]
+                        var value: int := expression(source, pool, count, &valuePosition, &valueLine, span[0], owner, 1)
+                        if value < 0 { return -2 }
+                        ast.write(pool, id, 6, value)
+                    }
+                }
+                else {
+                    if span[2] = ast.returnKind() || span[2] = ast.deferKind() {
+                        var keyword: [4]int := lexer.scan(source, item[1], item[3])
+                        var valuePosition: int := keyword[2]
+                        var valueLine: int := keyword[3]
+                        var value: int := expression(source, pool, count, &valuePosition, &valueLine, span[0], owner, 1)
+                        if value >= 0 { ast.write(pool, id, 6, value) }
+                    }
+                    else {
+                        if span[2] = ast.branchKind() || span[2] = ast.loopKind() {
+                            var keyword: [4]int := lexer.scan(source, item[1], item[3])
+                            var bounds: [5]int := curlyBounds(source, keyword[2], span[0], keyword[3])
+                            if bounds[2] = 0 { return -2 }
+                            var conditionPosition: int := keyword[2]
+                            var conditionLine: int := keyword[3]
+                            var condition: int := expression(source, pool, count, &conditionPosition, &conditionLine, bounds[0] - 1, owner, 1)
+                            if condition < 0 { return -2 }
+                            var yes: int := blockBody(source, pool, count, owner, bounds[0], bounds[1], bounds[3])
+                            if yes < 0 { return -2 }
+                            ast.write(pool, id, 3, condition)
+                            ast.write(pool, id, 6, yes)
+                            if span[2] = ast.branchKind() {
+                                var following: [4]int := significant(source, bounds[2], bounds[4])
+                                if str.slice(source, following[1], following[2]) = "else" {
+                                    var otherBounds: [5]int := curlyBounds(source, following[2], span[0], following[3])
+                                    if otherBounds[2] = 0 { return -2 }
+                                    var no: int := blockBody(source, pool, count, owner, otherBounds[0], otherBounds[1], otherBounds[3])
+                                    if no < 0 { return -2 }
+                                    ast.write(pool, id, 4, no)
+                                }
+                            }
+                        }
+                        else {
+                            if span[2] = ast.gcKind() {
+                                var bounds: [5]int := curlyBounds(source, item[1], span[0], item[3])
+                                if bounds[2] = 0 { return -2 }
+                                var body: int := blockBody(source, pool, count, owner, bounds[0], bounds[1], bounds[3])
+                                if body < 0 { return -2 }
+                                ast.write(pool, id, 6, body)
+                                ast.write(pool, id, 7, bounds[0])
+                                ast.write(pool, id, 8, bounds[1])
+                            }
+                            else {
+                                if span[2] = ast.switchKind() {
+                                    var keyword: [4]int := lexer.scan(source, item[1], item[3])
+                                    var armStart: [4]int := significant(source, keyword[2], keyword[3])
+                                    var selectorPosition: int := keyword[2]
+                                    var selectorLine: int := keyword[3]
+                                    while armStart[0] != token.endKind() && str.slice(source, armStart[1], armStart[2]) != "begin" && armStart[1] < span[0] {
+                                        armStart := significant(source, armStart[2], armStart[3])
+                                    }
+                                    if armStart[0] = token.endKind() || armStart[1] >= span[0] { return -2 }
+                                    var selector: int := expression(source, pool, count, &selectorPosition, &selectorLine, armStart[1], owner, 1)
+                                    if selector < 0 { return -2 }
+                                    var arms: int := switchArms(source, pool, count, owner, id, keyword, span[0])
+                                    if arms = -2 { return -2 }
+                                    ast.write(pool, id, 3, selector)
+                                    ast.write(pool, id, 6, arms)
+                                }
+                                else {
+                                    if span[2] = ast.assignKind() || span[2] = ast.expressionKind() {
+                                        var valuePosition: int := item[1]
+                                        var valueLine: int := item[3]
+                                        var left: int := expression(source, pool, count, &valuePosition, &valueLine, span[0], owner, 1)
+                                        if left < 0 { return -2 }
+                                        if span[2] = ast.assignKind() {
+                                            var equal: [4]int := lexer.scan(source, valuePosition, valueLine)
+                                            if equal[0] != token.assignKind() { return -2 }
+                                            valuePosition := equal[2]
+                                            valueLine := equal[3]
+                                            var right: int := expression(source, pool, count, &valuePosition, &valueLine, span[0], owner, 1)
+                                            if right < 0 { return -2 }
+                                            ast.write(pool, id, 3, left)
+                                            ast.write(pool, id, 4, right)
+                                        }
+                                        else { ast.write(pool, id, 6, left) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if first < 0 { first := id } else { ast.write(pool, last, 5, id) }
+                last := id
+                position := span[0]
+                row := span[1]
+            }
+        }
+        return first
+    end
+
+    fn branchReturn(source: string, pool: *[524288]int, count: *int, owner: int, opening: [4]int, limit: int): [3]int
+    begin
+        var result: [3]int
+        var position: int := opening[2]
+        var line: int := opening[3]
+        var depth: int := 1
+        var closing: [4]int := lexer.scan(source, position, line)
+        while position < limit && depth > 0 {
+            if closing[0] = 123 { depth := depth + 1 }
+            if closing[0] = 125 { depth := depth - 1 }
+            if depth > 0 {
+                position := closing[2]
+                line := closing[3]
+                closing := lexer.scan(source, position, line)
+            }
+        }
+        if depth != 0 { return result }
+        var item: [4]int := significant(source, opening[2], opening[3])
+        if str.slice(source, item[1], item[2]) != "return" { return result }
+        var keyword: [4]int := lexer.scan(source, item[1], item[3])
+        var valuePosition: int := keyword[2]
+        var valueLine: int := keyword[3]
+        var value: int := expression(source, pool, count, &valuePosition, &valueLine, closing[1], owner, 1)
+        if value < 0 { return result }
+        var node: [12]int := ast.make(ast.returnKind(), item[1], closing[2], -1, -1, -1, value, 0, 0, owner, 0, 0)
+        result[0] := ast.store(pool, count, node)
+        result[1] := closing[1]
+        result[2] := closing[2]
+        return result
+    end
+
+    fn build(source: string, pool: *[524288]int, count: *int): [4]int
+    begin
+        var program: [4]int
+        *count := 0
+        program[0] := 0
+        program[1] := -1
+        program[2] := 0
+        program[3] := -1
+        if lexer.valid(source) = 0 { return program }
+        var size: int := str.length(source)
+        var position: int := 0
+        var line: int := 1
+        var last: int := -1
+        var mainCount: int := 0
+        var heavyDepth: int := 0
+        var activeModule: int := -1
+        while position <= size {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { position := size + 1 }
+            else {
+                var word: string := str.slice(source, item[1], item[2])
+                if item[0] = token.nameKind() {
+                    if word = "module" && heavyDepth = 0 { activeModule := item[1] }
+                    if word = "begin" { heavyDepth := heavyDepth + 1 }
+                    if word = "end" && heavyDepth > 0 {
+                        heavyDepth := heavyDepth - 1
+                        if heavyDepth = 0 { activeModule := -1 }
+                    }
+                }
+                if item[0] = token.nameKind() && word = "fn" {
+                    var name: [4]int := significant(source, item[2], item[3])
+                    if name[0] != token.nameKind() { return program }
+                    var nameEnd: int := name[2]
+                    var pathPosition: int := name[2]
+                    var pathLine: int := name[3]
+                    var pathItem: [4]int := significant(source, pathPosition, pathLine)
+                    while pathItem[0] = 46 {
+                        var part: [4]int := significant(source, pathItem[2], pathItem[3])
+                        if part[0] != token.nameKind() { return program }
+                        nameEnd := part[2]
+                        pathPosition := part[2]
+                        pathLine := part[3]
+                        pathItem := significant(source, pathPosition, pathLine)
+                    }
+                    var searchPosition: int := nameEnd
+                    var searchLine: int := name[3]
+                    var bodyOpen: [4]int := significant(source, searchPosition, searchLine)
+                    while bodyOpen[0] != token.endKind() && str.slice(source, bodyOpen[1], bodyOpen[2]) != "begin" {
+                        searchPosition := bodyOpen[2]
+                        searchLine := bodyOpen[3]
+                        bodyOpen := significant(source, searchPosition, searchLine)
+                    }
+                    if bodyOpen[0] = token.endKind() { return program }
+                    var depth: int := 1
+                    var bodyEnd: [4]int := bodyOpen
+                    searchPosition := bodyOpen[2]
+                    searchLine := bodyOpen[3]
+                    while searchPosition <= size && depth > 0 {
+                        var nested: [4]int := lexer.scan(source, searchPosition, searchLine)
+                        if nested[0] = token.endKind() { return program }
+                        var nestedWord: string := str.slice(source, nested[1], nested[2])
+                        if nested[0] = token.nameKind() && nestedWord = "begin" { depth := depth + 1 }
+                        if nested[0] = token.nameKind() && nestedWord = "end" { depth := depth - 1 }
+                        if depth = 0 { bodyEnd := nested }
+                        searchPosition := nested[2]
+                        searchLine := nested[3]
+                    }
+                    if depth != 0 { return program }
+                    var node: [12]int := ast.make(ast.functionKind(), item[1], bodyEnd[2], name[1], nameEnd, -1, -1, bodyOpen[2], bodyEnd[1], activeModule, 0, 0)
+                    var id: int := ast.store(pool, count, node)
+                    if id < 0 { return program }
+                    if last < 0 { program[1] := id }
+                    else { ast.write(pool, last, 5, id) }
+                    last := id
+                    var firstStatement: int := statementList(source, pool, count, id, bodyOpen[2], bodyEnd[1], bodyOpen[3])
+                    if firstStatement = -2 { return program }
+                    ast.write(pool, id, 6, firstStatement)
+                    ast.write(pool, id, 11, *count)
+                    program[2] := program[2] + 1
+                    if str.slice(source, name[1], nameEnd) = "main" {
+                        mainCount := mainCount + 1
+                        program[3] := id
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        if mainCount != 1 { return program }
+        var root: int := program[1]
+        var functionId: int := root
+        while functionId >= 0 {
+            ast.write(pool, functionId, 10, root)
+            functionId := ast.read(pool, functionId, 5)
+        }
+        program[0] := 1
+        return program
+    end
+
+    fn validate(source: string): int
+    begin
+        if lexer.valid(source) = 0 { return 0 }
+        var position: int := 0
+        var line: int := 1
+        var round: int := 0
+        var square: int := 0
+        var curly: int := 0
+        var begins: int := 0
+        var ends: int := 0
+        var mainFound: int := 0
+        var previous: string := ""
+        var finished: int := 0
+        while position <= str.length(source) && finished = 0 {
+            var item: [4]int := lexer.scan(source, position, line)
+            var kind: int := item[0]
+            if kind < 0 {
+                writeln("parse validation lexical error at " + token.number(item[1]))
+                return 0
+            }
+            if kind = token.endKind() { finished := 1 }
+            else {
+                var word: string := str.slice(source, item[1], item[2])
+                if kind = token.nameKind() {
+                    if previous = "fn" && word = "main" {
+                        var opening: [4]int := significant(source, item[2], item[3])
+                        var closing: [4]int := significant(source, opening[2], opening[3])
+                        var colon: [4]int := significant(source, closing[2], closing[3])
+                        var result: [4]int := significant(source, colon[2], colon[3])
+                        var body: [4]int := significant(source, result[2], result[3])
+                        if opening[0] != 40 || closing[0] != 41 || colon[0] != 58 {
+                            writeln("parse validation main delimiters")
+                            return 0
+                        }
+                        if str.slice(source, result[1], result[2]) != "int" {
+                            writeln("parse validation main result")
+                            return 0
+                        }
+                        if str.slice(source, body[1], body[2]) != "begin" {
+                            writeln("parse validation main body")
+                            return 0
+                        }
+                        mainFound := mainFound + 1
+                    }
+                    if word = "begin" { begins := begins + 1 }
+                    if word = "end" {
+                        if ends >= begins {
+                            writeln("parse validation end order at " + token.number(item[1]))
+                            return 0
+                        }
+                        ends := ends + 1
+                    }
+                    previous := word
+                }
+                else {
+                    if kind = 40 { round := round + 1 }
+                    if kind = 41 { round := round - 1 }
+                    if kind = 91 { square := square + 1 }
+                    if kind = 93 { square := square - 1 }
+                    if kind = 123 { curly := curly + 1 }
+                    if kind = 125 { curly := curly - 1 }
+                    previous := ""
+                }
+                position := item[2]
+                line := item[3]
+            }
+            if round < 0 || square < 0 || curly < 0 {
+                writeln("parse validation closing delimiter at " + token.number(item[1]))
+                return 0
+            }
+        }
+        if round != 0 || square != 0 || curly != 0 {
+            writeln("parse validation unclosed delimiter")
+            return 0
+        }
+        if begins != ends {
+            writeln("parse validation begin/end count " + token.number(begins) + "/" + token.number(ends))
+            return 0
+        }
+        if mainFound != 1 {
+            writeln("parse validation main count " + token.number(mainFound))
+            return 0
+        }
+        return 1
+    end
+end

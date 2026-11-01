@@ -1,0 +1,76 @@
+uses syscall
+
+module sys
+begin
+    type MemBuffer: record
+    begin
+        address: *void
+        size: int
+        capacity: int
+    end
+
+    fn mem.copy(destination: *void, source: *void, bytes: int): void
+    begin
+        runtime.mem.copy(destination, source, bytes)
+    end
+
+    fn mem.set(destination: *void, value: int, bytes: int): void
+    begin
+        runtime.mem.set(destination, value, bytes)
+    end
+
+    fn mem.compare(first: *void, second: *void, bytes: int): int
+    begin
+        return runtime.mem.compare(first, second, bytes)
+    end
+
+    fn hw.read_8(address: *void): int
+    begin
+        return runtime.hw.read8(address)
+    end
+
+    fn hw.write_8(address: *void, value: int): void
+    begin
+        runtime.hw.write8(address, value)
+    end
+
+    fn hw.read_32(address: *void): int
+    begin
+        return runtime.hw.read32(address)
+    end
+
+    fn hw.write_32(address: *void, value: int): void
+    begin
+        runtime.hw.write32(address, value)
+    end
+
+    fn proc.pid(): int
+    begin
+        return syscall.raw.invoke3(39, 0, 0, 0)
+    end
+
+    fn proc.fork(): int
+    begin
+        return syscall.raw.invoke3(57, 0, 0, 0)
+    end
+
+    fn proc.exit(code: int): void
+    begin
+        syscall.raw.invoke3(60, code, 0, 0)
+    end
+
+    fn allocate_buffer(capacity: int): *sys.MemBuffer
+    begin
+        var buffer: *sys.MemBuffer := alloc(24)
+        (*buffer).address := alloc(capacity)
+        (*buffer).size := 0
+        (*buffer).capacity := capacity
+        return buffer
+    end
+
+    fn free_buffer(buffer: *sys.MemBuffer): void
+    begin
+        free((*buffer).address)
+        free(buffer)
+    end
+end

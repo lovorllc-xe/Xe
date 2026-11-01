@@ -1,0 +1,33 @@
+module io
+begin
+    fn print.text(value: string)
+    begin
+        write(value)
+    end
+
+    fn print.line(value: string)
+    begin
+        writeln(value)
+    end
+
+    fn input.integer(): int
+    begin
+        var value: int := 0
+        read(value)
+        return value
+    end
+
+    fn input.float(): flt
+    begin
+        var value: flt := 0.0
+        read(value)
+        return value
+    end
+
+    fn input.line(): string
+    begin
+        var value: string := ""
+        readln(value)
+        return value
+    end
+end

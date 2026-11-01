@@ -1,0 +1,41 @@
+uses collections
+
+module algorithms
+begin
+    fn sort.integers(values: *collections.IntVector): int
+    begin
+        var index: int := 1
+        while index < (*values).size {
+            var current: int := (*values).values[index]
+            var position: int := index
+            while position > 0 && (*values).values[position - 1] > current {
+                (*values).values[position] := (*values).values[position - 1]
+                position := position - 1
+            }
+            (*values).values[position] := current
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn find.integer(values: *collections.IntVector, target: int): int
+    begin
+        var index: int := 0
+        while index < (*values).size {
+            if (*values).values[index] = target { return index }
+            index := index + 1
+        }
+        return -1
+    end
+
+    fn sum.integers(values: *collections.IntVector): int
+    begin
+        var total: int := 0
+        var index: int := 0
+        while index < (*values).size {
+            total := total + (*values).values[index]
+            index := index + 1
+        }
+        return total
+    end
+end

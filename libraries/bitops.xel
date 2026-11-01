@@ -1,0 +1,37 @@
+module bitops
+begin
+    fn shift_left(value: int, bits: int): int
+    begin
+        return value << bits
+    end
+
+    fn shift_right(value: int, bits: int): int
+    begin
+        return value >> bits
+    end
+
+    fn and(value: int, mask: int): int
+    begin
+        return value & mask
+    end
+
+    fn or(value: int, mask: int): int
+    begin
+        return value | mask
+    end
+
+    fn xor(value: int, mask: int): int
+    begin
+        return value ^ mask
+    end
+
+    fn complement(value: int): int
+    begin
+        return ~value
+    end
+
+    fn not(value: int): int
+    begin
+        return ~value
+    end
+end

@@ -1,0 +1,37 @@
+module syscall
+begin
+    fn raw.invoke3(sys_num: int, arg1: int, arg2: int, arg3: int): int
+    begin
+        return syscall.invoke3(sys_num, arg1, arg2, arg3)
+    end
+
+    fn raw.invoke6(sys_num: int, arg1: int, arg2: int, arg3: int, arg4: int, arg5: int, arg6: int): int
+    begin
+        return syscall.invoke6(sys_num, arg1, arg2, arg3, arg4, arg5, arg6)
+    end
+
+    fn io.open(path: string, flags: int, mode: int): int
+    begin
+        return syscall.invoke6(257, -100, path, flags, mode, 0, 0)
+    end
+
+    fn io.read(fd: int, buffer: *void, count: int): int
+    begin
+        return syscall.invoke3(0, fd, buffer, count)
+    end
+
+    fn io.write(fd: int, buffer: *void, count: int): int
+    begin
+        return syscall.invoke3(1, fd, buffer, count)
+    end
+
+    fn io.write.string(fd: int, value: string): int
+    begin
+        return syscall.invoke3(1, fd, value, str.length(value))
+    end
+
+    fn io.close(fd: int): int
+    begin
+        return syscall.invoke3(3, fd, 0, 0)
+    end
+end

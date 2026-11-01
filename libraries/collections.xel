@@ -1,0 +1,189 @@
+module collections
+begin
+    // Resizable heap array of opaque pointer values.
+    type Vector: record
+    begin
+        data: **void
+        size: int
+        capacity: int
+    end
+
+    fn vector.create(initial_capacity: int): *collections.Vector
+    begin
+        var capacity: int := initial_capacity
+        if capacity < 1 { capacity := 4 }
+        var vector: *collections.Vector := alloc(32)
+        (*vector).data := alloc(capacity * 8)
+        (*vector).size := 0
+        (*vector).capacity := capacity
+        return vector
+    end
+
+    fn vector.push(vector: *collections.Vector, element: *void): int
+    begin
+        if (*vector).size >= (*vector).capacity {
+            var next_capacity: int := (*vector).capacity * 2
+            var next_data: **void := alloc(next_capacity * 8)
+            var index: int := 0
+            while index < (*vector).size {
+                runtime.pointer.write(next_data + index, runtime.pointer.read((*vector).data + index))
+                index := index + 1
+            }
+            free((*vector).data)
+            (*vector).data := next_data
+            (*vector).capacity := next_capacity
+        }
+        runtime.pointer.write((*vector).data + (*vector).size, element)
+        (*vector).size := (*vector).size + 1
+        return 1
+    end
+
+    fn vector.get(vector: *collections.Vector, index: int): *void
+    begin
+        var empty: *void := 0
+        if index < 0 || index >= (*vector).size { return empty }
+        return runtime.pointer.read((*vector).data + index)
+    end
+
+    fn vector.get.string(vector: *collections.Vector, index: int): *string
+    begin
+        return runtime.pointer.cast.string(collections.vector.get(vector, index))
+    end
+
+    fn vector.free(vector: *collections.Vector): void
+    begin
+        free((*vector).data)
+        free(vector)
+    end
+
+    // A bounded linear-probing map. Keys are copied strings and values are
+    // opaque pointers; the table grows to its fixed 128-slot limit.
+    type Map: record
+    begin
+        keys: [128]string
+        values: [128]*void
+        occupied: [128]int
+        size: int
+    end
+
+    fn map.create(): *collections.Map
+    begin
+        return alloc(8192)
+    end
+
+    fn map.put(map: *collections.Map, key: string, value: *void): int
+    begin
+        var hash: int := 0
+        var index: int := 0
+        while index < str.length(key) {
+            hash := (hash * 31 + str.char(key, index)) % 128
+            index := index + 1
+        }
+        var probes: int := 0
+        while probes < 128 {
+            var slot: int := (hash + probes) % 128
+            if (*map).occupied[slot] = 0 {
+                (*map).keys[slot] := key
+                (*map).values[slot] := value
+                (*map).occupied[slot] := 1
+                (*map).size := (*map).size + 1
+                return 1
+            }
+            if (*map).keys[slot] = key {
+                (*map).values[slot] := value
+                return 1
+            }
+            probes := probes + 1
+        }
+        return 0
+    end
+
+    fn map.get(map: *collections.Map, key: string): *void
+    begin
+        var empty: *void := 0
+        var hash: int := 0
+        var index: int := 0
+        while index < str.length(key) {
+            hash := (hash * 31 + str.char(key, index)) % 128
+            index := index + 1
+        }
+        var probes: int := 0
+        while probes < 128 {
+            var slot: int := (hash + probes) % 128
+            if (*map).occupied[slot] = 0 { return empty }
+            if (*map).keys[slot] = key { return (*map).values[slot] }
+            probes := probes + 1
+        }
+        return empty
+    end
+
+    fn map.count(map: *collections.Map): int
+    begin
+        return (*map).size
+    end
+
+    fn map.free(map: *collections.Map): void
+    begin
+        free(map)
+    end
+
+    type IntVector: record
+    begin
+        values: [128]int
+        size: int
+    end
+
+    fn int.vector.push(vector: *collections.IntVector, value: int): int
+    begin
+        if (*vector).size >= 128 { return 0 }
+        (*vector).values[(*vector).size] := value
+        (*vector).size := (*vector).size + 1
+        return 1
+    end
+
+    fn int.vector.try.get(vector: *collections.IntVector, index: int, output: *int): int
+    begin
+        if index < 0 || index >= (*vector).size { return 0 }
+        *output := (*vector).values[index]
+        return 1
+    end
+
+    fn int.vector.try.set(vector: *collections.IntVector, index: int, value: int): int
+    begin
+        if index < 0 || index >= (*vector).size { return 0 }
+        (*vector).values[index] := value
+        return 1
+    end
+
+    fn int.vector.count(vector: *collections.IntVector): int
+    begin
+        return (*vector).size
+    end
+
+    type IntStack: record
+    begin
+        values: [128]int
+        size: int
+    end
+
+    fn stack.push(stack: *collections.IntStack, value: int): int
+    begin
+        if (*stack).size >= 128 { return 0 }
+        (*stack).values[(*stack).size] := value
+        (*stack).size := (*stack).size + 1
+        return 1
+    end
+
+    fn stack.try.pop(stack: *collections.IntStack, output: *int): int
+    begin
+        if (*stack).size <= 0 { return 0 }
+        (*stack).size := (*stack).size - 1
+        *output := (*stack).values[(*stack).size]
+        return 1
+    end
+
+    fn stack.count(stack: *collections.IntStack): int
+    begin
+        return (*stack).size
+    end
+end
