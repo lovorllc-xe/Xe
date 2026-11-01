@@ -133,8 +133,20 @@ S Parser::statement() {
         return locate(node);
     }
     if (word("if")) {
-        take(); auto node = std::make_shared<If>(); node->condition = expression(); newlines(); expect(TokenType::LBrace, "'{' after condition"); node->yes = block(false);
+        take(); auto node = std::make_shared<If>();
+        expect(TokenType::LParen, "'(' before if condition");
+        node->condition = expression();
+        expect(TokenType::RParen, "')' after if condition");
+        newlines(); expect(TokenType::LBrace, "'{' after condition"); node->yes = block(false);
         auto saved = pos; newlines(); if (word("else")) { take(); newlines(); expect(TokenType::LBrace, "'{' after else"); node->no = block(false); } else pos = saved;
+        return locate(node);
+    }
+    if (word("for")) {
+        take(); auto node = std::make_shared<While>();
+        expect(TokenType::LParen, "'(' before for condition");
+        node->condition = expression();
+        expect(TokenType::RParen, "')' after for condition");
+        newlines(); expect(TokenType::LBrace, "'{' after for condition"); node->body = block(false);
         return locate(node);
     }
     if (word("while")) { take(); auto node = std::make_shared<While>(); node->condition = expression(); newlines(); expect(TokenType::LBrace, "'{' after condition"); node->body = block(false); return locate(node); }

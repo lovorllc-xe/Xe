@@ -54,7 +54,7 @@ begin
 
     fn version(): int
     begin
-        writeln("Xe 1.1")
+        writeln("Xe 1.5")
         return 0
     end
 

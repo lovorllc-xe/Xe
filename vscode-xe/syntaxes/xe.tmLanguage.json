@@ -1,0 +1,114 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Xe",
+  "scopeName": "source.xe",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#assembly" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#operators" },
+    { "include": "#functions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.xe",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.xe",
+      "begin": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.xe" } },
+      "end": "\"",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.xe" } },
+      "patterns": [
+        {
+          "name": "constant.character.escape.xe",
+          "match": "\\\\(\\\\|\"|n|r|t|0|x[0-9A-Fa-f]{2})"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.xe",
+          "match": "(?<![\\w.])[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?"
+        },
+        {
+          "name": "constant.numeric.integer.xe",
+          "match": "(?<![\\w.])[0-9]+(?![\\w.])"
+        }
+      ]
+    },
+    "assembly": {
+      "name": "meta.embedded.block.assembly.xe",
+      "begin": "\\b(asm)(\\s*)(\\{)",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.assembly.xe" },
+        "3": { "name": "punctuation.section.block.begin.xe" }
+      },
+      "end": "(})",
+      "endCaptures": { "1": { "name": "punctuation.section.block.end.xe" } },
+      "contentName": "source.assembly"
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "storage.type.function.xe",
+          "match": "\\bfn\\b"
+        },
+        {
+          "name": "entity.name.function.xe",
+          "match": "(?<=\\bfn\\s)[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "storage.type.module.xe",
+          "match": "\\bmodule\\b"
+        },
+        {
+          "name": "entity.name.namespace.xe",
+          "match": "(?<=\\bmodule\\s)[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "storage.type.type-alias.xe",
+          "match": "\\btype\\b"
+        },
+        {
+          "name": "entity.name.type.xe",
+          "match": "(?<=\\btype\\s)[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "keywords": {
+      "name": "keyword.control.xe",
+      "match": "\\b(begin|end|var|const|uses|if|else|while|switch|case|default|return|defer|gc)\\b"
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.xe",
+          "match": "\\b(int|flt|string|void|record)\\b"
+        },
+        {
+          "name": "storage.type.array.xe",
+          "match": "\\[[0-9]+\\]"
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.xe",
+      "match": ":=|!=|<=|>=|&&|\\|\\||<<|>>|[=+*/%<>!~&|^@#-]"
+    },
+    "functions": {
+      "name": "entity.name.function.call.xe",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+    }
+  }
+}

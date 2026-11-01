@@ -1,0 +1,50 @@
+{
+  "name": "xe-language-support",
+  "displayName": "Xe Language Support",
+  "description": "Syntax highlighting and snippets for the Xe programming language.",
+  "version": "1.0.0",
+  "publisher": "xelang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "xe",
+        "aliases": [
+          "Xe",
+          "xe"
+        ],
+        "extensions": [
+          ".xe",
+          ".xel"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "xe",
+        "scopeName": "source.xe",
+        "path": "./syntaxes/xe.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "xe",
+        "path": "./snippets/xe.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "Xe Vibrant",
+        "uiTheme": "vs-dark",
+        "path": "./themes/xe-vibrant-color-theme.json"
+      }
+    ]
+  }
+}

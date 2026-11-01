@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-V")) {
-            std::cout << "Xe 1.1\n";
+            std::cout << "Xe 1.5\n";
             return 0;
         }
         if (argc < 3) { usage(); return 2; }

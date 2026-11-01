@@ -1,0 +1,71 @@
+{
+  "$schema": "vscode://schemas/color-theme",
+  "name": "Xe Vibrant",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#171923",
+    "editor.foreground": "#E6E6F0",
+    "editorLineNumber.foreground": "#666B80",
+    "editorLineNumber.activeForeground": "#F0F0FA",
+    "editor.selectionBackground": "#3B4261",
+    "editorCursor.foreground": "#A6E22E",
+    "editorBracketHighlight.foreground1": "#A6E22E",
+    "editorBracketHighlight.foreground2": "#66D9EF",
+    "editorBracketHighlight.foreground3": "#FD971F",
+    "editorBracketHighlight.foreground4": "#AE81FF",
+    "editorBracketHighlight.foreground5": "#F92672",
+    "editorBracketHighlight.foreground6": "#E6DB74",
+    "editorBracketPairGuide.activeBackground1": "#A6E22E66",
+    "editorBracketPairGuide.activeBackground2": "#66D9EF66",
+    "editorBracketPairGuide.activeBackground3": "#FD971F66",
+    "editorBracketPairGuide.background1": "#A6E22E22",
+    "editorBracketPairGuide.background2": "#66D9EF22",
+    "editorBracketPairGuide.background3": "#FD971F22"
+  },
+  "tokenColors": [
+    {
+      "scope": ["comment", "punctuation.definition.comment"],
+      "settings": { "foreground": "#858A9E", "fontStyle": "italic" }
+    },
+    {
+      "scope": ["keyword.control.xe", "storage.type.function.xe", "storage.type.module.xe", "storage.type.type-alias.xe"],
+      "settings": { "foreground": "#C792EA" }
+    },
+    {
+      "scope": ["storage.type.primitive.xe", "storage.type.array.xe", "entity.name.type.xe"],
+      "settings": { "foreground": "#66D9EF" }
+    },
+    {
+      "scope": ["entity.name.function.xe", "entity.name.function.call.xe"],
+      "settings": { "foreground": "#82AAFF" }
+    },
+    {
+      "scope": ["entity.name.namespace.xe"],
+      "settings": { "foreground": "#F78C6C" }
+    },
+    {
+      "scope": ["string.quoted.double.xe"],
+      "settings": { "foreground": "#A6E22E" }
+    },
+    {
+      "scope": ["constant.character.escape.xe"],
+      "settings": { "foreground": "#FD971F" }
+    },
+    {
+      "scope": ["constant.numeric"],
+      "settings": { "foreground": "#FD971F" }
+    },
+    {
+      "scope": ["keyword.operator.xe"],
+      "settings": { "foreground": "#F92672" }
+    },
+    {
+      "scope": ["keyword.other.assembly.xe", "source.assembly"],
+      "settings": { "foreground": "#E6DB74" }
+    },
+    {
+      "scope": ["punctuation.section.block"],
+      "settings": { "foreground": "#F0F0FA" }
+    }
+  ]
+}

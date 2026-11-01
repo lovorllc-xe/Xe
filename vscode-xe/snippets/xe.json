@@ -1,0 +1,83 @@
+{
+  "Main function": {
+    "prefix": "main",
+    "body": [
+      "fn main(): int",
+      "begin",
+      "    $0",
+      "    return 0",
+      "end"
+    ],
+    "description": "Create an Xe program entry point"
+  },
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2}): ${3:int}",
+      "begin",
+      "    $0",
+      "end"
+    ],
+    "description": "Declare a function"
+  },
+  "Module": {
+    "prefix": "module",
+    "body": [
+      "module ${1:name}",
+      "begin",
+      "    $0",
+      "end"
+    ],
+    "description": "Declare a module namespace"
+  },
+  "If and else": {
+    "prefix": "ifelse",
+    "body": [
+      "if ${1:condition} {",
+      "    $0",
+      "} else {",
+      "    ",
+      "}"
+    ],
+    "description": "Create an if/else block"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} {",
+      "    $0",
+      "}"
+    ],
+    "description": "Create a while loop"
+  },
+  "Variable declaration": {
+    "prefix": "var",
+    "body": "var ${1:name}: ${2:int} := ${3:0}",
+    "description": "Declare a mutable variable"
+  },
+  "Constant declaration": {
+    "prefix": "const",
+    "body": "const ${1:name}: ${2:int} := ${3:0}",
+    "description": "Declare an immutable binding"
+  },
+  "Import library": {
+    "prefix": "uses",
+    "body": "uses ${1:library}",
+    "description": "Load a .xel library"
+  },
+  "Record type": {
+    "prefix": "record",
+    "body": [
+      "type ${1:Name}: record",
+      "begin",
+      "    ${2:field}: ${3:int}",
+      "end"
+    ],
+    "description": "Declare a record type"
+  },
+  "Print line": {
+    "prefix": "writeln",
+    "body": "writeln(${1:\"text\"})",
+    "description": "Print a value followed by a newline"
+  }
+}
