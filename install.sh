@@ -41,7 +41,7 @@ compiler_sources=(
     "$project_dir/compiler/main.xe"
 )
 
-"$host_xe" --build \
+"$host_xe" --build-bootstrap \
     "${compiler_sources[@]}" \
     -o "$stage1"
 "$stage1" --version

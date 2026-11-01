@@ -1,8 +1,8 @@
 #include "parser.hpp"
 #include <stdexcept>
 namespace xe {
-Parser::Parser(std::vector<Token> input, std::unordered_map<std::string, std::string> sharedAliases)
-    : tokens(std::move(input)), aliases(std::move(sharedAliases)) {}
+Parser::Parser(std::vector<Token> input, std::unordered_map<std::string, std::string> sharedAliases, bool allowLegacyConditions)
+    : tokens(std::move(input)), aliases(std::move(sharedAliases)), allowLegacyConditions(allowLegacyConditions) {}
 const Token& Parser::current() const { return tokens[pos]; }
 bool Parser::is(TokenType type) const { return current().type == type; }
 bool Parser::word(const std::string& value) const { return is(TokenType::Identifier) && current().text == value; }
@@ -134,18 +134,26 @@ S Parser::statement() {
     }
     if (word("if")) {
         take(); auto node = std::make_shared<If>();
-        expect(TokenType::LParen, "'(' before if condition");
-        node->condition = expression();
-        expect(TokenType::RParen, "')' after if condition");
+        if (allowLegacyConditions) {
+            node->condition = expression();
+        } else {
+            expect(TokenType::LParen, "'(' before if condition");
+            node->condition = expression();
+            expect(TokenType::RParen, "')' after if condition");
+        }
         newlines(); expect(TokenType::LBrace, "'{' after condition"); node->yes = block(false);
         auto saved = pos; newlines(); if (word("else")) { take(); newlines(); expect(TokenType::LBrace, "'{' after else"); node->no = block(false); } else pos = saved;
         return locate(node);
     }
     if (word("for")) {
         take(); auto node = std::make_shared<While>();
-        expect(TokenType::LParen, "'(' before for condition");
-        node->condition = expression();
-        expect(TokenType::RParen, "')' after for condition");
+        if (allowLegacyConditions) {
+            node->condition = expression();
+        } else {
+            expect(TokenType::LParen, "'(' before for condition");
+            node->condition = expression();
+            expect(TokenType::RParen, "')' after for condition");
+        }
         newlines(); expect(TokenType::LBrace, "'{' after for condition"); node->body = block(false);
         return locate(node);
     }

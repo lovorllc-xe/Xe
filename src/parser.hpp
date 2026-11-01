@@ -5,13 +5,16 @@
 namespace xe {
 class Parser {
 public:
-    explicit Parser(std::vector<Token> tokens, std::unordered_map<std::string, std::string> sharedAliases = {});
+    explicit Parser(std::vector<Token> tokens,
+                    std::unordered_map<std::string, std::string> sharedAliases = {},
+                    bool allowLegacyConditions = false);
     Program parse();
 private:
     std::vector<Token> tokens;
     std::size_t pos = 0;
     std::string currentModule;
     std::unordered_map<std::string, std::string> aliases;
+    bool allowLegacyConditions = false;
     const Token& current() const;
     bool is(TokenType type) const;
     bool word(const std::string& value) const;

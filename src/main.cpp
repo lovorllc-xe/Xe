@@ -118,7 +118,8 @@ std::filesystem::path resolveLibrary(const std::string& name,
 void loadSourceGraph(const std::filesystem::path& inputPath,
                      const std::vector<std::filesystem::path>& libraryPaths,
                      std::vector<SourceUnit>& units,
-                     std::unordered_map<std::string, std::size_t>& loaded) {
+                     std::unordered_map<std::string, std::size_t>& loaded,
+                     bool allowLegacyConditions) {
     std::error_code error;
     auto path = std::filesystem::weakly_canonical(inputPath, error);
     if (error) path = std::filesystem::absolute(inputPath);
@@ -131,14 +132,14 @@ void loadSourceGraph(const std::filesystem::path& inputPath,
     contents << source.rdbuf();
     std::string text = contents.str();
     xe::Lexer lexer(text);
-    xe::Parser parser(lexer.scan());
+    xe::Parser parser(lexer.scan(), {}, allowLegacyConditions);
     auto parsed = parser.parse();
     loaded.emplace(key, units.size());
     units.push_back({path, std::move(text), std::move(parsed)});
 
     const auto imports = units.back().parsed.imports;
     for (const auto& import : imports)
-        loadSourceGraph(resolveLibrary(import, path, libraryPaths), libraryPaths, units, loaded);
+        loadSourceGraph(resolveLibrary(import, path, libraryPaths), libraryPaths, units, loaded, allowLegacyConditions);
 }
 }
 int main(int argc, char** argv) {
@@ -150,7 +151,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-V")) {
-            std::cout << "Xe 1.5\n";
+            std::cout << "Xe 1.5.2\n";
             return 0;
         }
         if (argc < 3) { usage(); return 2; }
@@ -158,7 +159,8 @@ int main(int argc, char** argv) {
         std::string outputPath = "a.out";
         std::vector<std::string> sourcePaths;
         std::vector<std::filesystem::path> libraryPaths;
-        if (mode != "--build") { usage(); return 2; }
+        const bool bootstrapBuild = mode == "--build-bootstrap";
+        if (mode != "--build" && !bootstrapBuild) { usage(); return 2; }
         for (int i = 2; i < argc; ++i) {
             const std::string argument = argv[i];
             if (argument == "--library-path" && i + 1 < argc) {
@@ -178,8 +180,8 @@ int main(int argc, char** argv) {
         std::unordered_map<std::string, std::size_t> loaded;
         const std::filesystem::path standardLibraryDirectory = XELANG_STDLIB_DIR;
         for (const char* standardUnit : {"io.xe", "mem.xe"})
-            loadSourceGraph(standardLibraryDirectory / standardUnit, libraryPaths, units, loaded);
-        for (const auto& sourcePath : sourcePaths) loadSourceGraph(sourcePath, libraryPaths, units, loaded);
+            loadSourceGraph(standardLibraryDirectory / standardUnit, libraryPaths, units, loaded, bootstrapBuild);
+        for (const auto& sourcePath : sourcePaths) loadSourceGraph(sourcePath, libraryPaths, units, loaded, bootstrapBuild);
 
         // Collect module type aliases first so declarations may refer to aliases
         // declared in another source file or later in the input list.
@@ -191,7 +193,7 @@ int main(int argc, char** argv) {
         xe::Program program;
         for (const auto& source : units) {
             xe::Lexer lexer(source.text);
-            xe::Parser parser(lexer.scan(), sharedAliases);
+            xe::Parser parser(lexer.scan(), sharedAliases, bootstrapBuild);
             auto unit = parser.parse();
             program.functions.insert(program.functions.end(), std::make_move_iterator(unit.functions.begin()), std::make_move_iterator(unit.functions.end()));
             program.aliases.insert(program.aliases.end(), std::make_move_iterator(unit.aliases.begin()), std::make_move_iterator(unit.aliases.end()));
