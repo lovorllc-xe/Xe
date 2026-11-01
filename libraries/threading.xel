@@ -1,0 +1,42 @@
+uses syscall
+
+module threading
+begin
+    // The entry function must have signature fn worker(argument: *void): int.
+    fn create_thread(entry_func: *void, arg: *void): int
+    begin
+        return thread.start(entry_func, arg)
+    end
+
+    // Returns the worker's integer result, or -1 for an unknown thread id.
+    fn join_thread(thread_id: int): int
+    begin
+        return thread.join(thread_id)
+    end
+
+    fn mutex_init(): *void
+    begin
+        var lock: *void := alloc(8)
+        atomic.store(lock, 0)
+        return lock
+    end
+
+    fn mutex_lock(lock: *void): void
+    begin
+        var spins: int := 0
+        while atomic.compare_exchange(lock, 0, 1) = 0 {
+            spins := spins + 1
+            if spins % 128 = 0 { syscall.invoke3(24, 0, 0, 0) }
+        }
+    end
+
+    fn mutex_unlock(lock: *void): void
+    begin
+        atomic.store(lock, 0)
+    end
+
+    fn mutex_free(lock: *void): void
+    begin
+        free(lock)
+    end
+end

@@ -1,0 +1,6 @@
+fn main(): int
+begin
+    io.print.line("Xe IO integration test")
+    io.print.line("second output line")
+    return 0
+end

@@ -1,0 +1,68 @@
+uses syscall
+
+module fs
+begin
+    fn write_all(fd: int, content: string): int
+    begin
+        var length: int := str.length(content)
+        var offset: int := 0
+        while offset < length {
+            var written: int := syscall.invoke3(1, fd, str.slice(content, offset, length), length - offset)
+            if written <= 0 { return 0 }
+            offset := offset + written
+        }
+        return 1
+    end
+
+    fn read_file(path: string): string
+    begin
+        return file.read(path)
+    end
+
+    fn write_file(path: string, content: string): int
+    begin
+        var fd: int := syscall.invoke6(257, -100, path, 577, 420, 0, 0)
+        if fd < 0 { return 0 }
+        var result: int := write_all(fd, content)
+        var close_result: int := syscall.invoke3(3, fd, 0, 0)
+        if close_result < 0 { return 0 }
+        return result
+    end
+
+    fn append_file(path: string, content: string): int
+    begin
+        var fd: int := syscall.invoke6(257, -100, path, 1089, 420, 0, 0)
+        if fd < 0 { return 0 }
+        var result: int := write_all(fd, content)
+        var close_result: int := syscall.invoke3(3, fd, 0, 0)
+        if close_result < 0 { return 0 }
+        return result
+    end
+
+    fn file_exists(path: string): int
+    begin
+        var fd: int := syscall.invoke6(257, -100, path, 0, 0, 0, 0)
+        if fd < 0 { return 0 }
+        syscall.invoke3(3, fd, 0, 0)
+        return 1
+    end
+
+    fn remove_file(path: string): int
+    begin
+        return syscall.invoke3(87, path, 0, 0)
+    end
+
+    fn file_size(path: string): int
+    begin
+        var fd: int := syscall.invoke6(257, -100, path, 0, 0, 0, 0)
+        if fd < 0 { return -1 }
+        var size: int := syscall.invoke3(8, fd, 0, 2)
+        syscall.invoke3(3, fd, 0, 0)
+        return size
+    end
+
+    fn make_directory(path: string): int
+    begin
+        return syscall.invoke3(83, path, 493, 0)
+    end
+end

@@ -1,0 +1,307 @@
+uses collections
+
+module json
+begin
+    fn skip_space(source: string, position: *int): void
+    begin
+        while *position >= 0 && *position < str.length(source) {
+            var byte: int := str.char(source, *position)
+            if byte != 32 && byte != 9 && byte != 10 && byte != 13 { return }
+            *position := *position + 1
+        }
+    end
+
+    fn parse_string(source: string, position: *int): string
+    begin
+        if *position < 0 || *position >= str.length(source) || str.char(source, *position) != 34 {
+            *position := -1
+            return ""
+        }
+        *position := *position + 1
+        var result: string := str.builder("")
+        var closed: int := 0
+        while *position < str.length(source) && closed = 0 {
+            var byte: int := str.char(source, *position)
+            *position := *position + 1
+            if byte = 34 { closed := 1 }
+            else {
+                if byte < 32 {
+            *position := -1
+            return ""
+        }
+                if byte = 92 {
+                    if *position >= str.length(source) {
+            *position := -1
+            return ""
+        }
+                    byte := str.char(source, *position)
+                    *position := *position + 1
+                    if byte = 34 || byte = 92 || byte = 47 { result := str.append(result, str.fromchar(byte)) }
+                    else {
+                        if byte = 98 { result := str.append(result, str.fromchar(8)) }
+                        else {
+                            if byte = 102 { result := str.append(result, str.fromchar(12)) }
+                            else {
+                                if byte = 110 { result := str.append(result, str.fromchar(10)) }
+                                else {
+                                    if byte = 114 { result := str.append(result, str.fromchar(13)) }
+                                    else {
+                                        if byte = 116 { result := str.append(result, str.fromchar(9)) }
+                                        else {
+            *position := -1
+            return ""
+        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else { result := str.append(result, str.fromchar(byte)) }
+            }
+        }
+        if closed = 0 { *position := -1 }
+        return result
+    end
+
+    fn quote(text: string): string
+    begin
+        var output: string := str.builder("\"")
+        var index: int := 0
+        while index < str.length(text) {
+            var byte: int := str.char(text, index)
+            if byte = 34 { output := str.append(output, "\\\"") }
+            else {
+                if byte = 92 { output := str.append(output, "\\\\") }
+                else {
+                    if byte = 8 { output := str.append(output, "\\b") }
+                    else {
+                        if byte = 9 { output := str.append(output, "\\t") }
+                        else {
+                            if byte = 10 { output := str.append(output, "\\n") }
+                            else {
+                                if byte = 12 { output := str.append(output, "\\f") }
+                                else {
+                                    if byte = 13 { output := str.append(output, "\\r") }
+                                    else {
+                                        if byte < 32 {
+                                            output := str.append(output, "\\u00")
+                                            output := str.append(output, str.fromchar(hex_digit(byte / 16)))
+                                            output := str.append(output, str.fromchar(hex_digit(byte % 16)))
+                                        }
+                                        else { output := str.append(output, str.fromchar(byte)) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            index := index + 1
+        }
+        return str.append(output, "\"")
+    end
+
+    fn stringify(map_ptr: *collections.Map): string
+    begin
+        var output: string := str.builder("{")
+        var index: int := 0
+        while index < collections.map.count(map_ptr) {
+            if index > 0 { output := str.append(output, ",") }
+            output := str.append(output, quote(collections.map.key_at(map_ptr, index)))
+            output := str.append(output, ":")
+            var child: *string := runtime.pointer.cast.string(collections.map.value_at(map_ptr, index))
+            output := str.append(output, *child)
+            index := index + 1
+        }
+        return str.append(output, "}")
+    end
+
+    // Map payloads are strings containing one complete JSON value, such as
+    // `"text"`, `27`, `true`, an object, or an array.
+    fn put_raw(map_ptr: *collections.Map, key: string, encoded_value: string): int
+    begin
+        var payload: *string := alloc(64)
+        *payload := encoded_value
+        return collections.map.put(map_ptr, key, payload)
+    end
+
+    fn get_raw(map_ptr: *collections.Map, key: string): string
+    begin
+        var payload: *string := runtime.pointer.cast.string(collections.map.get(map_ptr, key))
+        if runtime.pointer.is_null(payload) = 1 { return "" }
+        return *payload
+    end
+
+    fn stringify_array(values: *collections.Vector): string
+    begin
+        var output: string := str.builder("[")
+        var index: int := 0
+        while index < (*values).size {
+            if index > 0 { output := str.append(output, ",") }
+            var child: *string := collections.vector.get.string(values, index)
+            output := str.append(output, *child)
+            index := index + 1
+        }
+        return str.append(output, "]")
+    end
+
+    fn hex_digit(value: int): int
+    begin
+        if value < 10 { return 48 + value }
+        return 87 + value
+    end
+
+    fn expect(source: string, position: *int, byte: int): int
+    begin
+        skip_space(source, position)
+        if *position < 0 || *position >= str.length(source) || str.char(source, *position) != byte { return 0 }
+        *position := *position + 1
+        return 1
+    end
+
+    fn parse_map_inner(source: string, position: *int): *collections.Map
+    begin
+        var result: *collections.Map := collections.map.create()
+        if expect(source, position, 123) = 0 { return result }
+        skip_space(source, position)
+        if *position >= 0 && *position < str.length(source) && str.char(source, *position) = 125 {
+            *position := *position + 1
+            return result
+        }
+        var reading: int := 1
+        while reading = 1 && *position >= 0 {
+            skip_space(source, position)
+            var key: string := parse_string(source, position)
+            if *position < 0 || expect(source, position, 58) = 0 { return result }
+            var child_text: string := parse_value(source, position, 1)
+            if *position < 0 { return result }
+            var child: *string := alloc(64)
+            *child := child_text
+            if collections.map.put(result, key, child) = 0 { return result }
+            skip_space(source, position)
+            if *position < 0 || *position >= str.length(source) { return result }
+            var delimiter: int := str.char(source, *position)
+            *position := *position + 1
+            if delimiter = 125 { reading := 0 }
+            else { if delimiter != 44 { return result } }
+        }
+        return result
+    end
+
+    fn parse_array_inner(source: string, position: *int): *collections.Vector
+    begin
+        var result: *collections.Vector := collections.vector.create(4)
+        if expect(source, position, 91) = 0 { return result }
+        skip_space(source, position)
+        if *position >= 0 && *position < str.length(source) && str.char(source, *position) = 93 {
+            *position := *position + 1
+            return result
+        }
+        var reading: int := 1
+        while reading = 1 && *position >= 0 {
+            var child_text: string := parse_value(source, position, 1)
+            if *position < 0 { return result }
+            var child: *string := alloc(64)
+            *child := child_text
+            if collections.vector.push(result, child) = 0 { return result }
+            skip_space(source, position)
+            if *position < 0 || *position >= str.length(source) { return result }
+            var delimiter: int := str.char(source, *position)
+            *position := *position + 1
+            if delimiter = 93 { reading := 0 }
+            else { if delimiter != 44 { return result } }
+        }
+        return result
+    end
+
+    fn parse_value(source: string, position: *int, depth: int): string
+    begin
+        if depth > 128 {
+            *position := -1
+            return ""
+        }
+        skip_space(source, position)
+        if *position < 0 || *position >= str.length(source) {
+            *position := -1
+            return ""
+        }
+        var byte: int := str.char(source, *position)
+        if byte = 34 { return quote(parse_string(source, position)) }
+        if byte = 123 {
+            var map_ptr: *collections.Map := parse_map_inner(source, position)
+            if *position < 0 { return "" }
+            return stringify(map_ptr)
+        }
+        if byte = 91 {
+            var vector_ptr: *collections.Vector := parse_array_inner(source, position)
+            if *position < 0 { return "" }
+            return stringify_array(vector_ptr)
+        }
+        var start: int := *position
+        var scanning: int := 1
+        while *position < str.length(source) && scanning = 1 {
+            byte := str.char(source, *position)
+            if byte = 44 || byte = 93 || byte = 125 || byte = 32 || byte = 9 || byte = 10 || byte = 13 { scanning := 0 }
+            else { *position := *position + 1 }
+        }
+        if *position = start {
+            *position := -1
+            return ""
+        }
+        var token: string := str.slice(source, start, *position)
+        if token = "true" || token = "false" || token = "null" { return token }
+        if valid_number(token) = 0 {
+            *position := -1
+            return ""
+        }
+        return token
+    end
+
+    fn valid_number(token: string): int
+    begin
+        var length: int := str.length(token)
+        var index: int := 0
+        if length = 0 { return 0 }
+        if str.char(token, index) = 45 { index := index + 1 }
+        if index >= length { return 0 }
+        if str.char(token, index) = 48 { index := index + 1 }
+        else {
+            if str.char(token, index) < 49 || str.char(token, index) > 57 { return 0 }
+            while index < length && str.char(token, index) >= 48 && str.char(token, index) <= 57 { index := index + 1 }
+        }
+        if index < length && str.char(token, index) = 46 {
+            index := index + 1
+            var fraction_start: int := index
+            while index < length && str.char(token, index) >= 48 && str.char(token, index) <= 57 { index := index + 1 }
+            if index = fraction_start { return 0 }
+        }
+        if index < length && (str.char(token, index) = 69 || str.char(token, index) = 101) {
+            index := index + 1
+            if index < length && (str.char(token, index) = 43 || str.char(token, index) = 45) { index := index + 1 }
+            var exponent_start: int := index
+            while index < length && str.char(token, index) >= 48 && str.char(token, index) <= 57 { index := index + 1 }
+            if index = exponent_start { return 0 }
+        }
+        if index != length { return 0 }
+        return 1
+    end
+
+    fn parse(json_text: string): *collections.Map
+    begin
+        var position: int := 0
+        var result: *collections.Map := parse_map_inner(json_text, &position)
+        skip_space(json_text, &position)
+        if position < 0 || position != str.length(json_text) { return collections.map.create() }
+        return result
+    end
+
+    fn get_array(json_text: string): *collections.Vector
+    begin
+        var position: int := 0
+        var result: *collections.Vector := parse_array_inner(json_text, &position)
+        skip_space(json_text, &position)
+        if position < 0 || position != str.length(json_text) { return collections.vector.create(0) }
+        return result
+    end
+end

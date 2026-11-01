@@ -1,0 +1,9 @@
+uses syscall
+
+fn main(): int
+begin
+    // Linux x86-64 getpid syscall.
+    var process_id: int := syscall.raw.invoke3(39, 0, 0, 0)
+    if process_id > 0 { return 0 }
+    return 1
+end

@@ -1,0 +1,24 @@
+fn main(): int
+begin
+    var index: int := 0
+    var total: int := 0
+    while index < 10 {
+        if index % 2 = 0 {
+            total := total + index
+        } else {
+            total := total - index
+        }
+        index := index + 1
+    }
+
+    var result: int := 0
+    if total = -5 {
+        if index = 10 { result := 1 }
+        else { result := 2 }
+    } else {
+        result := 3
+    }
+
+    if result = 1 { return 0 }
+    return 1
+end

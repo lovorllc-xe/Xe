@@ -1,0 +1,59 @@
+uses syscall
+
+module terminal
+begin
+    fn write_text(text: string): int
+    begin
+        var length: int := str.length(text)
+        var offset: int := 0
+        while offset < length {
+            var count: int := syscall.invoke3(1, 1, str.slice(text, offset, length), length - offset)
+            if count <= 0 { return 0 }
+            offset := offset + count
+        }
+        return 1
+    end
+
+    fn set_color(color_code: int): void
+    begin
+        if color_code < 0 || color_code > 107 { return }
+        write_text("\u001b[" + str.number(color_code) + "m")
+    end
+
+    fn clear_screen(): void
+    begin
+        write_text("\u001b[2J\u001b[H")
+    end
+
+    fn move_cursor(row: int, col: int): void
+    begin
+        if row < 1 || col < 1 { return }
+        write_text("\u001b[" + str.number(row) + ";" + str.number(col) + "H")
+    end
+
+    // Temporarily disables canonical input and echo, reads one byte, then
+    // restores the exact original Linux termios state even when read fails.
+    fn read_key_raw(): int
+    begin
+        var original: [8]int
+        var raw: [8]int
+        var result: int := syscall.invoke3(16, 0, 21505, &original)
+        if result < 0 { return -1 }
+        var offset: int := 0
+        while offset < 60 {
+            runtime.hw.write8(&raw + offset, runtime.hw.read8(&original + offset))
+            offset := offset + 1
+        }
+        var local_flags: int := runtime.hw.read32(&raw + 12)
+        local_flags := local_flags & -11
+        runtime.hw.write32(&raw + 12, local_flags)
+        runtime.hw.write8(&raw + 17 + 5, 0)
+        runtime.hw.write8(&raw + 17 + 6, 1)
+        if syscall.invoke3(16, 0, 21506, &raw) < 0 { return -1 }
+        var byte: int := 0
+        result := syscall.invoke3(0, 0, &byte, 1)
+        syscall.invoke3(16, 0, 21506, &original)
+        if result != 1 { return -1 }
+        return runtime.hw.read8(&byte)
+    end
+end

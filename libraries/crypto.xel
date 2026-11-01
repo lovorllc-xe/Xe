@@ -1,0 +1,23 @@
+uses bitops
+
+module crypto
+begin
+    // Reflected IEEE CRC-32 (polynomial 0xEDB88320).
+    fn crc32(data: string): int
+    begin
+        var crc: int := 4294967295
+        var index: int := 0
+        while index < str.length(data) {
+            crc := crc ^ str.char(data, index)
+            var bit: int := 0
+            while bit < 8 {
+                if bitops.and(crc, 1) != 0 { crc := (crc >> 1) ^ 3988292384 }
+                else { crc := crc >> 1 }
+                crc := bitops.and(crc, 4294967295)
+                bit := bit + 1
+            }
+            index := index + 1
+        }
+        return bitops.and(crc ^ 4294967295, 4294967295)
+    end
+end

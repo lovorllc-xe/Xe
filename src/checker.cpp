@@ -14,6 +14,7 @@ bool stringLike(const std::string& type) { return type == "str" || type == "stri
 bool allocationCall(const std::string& name) { return name == "alloc" || name == "alloc.aligned" || name == "new" || name == "aligned_alloc"; }
 bool compatible(const std::string& to, const std::string& from) {
     return to == from || (to == "*void" && !from.empty() && from.front() == '*') ||
+           (from == "*void" && !to.empty() && to.front() == '*') ||
            (stringLike(to) && stringLike(from)) || (numeric(to) && numeric(from)) || (to == "void" && from == "void");
 }
 bool compatibleExpression(const std::string& to, const std::string& from, const E& expression) {
@@ -97,9 +98,8 @@ You are an expert compiler engineer. Your task is to implement a complete, fully
 ### E. Low-Level Features & Inline Assembly
 - Direct inline assembly block support using `asm { ... }`. The compiler must extract raw assembly strings within `asm {}` and pass them straight to target output emission.
 
-### G. Execution Modes
-- **Interpreter Mode:** Execute source files directly via a Tree-Walk AST Evaluator / Bytecode VM (`mylang --run main.src`).
-- **Compiler Mode:** Translate source code to C++ or LLVM IR and invoke host compilers to produce optimized native executables (`mylang --build main.src -o output`).
+### G. Execution Mode
+- **Compiler Mode:** Translate source code to native code and invoke host compilers to produce executables (`xe --build main.xe -o program.xee`).
 
 ---
 
@@ -111,7 +111,7 @@ The C++20 project must be strictly structured into the following header/source p
 mylang/
 ├── CMakeLists.txt          # Build system configuration
 ├── src/
-│   ├── main.cpp            # Entry point, CLI flags (--run, --build)
+│   ├── main.cpp            # Entry point and command-line interface
 */
 }
 void Checker::checkType(const std::string& type) const {
@@ -369,6 +369,9 @@ std::string Checker::checkExpression(const E& expression) {
             if (std::stoull(literal->value) > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1) throw std::runtime_error("integer literal is out of range");
             return "int";
         }
+        if (unary->op == "&") {
+            if (auto functionName = std::dynamic_pointer_cast<Name>(unary->operand); functionName && functions.contains(functionName->value)) return "*void";
+        }
         auto operand = checkExpression(unary->operand);
         if (unary->op == "~") { if (operand != "int") throw std::runtime_error("bitwise complement requires an int operand"); return "int"; }
         if (unary->op == "!") { if (!numeric(operand) && (operand.empty() || operand.front() != '*')) throw std::runtime_error("logical not requires a numeric or pointer operand"); return "int"; }
@@ -437,6 +440,9 @@ std::string Checker::checkExpression(const E& expression) {
         auto requireIntValue = [&](std::size_t index) {
             if (index >= call->args.size() || checkExpression(call->args[index]) != "int") throw std::runtime_error(call->name + " expects integer arguments");
         };
+        if (call->name == "atomic.load") { if (call->args.size() != 1) throw std::runtime_error(call->name + " expects one address"); requireRawPointer(0); return "int"; }
+        if (call->name == "atomic.store") { if (call->args.size() != 2) throw std::runtime_error(call->name + " expects an address and value"); requireRawPointer(0); requireIntValue(1); return "void"; }
+        if (call->name == "atomic.compare_exchange") { if (call->args.size() != 3) throw std::runtime_error(call->name + " expects an address, expected value, and desired value"); requireRawPointer(0); requireIntValue(1); requireIntValue(2); return "int"; }
         if (call->name == "runtime.pointer.read") {
             if (call->args.size() != 1) throw std::runtime_error(call->name + " expects one pointer-slot address");
             requireRawPointer(0);
@@ -545,11 +551,18 @@ std::string Checker::checkExpression(const E& expression) {
             requireInt(1);
             return "string";
         }
+        if (call->name == "flt.toint") { requireArity(1); if (checkExpression(call->args[0]) != "flt") throw std::runtime_error("flt.toint expects a float"); return "int"; }
         if (call->name == "arg.count") { requireArity(0); return "int"; }
         if (call->name == "arg.get") { requireArity(1); requireInt(0); return "string"; }
+        if (call->name == "env.get") { requireArity(1); requireString(0); return "string"; }
         if (call->name == "file.read") { requireArity(1); requireString(0); return "string"; }
         if (call->name == "file.write") { requireArity(2); requireString(0); requireString(1); return "void"; }
         if (call->name == "process.run") { requireArity(1); requireString(0); return "int"; }
+        if (call->name == "process.spawn") { requireArity(1); requireString(0); return "int"; }
+        if (call->name == "process.wait") { requireArity(1); requireInt(0); return "int"; }
+        if (call->name == "thread.start") { if (call->args.size() != 2) throw std::runtime_error("thread.start expects a function address and argument pointer"); requireRawPointer(0); requireRawPointer(1); return "int"; }
+        if (call->name == "thread.join") { requireArity(1); requireInt(0); return "int"; }
+        if (call->name == "runtime.pointer.is_null") { requireArity(1); requireRawPointer(0); return "int"; }
         if (call->name == "str.length") { requireArity(1); requireString(0); return "int"; }
         if (call->name == "str.builder") {
             if (call->args.size() > 1) throw std::runtime_error("str.builder expects zero or one string argument");

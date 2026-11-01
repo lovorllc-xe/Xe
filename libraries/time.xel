@@ -1,0 +1,44 @@
+uses syscall
+
+module time
+begin
+    type Timespec: record
+    begin
+        seconds: int
+        nanoseconds: int
+    end
+
+    fn now_milliseconds(): int
+    begin
+        var stamp: time.Timespec
+        var result: int := syscall.invoke3(228, 0, &stamp, 0)
+        if result < 0 { return -1 }
+        return stamp.seconds * 1000 + stamp.nanoseconds / 1000000
+    end
+
+    fn now_seconds(): int
+    begin
+        var stamp: time.Timespec
+        var result: int := syscall.invoke3(228, 0, &stamp, 0)
+        if result < 0 { return -1 }
+        return stamp.seconds
+    end
+
+    fn sleep_ms(milliseconds: int): void
+    begin
+        if milliseconds <= 0 { return }
+        var request: time.Timespec
+        request.seconds := milliseconds / 1000
+        request.nanoseconds := (milliseconds % 1000) * 1000000
+        syscall.invoke3(35, &request, 0, 0)
+    end
+
+    // Monotonic nanosecond ticks, suitable for elapsed-time measurement.
+    fn clock_ticks(): int
+    begin
+        var stamp: time.Timespec
+        var result: int := syscall.invoke3(228, 1, &stamp, 0)
+        if result < 0 { return -1 }
+        return stamp.seconds * 1000000000 + stamp.nanoseconds
+    end
+end

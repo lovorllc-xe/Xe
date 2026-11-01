@@ -151,6 +151,11 @@ std::string Codegen::expression(const E& node) {
     if (auto call = std::dynamic_pointer_cast<Call>(node)) {
         if (call->name == "alloc" || call->name == "new") return "xe::runtime::alloc(" + expression(call->args.at(0)) + ")";
         if (call->name == "alloc.aligned" || call->name == "aligned_alloc") return "xe::runtime::allocAligned(" + expression(call->args.at(0)) + ", " + expression(call->args.at(1)) + ")";
+        if (call->name == "atomic.load") return "xe::runtime::atomicLoad(" + expression(call->args.at(0)) + ")";
+        if (call->name == "atomic.store") return "xe::runtime::atomicStore(" + expression(call->args.at(0)) + ", " + expression(call->args.at(1)) + ")";
+        if (call->name == "atomic.compare_exchange") return "xe::runtime::atomicCompareExchange(" + expression(call->args.at(0)) + ", " + expression(call->args.at(1)) + ", " + expression(call->args.at(2)) + ")";
+        if (call->name == "flt.toint") return "xe::runtime::floatToInt(" + expression(call->args.at(0)) + ")";
+        if (call->name == "runtime.pointer.is_null") return "xe::runtime::pointerIsNull(" + expression(call->args.at(0)) + ")";
         std::string target = call->name == "runtime.pointer.read" ? "xe::runtime::pointerRead" : call->name == "runtime.pointer.write" ? "xe::runtime::pointerWrite" :
                      call->name == "runtime.pointer.cast.string" ? "xe::runtime::pointerAsString" : call->name == "runtime.pointer.free" ? "xe::runtime::freeRaw" :
                      call->name == "runtime.mem.copy" ? "xe::runtime::sysMemCopy" : call->name == "runtime.mem.set" ? "xe::runtime::sysMemSet" : call->name == "runtime.mem.compare" ? "xe::runtime::sysMemCompare" :
@@ -158,9 +163,11 @@ std::string Codegen::expression(const E& node) {
                      call->name == "runtime.hw.read32" ? "xe::runtime::sysHardwareRead32" : call->name == "runtime.hw.write32" ? "xe::runtime::sysHardwareWrite32" :
                      call->name == "syscall.invoke3" ? "xe::runtime::syscallInvoke3" : call->name == "syscall.invoke6" ? "xe::runtime::syscallInvoke6" :
                      call->name == "flt.format" ? "xe::runtime::floatFormat" :
-                     call->name == "arg.count" ? "xe::runtime::argCount" : call->name == "arg.get" ? "xe::runtime::arg" :
+                             call->name == "arg.count" ? "xe::runtime::argCount" : call->name == "arg.get" ? "xe::runtime::arg" : call->name == "env.get" ? "xe::runtime::environmentValue" :
                              call->name == "file.read" ? "xe::runtime::readFile" : call->name == "file.write" ? "xe::runtime::writeFile" :
                              call->name == "process.run" ? "xe::runtime::runProcess" :
+                             call->name == "process.spawn" ? "xe::runtime::spawnProcess" : call->name == "process.wait" ? "xe::runtime::waitProcess" :
+                             call->name == "thread.start" ? "xe::runtime::threadStart" : call->name == "thread.join" ? "xe::runtime::threadJoin" :
                              call->name == "str.length" ? "xe::runtime::stringLength" : call->name == "str.char" ? "xe::runtime::stringChar" :
                              call->name == "str.builder" ? "xe::runtime::stringBuilder" : call->name == "str.append" ? "xe::runtime::stringAppend" :
                              call->name == "str.slice" ? "xe::runtime::stringSlice" : call->name == "str.find" ? "xe::runtime::stringFind" :
@@ -170,7 +177,21 @@ std::string Codegen::expression(const E& node) {
         if (call->args.empty()) return target + "()";
         auto id = std::to_string(expressionScopeId++);
         std::string result = "([&]() { ";
-        for (std::size_t i = 0; i < call->args.size(); ++i) result += "auto&& xeArg" + id + "x" + std::to_string(i) + " = " + expression(call->args[i]) + "; ";
+        auto signature = parameterTypes.find(call->name);
+        for (std::size_t i = 0; i < call->args.size(); ++i) {
+            std::string argument = expression(call->args[i]);
+            const auto* literal = std::dynamic_pointer_cast<Literal>(call->args[i]).get();
+            if (signature != parameterTypes.end() && i < signature->second.size() && !signature->second[i].empty() && signature->second[i].front() == '*') {
+                if (literal && !literal->string && literal->value == "0") argument = "nullptr";
+                if (signature->second[i] == "*void") {
+                    if (auto unary = std::dynamic_pointer_cast<Unary>(call->args[i]); unary && unary->op == "&") {
+                        if (auto function = std::dynamic_pointer_cast<Name>(unary->operand); function && functionNames.contains(function->value))
+                            argument = "reinterpret_cast<void*>(" + argument + ")";
+                    }
+                }
+            }
+            result += "auto&& xeArg" + id + "x" + std::to_string(i) + " = " + argument + "; ";
+        }
         result += "return " + target + "(";
         for (std::size_t i = 0; i < call->args.size(); ++i) { if (i) result += ", "; result += "xeArg" + id + "x" + std::to_string(i); }
         return result + "); }())";
@@ -230,6 +251,14 @@ void Codegen::block(const std::shared_ptr<Block>& body, std::string& out, int in
 }
 std::string Codegen::generate(const Program& program) {
     expressionScopeId = 0;
+    parameterTypes.clear();
+    functionNames.clear();
+    for (const auto& function : program.functions) {
+        functionNames.insert(function.name);
+        std::vector<std::string> types;
+        for (const auto& parameter : function.params) types.push_back(parameter.type);
+        parameterTypes.emplace(function.name, std::move(types));
+    }
     std::string out = "#include <cstddef>\n#include <cstdint>\n#include <memory>\n#include <vector>\n#include \"runtime.hpp\"\n";
     for (const auto& record : program.records) out += "struct " + name(record.name) + ";\n";
     for (const auto& alias : program.aliases) out += "using " + name(alias.name) + " = " + type(alias.target) + ";\n";

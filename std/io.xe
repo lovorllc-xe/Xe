@@ -1,4 +1,4 @@
-module io
+ module io
 begin
     fn print.text(value: string)
     begin

@@ -1,0 +1,14 @@
+fn main(): int
+begin
+    var memory: *void := mem.allocate(16)
+    if runtime.pointer.is_null(memory) = 1 { return 1 }
+
+    runtime.hw.write32(memory, 123456)
+    if runtime.hw.read32(memory) != 123456 {
+        mem.release(memory)
+        return 2
+    }
+
+    mem.release(memory)
+    return 0
+end

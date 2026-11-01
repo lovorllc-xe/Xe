@@ -236,6 +236,17 @@ begin
     begin
         if expression < 0 { return 1 }
         var kind: int := ast.read(pool, expression, 0)
+        if kind = ast.unaryKind() && ast.read(pool, expression, 10) = 38 {
+            var operand: int := ast.read(pool, expression, 3)
+            if operand >= 0 && ast.read(pool, operand, 0) = ast.nameKind() {
+                var functionName: string := str.slice(source, ast.read(pool, operand, 1), ast.read(pool, operand, 2))
+                var function: int := codegen.functionNode(source, pool, functionId, functionName)
+                if function >= 0 {
+                    ast.write(pool, operand, 11, function + 1)
+                    return 1
+                }
+            }
+        }
         if kind = ast.nameKind() {
             var nameFirst: int := ast.read(pool, expression, 1)
             var nameFinish: int := ast.read(pool, expression, 2)

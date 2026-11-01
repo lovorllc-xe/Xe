@@ -1,0 +1,27 @@
+uses syscall
+uses sys
+
+module process
+begin
+    // Starts /bin/sh -c and returns its PID. Call wait_pid to collect status.
+    fn exec(command: string): int
+    begin
+        return process.spawn(command)
+    end
+
+    fn wait_pid(pid: int): int
+    begin
+        return process.wait(pid)
+    end
+
+    fn get_env(key: string): string
+    begin
+        return env.get(key)
+    end
+
+    // Writes the read and write descriptors to fds[0] and fds[1].
+    fn pipe_create(fds: *int): int
+    begin
+        return syscall.invoke3(22, fds, 0, 0)
+    end
+end

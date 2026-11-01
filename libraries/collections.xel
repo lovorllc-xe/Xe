@@ -68,7 +68,16 @@ begin
 
     fn map.create(): *collections.Map
     begin
-        return alloc(8192)
+        var map: *collections.Map := alloc(8192)
+        (*map).size := 0
+        var slot: int := 0
+        while slot < 128 {
+            (*map).keys[slot] := ""
+            (*map).values[slot] := 0
+            (*map).occupied[slot] := 0
+            slot := slot + 1
+        }
+        return map
     end
 
     fn map.put(map: *collections.Map, key: string, value: *void): int
@@ -120,6 +129,40 @@ begin
     fn map.count(map: *collections.Map): int
     begin
         return (*map).size
+    end
+
+    // Returns the key at an occupied-entry index, or an empty string if the
+    // index is outside [0, map.count()). The order is the table's slot order.
+    fn map.key_at(map: *collections.Map, index: int): string
+    begin
+        if index < 0 || index >= (*map).size { return "" }
+        var slot: int := 0
+        var seen: int := 0
+        while slot < 128 {
+            if (*map).occupied[slot] != 0 {
+                if seen = index { return (*map).keys[slot] }
+                seen := seen + 1
+            }
+            slot := slot + 1
+        }
+        return ""
+    end
+
+    // Returns the value at an occupied-entry index, or null when out of range.
+    fn map.value_at(map: *collections.Map, index: int): *void
+    begin
+        var empty: *void := 0
+        if index < 0 || index >= (*map).size { return empty }
+        var slot: int := 0
+        var seen: int := 0
+        while slot < 128 {
+            if (*map).occupied[slot] != 0 {
+                if seen = index { return (*map).values[slot] }
+                seen := seen + 1
+            }
+            slot := slot + 1
+        }
+        return empty
     end
 
     fn map.free(map: *collections.Map): void

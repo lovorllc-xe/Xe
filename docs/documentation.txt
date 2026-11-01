@@ -2,8 +2,8 @@ XeLang: language guide and first course
 =======================================
 
 This guide introduces the XeLang syntax implemented by Stage 0 and Stage 1.
-The language spelling is the same in both stages: Stage 0 is the C++ interpreter
-and host compiler; Stage 1 is the compiler written in XeLang.
+The language spelling is the same in both stages: Stage 0 is the C++ compiler;
+Stage 1 is the compiler written in XeLang.
 
 The assignment operator is :=. The equality comparison operator is =. XeLang
 does not use ==. GPU offload and fix<N> are currently unsupported.
@@ -16,14 +16,14 @@ Build Stage 0 from the project root:
     cmake -S . -B build
     cmake --build build
 
-Run a program with the interpreter:
-
-    ./build/xe --run hello.xe
-
-Build a native host executable:
+Build and run a native host executable:
 
     ./build/xe --build hello.xe -o hello.xee
     ./hello.xee
+
+Build commands print a summary with the result, warning and error counts, and
+elapsed time. Times are shown in ns, µs, ms, seconds, minutes, or hours as
+appropriate. The current compiler does not emit language-level warnings.
 
 Build Stage 1 with Stage 0:
 
@@ -35,10 +35,10 @@ Build Stage 1 with Stage 0:
 Stage 1 can emit or build Linux x86-64 GAS and NASM programs:
 
     ./xelang-stage1 --emit-asm hello.xe -o hello.s
-    ./xelang-stage1 --build hello.xe -o hello
+    ./xelang-stage1 --build hello.xe -o hello.xee
     ./xelang-stage1 --emit-nasm hello.xe -o hello.asm
-    ./xelang-stage1 --build-nasm hello.xe -o hello-nasm
-    ./xelang-stage1 --run hello.xe
+    ./xelang-stage1 --build-nasm hello.xe -o hello-nasm.xee
+    ./hello.xee
 
 It also has freestanding output modes for simple programs without runtime calls:
 
@@ -224,8 +224,16 @@ Group declarations in a module. The module name becomes a namespace prefix:
 Both compiler paths combine multiple source files and check aliases across
 those files.
 
-Stage 0 can resolve separate source library units through a top-level `uses`
-declaration. `libraries/collections.xel` provides a dynamic pointer sequence, a
+The standard source modules in `std/` are included automatically when building
+a normal Linux executable or assembly output. They are available as `io.*` and
+`mem.*`, so you do not write `uses` for them. `io` wraps the built-in input and
+output functions, and `mem` wraps allocation and release. The built-ins
+themselves, such as `writeln`, `read`, `alloc`, and `free`, remain directly
+available. Math helpers are provided by `libraries/math.xel` and require
+`uses math` like other `.xel` libraries.
+
+Separate `.xel` libraries must be requested with a top-level `uses` declaration.
+`libraries/collections.xel` provides a dynamic pointer sequence, a
 bounded string-to-pointer hash map, and bounded integer stack and vector
 records. `libraries/algorithms.xel` imports it and provides integer sorting,
 searching, and summation. `libraries/sys.xel` wraps memory operations, volatile
@@ -236,6 +244,25 @@ provides trimming, splitting, joining, and integer parsing;
 `libraries/math.xel` provides scalar helpers; `libraries/net.xel` wraps Linux
 IPv4 socket calls. `uses collections` loads `collections.xel`
 beside the importing file, or from a directory passed with `--library-path`:
+
+Additional Linux `.xel` modules are available: `fs` provides file and
+directory operations, `time` provides wall-clock and monotonic clock calls,
+`process` provides shell-command spawn/wait, environment lookup, and pipes,
+`threading` provides threads and mutexes, and `terminal` provides ANSI output
+and temporary raw key input. `math_ext` provides trigonometric approximations,
+rounding helpers, and a time-seeded pseudo-random range helper. `compression`
+provides byte-oriented RLE and CRC verification; `crypto` currently provides
+IEEE CRC-32. JSON parsing supports objects, arrays, strings with common
+backslash escapes, primitive values, and compact serialization. Map values and
+array items are stored as pointers to strings containing encoded JSON values;
+use `json.get_raw` and `collections.vector.get.string` to read them. JSON
+`\\u` escapes are not implemented, and numbers are retained as source text.
+Invalid top-level input returns an empty collection. These modules target
+Linux x86-64 syscalls.
+
+SQLite bindings and SHA-256/MD5 are not included yet. The compiler still lacks
+the C ABI and dynamic-library calls needed for a direct SQLite binding; the
+database API should not be treated as available until that support exists.
 
     uses math
 
@@ -505,8 +532,8 @@ syscall runtime. Some helpers may be rejected for PE and bare-metal output.
 --------------------------------
 
 Stage 0 is implemented in C++20. It parses complete nested AST blocks, checks
-symbols and types, interprets programs, and builds host executables through a
-C++ compiler. Use Stage 0 to run programs or to bootstrap Stage 1.
+symbols and types, and builds host executables through a C++ compiler. Use
+Stage 0 to build programs or to bootstrap Stage 1.
 
 Stage 1 is implemented in XeLang. It parses and checks its supported source
 subset, emits x86-64 assembly, includes its own runtime routines, and uses a

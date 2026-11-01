@@ -1,0 +1,88 @@
+uses math
+uses time
+
+module math_ext
+begin
+    fn reduce_angle(angle: flt): flt
+    begin
+        var value: flt := angle
+        // Reduce to [-pi, pi] without requiring a host math library.
+        while value > 3.141592653589793 { value := value - 6.283185307179586 }
+        while value < -3.141592653589793 { value := value + 6.283185307179586 }
+        return value
+    end
+
+    fn sin(angle: flt): flt
+    begin
+        var x: flt := reduce_angle(angle)
+        var term: flt := x
+        var result: flt := x
+        var n: int := 1
+        while n < 14 {
+            term := -term * x * x / ((2 * n) * (2 * n + 1))
+            result := result + term
+            n := n + 1
+        }
+        return result
+    end
+
+    fn cos(angle: flt): flt
+    begin
+        var x: flt := reduce_angle(angle)
+        var term: flt := 1.0
+        var result: flt := 1.0
+        var n: int := 1
+        while n < 14 {
+            term := -term * x * x / ((2 * n - 1) * (2 * n))
+            result := result + term
+            n := n + 1
+        }
+        return result
+    end
+
+    fn tan(angle: flt): flt
+    begin
+        var denominator: flt := cos(angle)
+        if denominator = 0.0 { return 0.0 }
+        return sin(angle) / denominator
+    end
+
+    // These helpers return the nearest integer toward zero because the Xe
+    // compiler currently has no float-to-integer conversion primitive.
+    fn trunc(value: flt): int
+    begin
+        return flt.toint(value)
+    end
+
+    fn floor(value: flt): int
+    begin
+        var whole: int := trunc(value)
+        if value < 0.0 && math.abs_flt(value - whole) > 0.0 { return whole - 1 }
+        return whole
+    end
+
+    fn ceil(value: flt): int
+    begin
+        var whole: int := trunc(value)
+        if value > 0.0 && math.abs_flt(value - whole) > 0.0 { return whole + 1 }
+        return whole
+    end
+
+    fn random_range(minimum: int, maximum: int): int
+    begin
+        var low: int := minimum
+        var high: int := maximum
+        if low > high {
+            low := maximum
+            high := minimum
+        }
+        var state: int := time.clock_ticks()
+        if state < 0 { state := -state }
+        state := state ^ (state << 13)
+        state := state ^ (state >> 7)
+        state := state ^ (state << 17)
+        var span: int := high - low + 1
+        if span <= 0 { return low }
+        return low + ((state & 9223372036854775807) % span)
+    end
+end

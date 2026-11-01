@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstddef>
@@ -21,6 +22,7 @@
 #include <type_traits>
 #include <typeindex>
 #include <functional>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -69,6 +71,23 @@ template<class A, class B, class N> inline std::int64_t sysMemCompare(A first, B
     if (bytes < 0) throw std::runtime_error("memory size cannot be negative");
     if (bytes && (!rawAddress(first) || !rawAddress(second))) throw std::runtime_error("memory compare requires non-null pointers");
     return std::memcmp(rawAddress(first), rawAddress(second), static_cast<std::size_t>(bytes));
+}
+template<class P> inline std::int64_t atomicLoad(P address) {
+    auto* pointer = static_cast<std::int64_t*>(rawAddress(address));
+    if (!pointer || reinterpret_cast<std::uintptr_t>(pointer) % alignof(std::int64_t)) throw std::runtime_error("atomic operation requires an aligned non-null address");
+    return std::atomic_ref<std::int64_t>(*pointer).load(std::memory_order_seq_cst);
+}
+template<class P> inline std::int64_t pointerIsNull(P pointer) { return rawAddress(pointer) == nullptr ? 1 : 0; }
+template<class P, class V> inline void atomicStore(P address, V value) {
+    auto* pointer = static_cast<std::int64_t*>(rawAddress(address));
+    if (!pointer || reinterpret_cast<std::uintptr_t>(pointer) % alignof(std::int64_t)) throw std::runtime_error("atomic operation requires an aligned non-null address");
+    std::atomic_ref<std::int64_t>(*pointer).store(static_cast<std::int64_t>(value), std::memory_order_seq_cst);
+}
+template<class P, class E, class D> inline std::int64_t atomicCompareExchange(P address, E expected, D desired) {
+    auto* pointer = static_cast<std::int64_t*>(rawAddress(address));
+    if (!pointer || reinterpret_cast<std::uintptr_t>(pointer) % alignof(std::int64_t)) throw std::runtime_error("atomic operation requires an aligned non-null address");
+    auto expectedValue = static_cast<std::int64_t>(expected);
+    return std::atomic_ref<std::int64_t>(*pointer).compare_exchange_strong(expectedValue, static_cast<std::int64_t>(desired), std::memory_order_seq_cst) ? 1 : 0;
 }
 template<class P> inline std::int64_t sysHardwareRead8(P address) { return *static_cast<volatile std::uint8_t*>(rawAddress(address)); }
 template<class P> inline void sysHardwareWrite8(P address, std::int64_t value) { *static_cast<volatile std::uint8_t*>(rawAddress(address)) = static_cast<std::uint8_t>(value); }
@@ -235,6 +254,10 @@ inline std::mutex heapAllocationMutex;
 inline std::unordered_set<void*> heapAllocations;
 inline std::unordered_map<void*, std::size_t> heapAllocationAlignments;
 inline std::unordered_map<void*, ObjectRecord> heapObjects;
+struct XeThreadState { std::thread worker; std::int64_t result = 0; };
+inline std::mutex xeThreadMutex;
+inline std::unordered_map<std::int64_t, std::shared_ptr<XeThreadState>> xeThreads;
+inline std::atomic<std::int64_t> xeNextThreadId{1};
 inline std::vector<std::string> processArguments;
 inline void setArguments(int argc, char** argv) {
     processArguments.clear();
@@ -250,9 +273,55 @@ inline std::int64_t processExitCode(int status) {
     return status;
 }
 inline std::int64_t runProcess(const std::string& command) { return processExitCode(std::system(command.c_str())); }
+inline std::int64_t spawnProcess(const std::string& command) {
+#if defined(__unix__) || defined(__APPLE__)
+    auto child = ::fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    return static_cast<std::int64_t>(child);
+#else
+    (void)command;
+    return -1;
+#endif
+}
+inline std::int64_t waitProcess(std::int64_t process) {
+#if defined(__unix__) || defined(__APPLE__)
+    int status = 0;
+    pid_t result;
+    do { result = ::waitpid(static_cast<pid_t>(process), &status, 0); } while (result < 0 && errno == EINTR);
+    if (result < 0) return -1;
+    return processExitCode(status);
+#else
+    (void)process;
+    return -1;
+#endif
+}
 inline const std::string& arg(std::int64_t index) {
     if (index < 0 || static_cast<std::uint64_t>(index) >= processArguments.size()) throw std::out_of_range("argument index is out of range");
     return processArguments[static_cast<std::size_t>(index)];
+}
+inline std::string environmentValue(const std::string& key) {
+    const char* value = std::getenv(key.c_str());
+    return value ? std::string(value) : std::string{};
+}
+template<class F, class A> inline std::int64_t threadStart(F entry, A argument) {
+    using Entry = std::int64_t (*)(void*);
+    auto callback = reinterpret_cast<Entry>(rawAddress(entry));
+    void* callbackArgument = rawAddress(argument);
+    auto state = std::make_shared<XeThreadState>();
+    const auto id = xeNextThreadId.fetch_add(1, std::memory_order_relaxed);
+    state->worker = std::thread([state, callback, callbackArgument] { state->result = callback(callbackArgument); });
+    { std::lock_guard lock(xeThreadMutex); xeThreads.emplace(id, state); }
+    return id;
+}
+inline std::int64_t threadJoin(std::int64_t id) {
+    std::shared_ptr<XeThreadState> state;
+    { std::lock_guard lock(xeThreadMutex); auto found = xeThreads.find(id); if (found == xeThreads.end()) return -1; state = found->second; xeThreads.erase(found); }
+    if (state->worker.joinable()) state->worker.join();
+    return state->result;
 }
 inline std::string readFile(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
@@ -406,6 +475,11 @@ template<class T> volatile std::int64_t& hardware(T address) {
     return *reinterpret_cast<volatile std::int64_t*>(raw);
 }
 inline volatile std::int64_t& hardware(RawPointer address) { return *reinterpret_cast<volatile std::int64_t*>(address.value); }
+inline std::int64_t floatToInt(double value) {
+    if (!std::isfinite(value) || value < static_cast<double>(std::numeric_limits<std::int64_t>::min()) || value >= 9223372036854775808.0)
+        return std::numeric_limits<std::int64_t>::min();
+    return static_cast<std::int64_t>(std::trunc(value));
+}
 inline std::string floatFormat(double value, std::int64_t decimals) {
     if (decimals < 0 || decimals > 18) throw std::out_of_range("float format decimals must be between 0 and 18");
     std::ostringstream result;

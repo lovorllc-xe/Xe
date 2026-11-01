@@ -263,7 +263,7 @@ begin
                 var resultType: string := ""
                 if cachedTarget > 0 { resultType := functionResultTypeAt(source, pool, cachedTarget - 1) }
                 else { resultType := functionResultType(source, pool, functionId, name) }
-                if name = "str.slice" || name = "str.number" || name = "str.fromchar" || name = "str.builder" || name = "str.append" || name = "arg.get" || name = "file.read" || resultType = "string" || resultType = "str" { return 1 }
+                if name = "str.slice" || name = "str.number" || name = "str.fromchar" || name = "str.builder" || name = "str.append" || name = "arg.get" || name = "env.get" || name = "file.read" || resultType = "string" || resultType = "str" { return 1 }
             }
         }
         if kind = ast.binaryKind() && ast.read(pool, id, 10) = 43 {
@@ -1909,11 +1909,13 @@ begin
 
     fn functionResultType(source: string, pool: *[524288]int, functionId: int, wanted: string): string
     begin
-        if wanted = "str.builder" || wanted = "str.append" || wanted = "str.slice" || wanted = "str.number" || wanted = "str.fromchar" || wanted = "arg.get" || wanted = "file.read" || wanted = "flt.format" { return "string" }
+        if wanted = "atomic.load" || wanted = "atomic.compare_exchange" || wanted = "flt.toint" || wanted = "runtime.pointer.is_null" { return "int" }
+        if wanted = "atomic.store" { return "void" }
+        if wanted = "str.builder" || wanted = "str.append" || wanted = "str.slice" || wanted = "str.number" || wanted = "str.fromchar" || wanted = "arg.get" || wanted = "env.get" || wanted = "file.read" || wanted = "flt.format" { return "string" }
         if wanted = "runtime.pointer.read" { return "*void" }
         if wanted = "runtime.pointer.cast.string" { return "*string" }
         if wanted = "alloc" || wanted = "new" || wanted = "aligned_alloc" || wanted = "alloc.aligned" { return "*void" }
-        if wanted = "str.length" || wanted = "str.char" || wanted = "str.find" || wanted = "str.equal" || wanted = "arg.count" || wanted = "process.run" || wanted = "syscall.invoke3" || wanted = "syscall.invoke6" || wanted = "runtime.mem.compare" || wanted = "runtime.hw.read8" || wanted = "runtime.hw.read32" { return "int" }
+        if wanted = "str.length" || wanted = "str.char" || wanted = "str.find" || wanted = "str.equal" || wanted = "arg.count" || wanted = "process.run" || wanted = "process.spawn" || wanted = "process.wait" || wanted = "thread.start" || wanted = "thread.join" || wanted = "syscall.invoke3" || wanted = "syscall.invoke6" || wanted = "runtime.mem.compare" || wanted = "runtime.hw.read8" || wanted = "runtime.hw.read32" { return "int" }
         if wanted = "file.write" || wanted = "free" || wanted = "delete" || wanted = "runtime.pointer.write" || wanted = "runtime.pointer.free" || wanted = "runtime.mem.copy" || wanted = "runtime.mem.set" || wanted = "runtime.hw.write8" || wanted = "runtime.hw.write32" { return "void" }
         var lookup: string := wanted
         var module: string := functionModule(source, pool, functionId)
@@ -2065,6 +2067,7 @@ begin
         if kind = ast.nameKind() {
             var name: string := str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
             if name = "true" || name = "false" { return "int" }
+            if functionNode(source, pool, functionId, name) >= 0 { return "*void" }
             return boundLocalType(source, pool, functionId, id)
         }
         if kind = ast.memberKind() {
@@ -2077,7 +2080,10 @@ begin
             var operand: int := ast.read(pool, id, 3)
             var type: string := expressionType(source, pool, functionId, operand)
             if operation = 33 && type = "int" { return "int" }
-            if operation = 38 { return "*" + type }
+            if operation = 38 {
+                if operand >= 0 && ast.read(pool, operand, 0) = ast.nameKind() && functionNode(source, pool, functionId, str.slice(source, ast.read(pool, operand, 1), ast.read(pool, operand, 2))) >= 0 { return "*void" }
+                return "*" + type
+            }
             if operation = 42 && str.length(type) > 0 && str.char(type, 0) = 42 { return str.slice(type, 1, str.length(type)) }
             if operation = 45 && (type = "int" || type = "flt") { return type }
             if operation = 126 && type = "int" { return "int" }
@@ -2163,10 +2169,21 @@ begin
         return 0
     end
 
+    fn nullPointerArgument(source: string, pool: *[524288]int, expression: int): int
+    begin
+        if expression < 0 { return 0 }
+        if ast.read(pool, expression, 0) = ast.literalKind() && ast.read(pool, expression, 10) = token.numberKind() && str.slice(source, ast.read(pool, expression, 1), ast.read(pool, expression, 2)) = "0" { return 1 }
+        return 0
+    end
+
     fn builtinParameterCount(name: string): int
     begin
+        if name = "atomic.load" { return 1 }
+        if name = "atomic.store" { return 2 }
+        if name = "atomic.compare_exchange" { return 3 }
         if name = "flt.format" { return 2 }
-        if name = "runtime.pointer.read" || name = "runtime.pointer.cast.string" || name = "runtime.pointer.free" || name = "alloc" || name = "new" || name = "free" || name = "delete" { return 1 }
+        if name = "flt.toint" { return 1 }
+        if name = "runtime.pointer.read" || name = "runtime.pointer.cast.string" || name = "runtime.pointer.free" || name = "runtime.pointer.is_null" || name = "alloc" || name = "new" || name = "free" || name = "delete" { return 1 }
         if name = "runtime.pointer.write" { return 2 }
         if name = "aligned_alloc" || name = "alloc.aligned" { return 2 }
         if name = "syscall.invoke3" { return 4 }
@@ -2175,7 +2192,8 @@ begin
         if name = "runtime.hw.read8" || name = "runtime.hw.read32" { return 1 }
         if name = "runtime.hw.write8" || name = "runtime.hw.write32" { return 2 }
         if name = "arg.count" { return 0 }
-        if name = "str.builder" || name = "str.length" || name = "str.number" || name = "str.fromchar" || name = "arg.get" || name = "file.read" || name = "process.run" { return 1 }
+        if name = "str.builder" || name = "str.length" || name = "str.number" || name = "str.fromchar" || name = "arg.get" || name = "env.get" || name = "file.read" || name = "process.run" || name = "process.spawn" || name = "process.wait" || name = "thread.join" { return 1 }
+        if name = "thread.start" { return 2 }
         if name = "str.append" || name = "str.char" || name = "str.find" || name = "str.equal" || name = "file.write" { return 2 }
         if name = "str.slice" { return 3 }
         return -1
@@ -2183,8 +2201,15 @@ begin
 
     fn builtinParameterType(name: string, index: int): string
     begin
+        if name = "atomic.load" && index = 0 { return "*void" }
+        if name = "atomic.store" && index = 0 { return "*void" }
+        if name = "atomic.store" && index = 1 { return "int" }
+        if name = "atomic.compare_exchange" && index = 0 { return "*void" }
+        if name = "atomic.compare_exchange" && (index = 1 || index = 2) { return "int" }
         if name = "flt.format" && index = 0 { return "numeric" }
         if name = "flt.format" && index = 1 { return "int" }
+        if name = "flt.toint" && index = 0 { return "flt" }
+        if name = "runtime.pointer.is_null" && index = 0 { return "*void" }
         if name = "alloc" || name = "new" || name = "aligned_alloc" || name = "alloc.aligned" { return "int" }
         if (name = "runtime.pointer.read" || name = "runtime.pointer.cast.string" || name = "runtime.pointer.free") && index = 0 { return "*void" }
         if name = "runtime.pointer.write" && (index = 0 || index = 1) { return "*void" }
@@ -2206,6 +2231,11 @@ begin
         if name = "str.char" && index = 1 { return "int" }
         if (name = "str.find" || name = "str.equal") { return "string" }
         if (name = "str.number" || name = "str.fromchar" || name = "arg.get") && index = 0 { return "int" }
+        if name = "env.get" && index = 0 { return "string" }
+        if (name = "process.spawn" || name = "process.run") && index = 0 { return "string" }
+        if name = "process.wait" && index = 0 { return "int" }
+        if name = "thread.start" && (index = 0 || index = 1) { return "*void" }
+        if name = "thread.join" && index = 0 { return "int" }
         if (name = "file.read" || name = "process.run") && index = 0 { return "string" }
         if name = "file.write" { return "string" }
         return ""
@@ -2281,13 +2311,45 @@ begin
                 if argumentTypeMatches(expectedType, actualType) = 0 {
                     if (name = "syscall.invoke3" || name = "syscall.invoke6") && expectedType = "int" && ((str.length(actualType) > 0 && str.char(actualType, 0) = 42) || actualType = "string" || actualType = "str") { }
                     else {
-                        if (name = "runtime.hw.read8" || name = "runtime.hw.read32" || name = "runtime.hw.write8" || name = "runtime.hw.write32") && parameterIndex = 0 && actualType = "int" { }
-                        else { return "" }
+                        if str.length(expectedType) > 0 && str.char(expectedType, 0) = 42 && nullPointerArgument(source, pool, cursor) = 1 { }
+                        else {
+                            if (name = "runtime.hw.read8" || name = "runtime.hw.read32" || name = "runtime.hw.write8" || name = "runtime.hw.write32") && parameterIndex = 0 && actualType = "int" { }
+                            else { return "" }
+                        }
                     }
                 }
                 cursor := ast.read(pool, cursor, 5)
                 parameterIndex := parameterIndex + 1
             }
+        }
+        if name = "atomic.load" {
+            var address: string := integerExpression(source, pool, functionId, first)
+            if str.length(address) = 0 { return "" }
+            return address + " mov rax, qword ptr [rax]\n"
+        }
+        if name = "runtime.pointer.is_null" {
+            var pointer: string := integerExpression(source, pool, functionId, first)
+            if str.length(pointer) = 0 { return "" }
+            return pointer + " test rax, rax\n sete al\n movzx rax, al\n"
+        }
+        if name = "flt.toint" {
+            var value: string := floatExpression(source, pool, functionId, first)
+            if str.length(value) = 0 { return "" }
+            return value + " cvttsd2si rax, xmm0\n"
+        }
+        if name = "atomic.store" {
+            var address: string := integerExpression(source, pool, functionId, first)
+            var value: string := integerExpression(source, pool, functionId, ast.read(pool, first, 5))
+            if str.length(address) = 0 || str.length(value) = 0 { return "" }
+            return address + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + value + " mov rsi, rax\n mov rdi, qword ptr [rsp]\n add rsp, 16\n xchg qword ptr [rdi], rsi\n xor eax, eax\n"
+        }
+        if name = "atomic.compare_exchange" {
+            var address: string := integerExpression(source, pool, functionId, first)
+            var expected: string := integerExpression(source, pool, functionId, ast.read(pool, first, 5))
+            var desiredArgument: int := ast.read(pool, ast.read(pool, first, 5), 5)
+            var desired: string := integerExpression(source, pool, functionId, desiredArgument)
+            if str.length(address) = 0 || str.length(expected) = 0 || str.length(desired) = 0 { return "" }
+            return address + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + expected + " mov qword ptr [rsp+8], rax\n" + desired + " mov rdx, rax\n mov rax, qword ptr [rsp+8]\n mov rdi, qword ptr [rsp]\n lock cmpxchg qword ptr [rdi], rdx\n sete al\n movzx rax, al\n add rsp, 16\n"
         }
         if name = "flt.format" {
             if count != 2 { return "" }
@@ -2453,7 +2515,22 @@ begin
             if name = "syscall.invoke6" {
                 output := str.append(output, " mov rax, rdi\n mov r10, r8\n mov r8, r9\n mov r9, qword ptr [rsp]\n mov rdi, rsi\n mov rsi, rdx\n mov rdx, rcx\n syscall\n")
             }
-            else { output := str.append(output, " call " + functionLabel(name) + "\n") }
+            else {
+                if name = "env.get" { output := str.append(output, " call xeenv.get\n") }
+                else {
+                    if name = "process.spawn" { output := str.append(output, " call xeprocess.spawn\n") }
+                    else {
+                        if name = "process.wait" { output := str.append(output, " call xeprocess.wait\n") }
+                        else {
+                            if name = "thread.start" { output := str.append(output, " call xe.thread.start\n") }
+                            else {
+                                if name = "thread.join" { output := str.append(output, " call xe.thread.join\n") }
+                                else { output := str.append(output, " call " + functionLabel(name) + "\n") }
+                            }
+                        }
+                    }
+                }
+            }
         }
                                 }
                             }
@@ -2553,6 +2630,8 @@ begin
                 if value >= 0 && ast.read(pool, value, 0) = ast.memberKind() { return memberAddress(source, pool, mainId, value) }
                 if value >= 0 && ast.read(pool, value, 0) = ast.nameKind() {
                     var name: string := str.slice(source, ast.read(pool, value, 1), ast.read(pool, value, 2))
+                    var function: int := functionNode(source, pool, mainId, name)
+                    if function >= 0 { return " lea rax, [rip+" + functionLabel(qualifiedFunctionName(source, pool, function)) + "]\n" }
                     var fieldAddress: string := qualifiedFieldAddress(source, pool, mainId, value)
                     if str.length(fieldAddress) > 0 { return fieldAddress }
                     var offset: int := boundLocalOffset(source, pool, mainId, value)

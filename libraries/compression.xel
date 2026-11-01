@@ -1,0 +1,51 @@
+uses collections
+uses bitops
+uses crypto
+
+module compression
+begin
+    // Format is pairs of (one-byte run length, one-byte value). Runs are
+    // capped at 255 and arbitrary binary bytes are preserved.
+    fn compress_rle(data: string): string
+    begin
+        var output: string := str.builder("")
+        var length: int := str.length(data)
+        var index: int := 0
+        while index < length {
+            var value: int := str.char(data, index)
+            var count: int := 1
+            while index + count < length && count < 255 && str.char(data, index + count) = value {
+                count := count + 1
+            }
+            output := str.append(output, str.fromchar(count))
+            output := str.append(output, str.fromchar(value))
+            index := index + count
+        }
+        return output
+    end
+
+    fn decompress_rle(data: string): string
+    begin
+        var length: int := str.length(data)
+        if length % 2 != 0 { return "" }
+        var output: string := str.builder("")
+        var index: int := 0
+        while index < length {
+            var count: int := str.char(data, index)
+            var value: int := str.char(data, index + 1)
+            if count = 0 { return "" }
+            var repeated: int := 0
+            while repeated < count {
+                output := str.append(output, str.fromchar(value))
+                repeated := repeated + 1
+            }
+            index := index + 2
+        }
+        return output
+    end
+
+    fn crc_verify(data: string, checksum: int): int
+    begin
+        return bitops.and(crypto.crc32(data) ^ checksum, 4294967295) = 0
+    end
+end
