@@ -1,0 +1,43 @@
+uses collections
+uses json
+
+// Serialization facade. The initial implementation intentionally exposes the
+// JSON support already available in Xe; other formats can be added behind this
+// module without changing application imports.
+module serde
+begin
+    fn json.quote(text: string): string
+    begin
+        return json.quote(text)
+    end
+
+    fn json.parse_object(text: string): *collections.Map
+    begin
+        return json.parse(text)
+    end
+
+    fn json.parse_array(text: string): *collections.Vector
+    begin
+        return json.get_array(text)
+    end
+
+    fn json.stringify_object(value: *collections.Map): string
+    begin
+        return json.stringify(value)
+    end
+
+    fn json.stringify_array(value: *collections.Vector): string
+    begin
+        return json.stringify_array(value)
+    end
+
+    fn json.get_raw(value: *collections.Map, key: string): string
+    begin
+        return json.get_raw(value, key)
+    end
+
+    fn json.put_raw(value: *collections.Map, key: string, encoded_value: string): int
+    begin
+        return json.put_raw(value, key, encoded_value)
+    end
+end

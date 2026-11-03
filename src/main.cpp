@@ -32,7 +32,7 @@ std::string formatDuration(std::chrono::nanoseconds elapsed) {
     std::ostringstream formatted;
     formatted << std::fixed << std::setprecision(2);
     if (nanoseconds < 1000.0) formatted << elapsed.count() << " ns";
-    else if (nanoseconds < 1'000'000.0) formatted << nanoseconds / 1000.0 << " µs";
+    else if (nanoseconds < 1'000'000.0) formatted << nanoseconds / 1000.0 << " μs";
     else if (nanoseconds < 1'000'000'000.0) formatted << nanoseconds / 1'000'000.0 << " ms";
     else if (nanoseconds < 60'000'000'000.0) formatted << nanoseconds / 1'000'000'000.0 << " s";
     else if (nanoseconds < 3'600'000'000'000.0) formatted << nanoseconds / 60'000'000'000.0 << " min";
@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-V")) {
-            std::cout << "Xe 1.5.2\n";
+            std::cout << "Xe 1.7.0\n";
             return 0;
         }
         if (argc < 3) { usage(); return 2; }

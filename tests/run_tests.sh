@@ -13,6 +13,19 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
+format_duration() {
+    local elapsed_ns="$1"
+    if ((elapsed_ns >= 1000000000)); then
+        awk -v ns="$elapsed_ns" 'BEGIN { printf "%.2f s", ns / 1000000000 }'
+    elif ((elapsed_ns >= 1000000)); then
+        awk -v ns="$elapsed_ns" 'BEGIN { printf "%.2f ms", ns / 1000000 }'
+    elif ((elapsed_ns >= 1000)); then
+        awk -v ns="$elapsed_ns" 'BEGIN { printf "%.2f μs", ns / 1000 }'
+    else
+        printf '%s ns' "$elapsed_ns"
+    fi
+}
+
 if ! command -v "$xe_command" >/dev/null 2>&1; then
     printf '[FAILED] Xe compiler not found: %s\n' "$xe_command" >&2
     printf 'Set XE to the compiler path or add xe to PATH.\n' >&2
@@ -37,8 +50,8 @@ for source_file in "${test_files[@]}"; do
 
     if ! "$xe_command" --build "$source_file" --library-path "$project_dir/libraries" -o "$executable" >"$build_log" 2>&1; then
         finished_ns="$(date +%s%N)"
-        elapsed_ms=$(((finished_ns - started_ns) / 1000000))
-        printf '[FAILED] %s (compile, %d ms)\n' "$test_name" "$elapsed_ms"
+        elapsed="$(format_duration "$((finished_ns - started_ns))")"
+        printf '[FAILED] %s — compile failed, time %s\n' "$test_name" "$elapsed"
         cat "$build_log" >&2
         failed=$((failed + 1))
         continue
@@ -46,8 +59,8 @@ for source_file in "${test_files[@]}"; do
 
     if ! "$executable" >"$run_log" 2>&1; then
         finished_ns="$(date +%s%N)"
-        elapsed_ms=$(((finished_ns - started_ns) / 1000000))
-        printf '[FAILED] %s (execution, %d ms)\n' "$test_name" "$elapsed_ms"
+        elapsed="$(format_duration "$((finished_ns - started_ns))")"
+        printf '[FAILED] %s — execution failed, time %s\n' "$test_name" "$elapsed"
         cat "$run_log" >&2
         failed=$((failed + 1))
         continue
@@ -58,8 +71,8 @@ for source_file in "${test_files[@]}"; do
             printf 'Xe IO integration test\nsecond output line\n' >"$expected_output"
             if ! cmp -s -- "$expected_output" "$run_log"; then
                 finished_ns="$(date +%s%N)"
-                elapsed_ms=$(((finished_ns - started_ns) / 1000000))
-                printf '[FAILED] %s (output mismatch, %d ms)\n' "$test_name" "$elapsed_ms"
+                elapsed="$(format_duration "$((finished_ns - started_ns))")"
+                printf '[FAILED] %s — output mismatch, time %s\n' "$test_name" "$elapsed"
                 printf '%s\n' 'Expected:' >&2
                 cat "$expected_output" >&2
                 printf '%s\n' 'Received:' >&2
@@ -71,8 +84,8 @@ for source_file in "${test_files[@]}"; do
     esac
 
     finished_ns="$(date +%s%N)"
-    elapsed_ms=$(((finished_ns - started_ns) / 1000000))
-    printf '[PASSED] %s (%d ms)\n' "$test_name" "$elapsed_ms"
+    elapsed="$(format_duration "$((finished_ns - started_ns))")"
+    printf '[PASSED] %s — time %s\n' "$test_name" "$elapsed"
     passed=$((passed + 1))
 done
 

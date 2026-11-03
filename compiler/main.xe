@@ -54,7 +54,7 @@ begin
 
     fn version(): int
     begin
-        writeln("Xe 1.5.2")
+        writeln("Xe 1.7.0")
         return 0
     end
 
@@ -101,7 +101,7 @@ begin
         if directoryEnd >= 0 { directory := str.slice(importer, 0, directoryEnd + 1) }
         var dotted: string := importFileName(name, 0)
         var knownLibrary: int := 0
-        if name = "collections" || name = "string_utils" || name = "math" || name = "bitops" || name = "algorithms" || name = "net" || name = "sys" || name = "syscall" { knownLibrary := 1 }
+        if name = "collections" || name = "string_utils" || name = "math" || name = "math_ext" || name = "bitops" || name = "algorithms" || name = "net" || name = "sys" || name = "syscall" || name = "time" || name = "fs" || name = "process" || name = "terminal" || name = "threading" || name = "crypto" || name = "compression" || name = "json" || name = "cli" || name = "log" || name = "test" || name = "serde" { knownLibrary := 1 }
         if knownLibrary = 1 {
             if str.length(libraryPath) > 0 { return libraryPath + "/" + dotted }
             return "libraries/" + dotted

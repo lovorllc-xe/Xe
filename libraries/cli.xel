@@ -1,0 +1,99 @@
+module cli
+begin
+    // Return the raw number of arguments after the executable name.
+    fn count(): int
+    begin
+        return arg.count()
+    end
+
+    // Read an argument by zero-based position. An invalid position returns an
+    // empty string, matching the runtime's string-valued argument interface.
+    fn get(index: int): string
+    begin
+        if index < 0 || index >= arg.count() { return "" }
+        return arg.get(index)
+    end
+
+    // Treat the first non-option argument as a subcommand name.
+    fn command(): string
+    begin
+        if arg.count() = 0 { return "" }
+        var first: string := arg.get(0)
+        if str.length(first) = 0 || str.char(first, 0) = 45 { return "" }
+        return first
+    end
+
+    fn has_flag(name: string): int
+    begin
+        var index: int := 0
+        while index < arg.count() {
+            if arg.get(index) = name { return 1 }
+            index := index + 1
+        }
+        return 0
+    end
+
+    fn has_option(name: string): int
+    begin
+        var index: int := 0
+        while index < arg.count() {
+            var current: string := arg.get(index)
+            if current = name { return 1 }
+            var separator: int := str.find(current, "=")
+            if separator >= 0 && str.slice(current, 0, separator) = name { return 1 }
+            index := index + 1
+        }
+        return 0
+    end
+
+    // Supports both --name value and --name=value forms. The requested name
+    // should include its leading dash or dashes.
+    fn option(name: string, fallback: string): string
+    begin
+        var index: int := 0
+        while index < arg.count() {
+            var current: string := arg.get(index)
+            if current = name {
+                if index + 1 < arg.count() { return arg.get(index + 1) }
+                return fallback
+            }
+            var separator: int := str.find(current, "=")
+            if separator >= 0 && str.slice(current, 0, separator) = name {
+                return str.slice(current, separator + 1, str.length(current))
+            }
+            index := index + 1
+        }
+        return fallback
+    end
+
+    // Parse a common boolean option value. Unknown or absent values use the
+    // caller-provided default.
+    fn option_bool(name: string, fallback: int): int
+    begin
+        var index: int := 0
+        while index < arg.count() {
+            var current: string := arg.get(index)
+            var value: string := ""
+            if current = name {
+                if index + 1 < arg.count() {
+                    var next: string := arg.get(index + 1)
+                    if next = "true" || next = "false" || next = "1" || next = "0" || next = "yes" || next = "no" || next = "on" || next = "off" {
+                        value := next
+                    }
+                }
+                if str.length(value) = 0 { return 1 }
+            }
+            else {
+                var separator: int := str.find(current, "=")
+                if separator >= 0 && str.slice(current, 0, separator) = name {
+                    value := str.slice(current, separator + 1, str.length(current))
+                }
+            }
+            if value = "true" || value = "1" || value = "yes" || value = "on" { return 1 }
+            if value = "false" || value = "0" || value = "no" || value = "off" { return 0 }
+            if str.length(value) > 0 { return fallback }
+            index := index + 1
+        }
+        return fallback
+    end
+end

@@ -24,12 +24,12 @@ trap 'rm -rf -- "$stage"' EXIT
 
 bundle_dir="$stage/$bundle_name"
 mkdir -p -- "$bundle_dir"
-for path in CMakeLists.txt README-INSTALL.txt install.sh src compiler std libraries tests docs scripts; do
+for path in CMakeLists.txt README-INSTALL-LINUX.txt install src compiler std libraries tests docs scripts; do
     cp -a -- "$project_dir/$path" "$bundle_dir/"
 done
 
 # Keep the packaged entry points runnable even if checkout permissions changed.
-chmod 0755 "$bundle_dir/install.sh" "$bundle_dir/tests/run_tests.sh"
+chmod 0755 "$bundle_dir/install/install.sh" "$bundle_dir/tests/run_tests.sh"
 
 tar -czf "$archive" -C "$stage" "$bundle_name"
 printf 'Created release bundle: %s\n' "$archive"

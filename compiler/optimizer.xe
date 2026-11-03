@@ -12,6 +12,25 @@ begin
         return 1
     end
 
+    fn hasLaterDeclaration(source: string, finish: int, position: int, line: int, wanted: string): int
+    begin
+        var cursor: int := position
+        var row: int := line
+        while cursor < finish {
+            var item: [4]int := lexer.scan(source, cursor, row)
+            if item[0] = token.endKind() || item[1] >= finish { cursor := finish }
+            else {
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], "var") = 1 {
+                    var name: [4]int := parser.significant(source, item[2], item[3])
+                    if name[0] = token.nameKind() && textEquals(source, name[1], name[2], wanted) = 1 { return 1 }
+                }
+                cursor := item[2]
+                row := item[3]
+            }
+        }
+        return 0
+    end
+
     fn sameSpan(source: string, first: int, finish: int, wantedFirst: int, wantedFinish: int): int
     begin
         if finish - first != wantedFinish - wantedFirst { return 0 }
@@ -60,7 +79,9 @@ begin
 
     fn registerIndex(source: string, start: int, finish: int, wanted: string, before: int): int
     begin
-        if finish - start > 512 { return -1 }
+        // Keep register allocation available for medium sized hot functions
+        // while bounding the repeated lexical scans used by this allocator.
+        if finish - start > 2048 { return -1 }
         var target: int := -1
         var position: int := start
         var line: int := 1
@@ -79,22 +100,6 @@ begin
             }
         }
         if target < 0 { return -1 }
-        var declarations: int := 0
-        position := start
-        line := 1
-        while position < finish {
-            var item: [4]int := lexer.scan(source, position, line)
-            if item[0] = token.endKind() || item[1] >= finish { position := finish }
-            else {
-                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], "var") = 1 {
-                    var declaration: [4]int := parser.significant(source, item[2], item[3])
-                    if declaration[0] = token.nameKind() && textEquals(source, declaration[1], declaration[2], wanted) = 1 { declarations := declarations + 1 }
-                }
-                position := item[2]
-                line := item[3]
-            }
-        }
-        if declarations > 1 { return -1 }
         // Address-taken locals must stay in their stack slot. Code that uses
         // `&name` may update that slot through a pointer, so keeping the local
         // in a register would make later reads observe a stale value.
@@ -129,7 +134,7 @@ begin
                     var name: [4]int := parser.significant(source, item[2], item[3])
                     var colon: [4]int := parser.significant(source, name[2], name[3])
                     var kind: [4]int := parser.significant(source, colon[2], colon[3])
-                    if textEquals(source, kind[1], kind[2], "int") = 1 {
+                    if textEquals(source, kind[1], kind[2], "int") = 1 && hasLaterDeclaration(source, finish, name[2], name[3], str.slice(source, name[1], name[2])) = 0 {
                         var slot: int := 0
                         while slot < 5 && ends[slot] >= name[1] { slot := slot + 1 }
                         if slot < 5 {
@@ -147,7 +152,7 @@ begin
 
     fn registerCount(source: string, start: int, finish: int): int
     begin
-        if finish - start > 512 { return 0 }
+        if finish - start > 2048 { return 0 }
         var ends: [5]int
         var slotInit: int := 0
         while slotInit < 5 {
@@ -165,7 +170,7 @@ begin
                     var name: [4]int := parser.significant(source, item[2], item[3])
                     var colon: [4]int := parser.significant(source, name[2], name[3])
                     var kind: [4]int := parser.significant(source, colon[2], colon[3])
-                    if textEquals(source, kind[1], kind[2], "int") = 1 {
+                    if textEquals(source, kind[1], kind[2], "int") = 1 && hasLaterDeclaration(source, finish, name[2], name[3], str.slice(source, name[1], name[2])) = 0 {
                         var slot: int := 0
                         while slot < 5 && ends[slot] >= name[1] { slot := slot + 1 }
                         if slot < 5 {

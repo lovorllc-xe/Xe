@@ -363,7 +363,7 @@ begin
         var offset: int := boundLocalOffset(source, pool, functionId, argument)
         if offset < 0 { return "" }
         if word = "read" && type = "int" {
-            var register: int := optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, ast.read(pool, argument, 1))
+            var register: int := registerIndexForName(source, pool, functionId, argument)
             var output: string := " lea rdi, [rbp-" + token.number(offset) + "]\n call xe.read.int\n"
             if register >= 0 { output := output + " mov " + registerName(register) + ", qword ptr [rbp-" + token.number(offset) + "]\n" }
             return output
@@ -556,6 +556,80 @@ begin
             return result
         }
         return result
+    end
+
+    // Fold literals and immutable const bindings, but never mutable locals.
+    fn compileTimeIntegerValue(source: string, pool: *[524288]int, id: int, depth: int): [2]int
+    begin
+        var result: [2]int
+        if id < 0 || depth > 32 { return result }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() {
+            if ast.read(pool, id, 10) != token.numberKind() { return result }
+            return parseInteger(str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2)))
+        }
+        if kind = ast.nameKind() {
+            var binding: int := ast.read(pool, id, 11)
+            if binding < 0 || ast.read(pool, binding, 0) != ast.variableKind() || (ast.read(pool, binding, 10) & 32768) = 0 { return result }
+            return compileTimeIntegerValue(source, pool, ast.read(pool, binding, 6), depth + 1)
+        }
+        if kind = ast.unaryKind() {
+            result := compileTimeIntegerValue(source, pool, ast.read(pool, id, 3), depth + 1)
+            if result[0] = 0 { return result }
+            if ast.read(pool, id, 10) = 45 {
+                result[1] := -result[1]
+                return result
+            }
+            if ast.read(pool, id, 10) = 33 {
+                if result[1] = 0 { result[1] := 1 } else { result[1] := 0 }
+                return result
+            }
+            result[0] := 0
+            return result
+        }
+        if kind = ast.binaryKind() {
+            var left: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, id, 3), depth + 1)
+            var right: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, id, 4), depth + 1)
+            if left[0] = 0 || right[0] = 0 { return result }
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 43 { result[1] := left[1] + right[1] }
+            else {
+                if operation = 45 { result[1] := left[1] - right[1] }
+                else {
+                    if operation = 42 { result[1] := left[1] * right[1] }
+                    else {
+                        if operation = 47 {
+                            if right[1] = 0 { return result }
+                            result[1] := left[1] / right[1]
+                        }
+                        else {
+                            if operation = 37 {
+                                if right[1] = 0 { return result }
+                                result[1] := left[1] % right[1]
+                            }
+                            else { return result }
+                        }
+                    }
+                }
+            }
+            result[0] := 1
+            return result
+        }
+        return result
+    end
+
+    fn literalIntegerValue(source: string, pool: *[524288]int, id: int): [2]int
+    begin
+        return compileTimeIntegerValue(source, pool, id, 0)
+    end
+
+    fn isPowerOfTwo(value: int): int
+    begin
+        if value <= 0 { return 0 }
+        var remaining: int := value
+        while remaining % 2 = 0 { remaining := remaining / 2 }
+        if remaining = 1 { return 1 }
+        return 0
     end
 
     fn integerLocalCount(source: string, pool: *[524288]int, mainId: int): int
@@ -1230,23 +1304,526 @@ begin
         return 0
     end
 
+    fn arrayLengthIsFixedLocal(source: string, pool: *[524288]int, functionId: int, baseId: int): int
+    begin
+        if baseId < 0 || ast.read(pool, baseId, 0) != ast.nameKind() { return 0 }
+        var binding: int := ast.read(pool, baseId, 11)
+        if binding < 0 || isParameter(source, pool, functionId, str.slice(source, ast.read(pool, baseId, 1), ast.read(pool, baseId, 2))) = 1 { return 0 }
+        var declaredType: string := typeTextForFunction(source, pool, functionId, ast.read(pool, binding, 7), ast.read(pool, binding, 8), 1)
+        if str.length(declaredType) = 0 || str.char(declaredType, 0) != 91 { return 0 }
+        if ast.read(pool, binding, 6) >= 0 { return 0 }
+        var candidate: int := functionId
+        var finish: int := ast.read(pool, functionId, 11)
+        while candidate < finish {
+            if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assignKind() {
+                var target: int := ast.read(pool, candidate, 3)
+                if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding { return 0 }
+            }
+            if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.unaryKind() && ast.read(pool, candidate, 10) = 38 {
+                var addressTarget: int := ast.read(pool, candidate, 3)
+                if addressTarget >= 0 && ast.read(pool, addressTarget, 0) = ast.nameKind() && ast.read(pool, addressTarget, 11) = binding { return 0 }
+            }
+            if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.callKind() {
+                var argument: int := ast.read(pool, candidate, 6)
+                while argument >= 0 {
+                    var argumentKind: int := ast.read(pool, argument, 0)
+                    if argumentKind = ast.nameKind() && ast.read(pool, argument, 11) = binding { return 0 }
+                    if argumentKind = ast.unaryKind() && ast.read(pool, argument, 10) = 38 {
+                        var addressArgument: int := ast.read(pool, argument, 3)
+                        if addressArgument >= 0 && ast.read(pool, addressArgument, 0) = ast.nameKind() && ast.read(pool, addressArgument, 11) = binding { return 0 }
+                    }
+                    argument := ast.read(pool, argument, 5)
+                }
+            }
+            candidate := candidate + 1
+        }
+        return 1
+    end
+
+    fn loopInitialCounterValue(source: string, pool: *[524288]int, functionId: int, loopId: int, binding: int): [3]int
+    begin
+        var result: [3]int
+        var initial: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, binding, 6), 0)
+        if initial[0] = 0 { return result }
+        var latestPosition: int := ast.read(pool, binding, 2)
+        var statement: int := ast.read(pool, functionId, 6)
+        while statement >= 0 && statement != loopId {
+            if ast.read(pool, statement, 0) = ast.assignKind() {
+                var target: int := ast.read(pool, statement, 3)
+                if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding {
+                    initial := compileTimeIntegerValue(source, pool, ast.read(pool, statement, 4), 0)
+                    if initial[0] = 0 { return result }
+                    latestPosition := ast.read(pool, statement, 2)
+                }
+            }
+            statement := ast.read(pool, statement, 5)
+        }
+        if statement != loopId { return result }
+        var candidate: int := functionId
+        var finish: int := ast.read(pool, functionId, 11)
+        while candidate < finish {
+            if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assignKind() && ast.read(pool, candidate, 1) > latestPosition && ast.read(pool, candidate, 1) < ast.read(pool, loopId, 1) {
+                var target: int := ast.read(pool, candidate, 3)
+                if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding { return result }
+            }
+            candidate := candidate + 1
+        }
+        result[0] := 1
+        result[1] := initial[1]
+        result[2] := latestPosition
+        return result
+    end
+
+    fn loopCounterRange(source: string, pool: *[524288]int, functionId: int, binding: int, position: int): [3]int
+    begin
+        var result: [3]int
+        var limit: int := ast.read(pool, functionId, 11)
+        var loop: int := functionId
+        while loop < limit {
+            if ast.read(pool, loop, 9) = functionId && ast.read(pool, loop, 0) = ast.loopKind() && ast.read(pool, loop, 1) <= position && ast.read(pool, loop, 2) > position {
+                var bodyBlock: int := ast.read(pool, loop, 6)
+                var bodyStart: int := ast.read(pool, bodyBlock, 1)
+                var bodyFinish: int := ast.read(pool, bodyBlock, 2)
+                if position >= bodyStart && position < bodyFinish {
+                    var condition: int := ast.read(pool, loop, 3)
+                    if ast.read(pool, condition, 0) = ast.binaryKind() && ast.read(pool, condition, 10) = 60 {
+                        var conditionIndex: int := ast.read(pool, condition, 3)
+                        if conditionIndex >= 0 && ast.read(pool, conditionIndex, 0) = ast.nameKind() && ast.read(pool, conditionIndex, 11) = binding {
+                                // Resolve the latest direct initialization before
+                                // this loop (for example `i := 1` after a declaration
+                                // initialized to zero), then reject hidden writes.
+                                var initial: [3]int := loopInitialCounterValue(source, pool, functionId, loop, binding)
+                                if initial[0] = 0 {
+                                    // Nested loop declarations are not direct
+                                    // entries in the function statement chain.
+                                    // In that case, start from the declaration
+                                    // initializer; the all-node scan below
+                                    // rejects any intervening mutation.
+                                    var declaredInitial: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, binding, 6), 0)
+                                    if declaredInitial[0] = 1 {
+                                        initial[0] := 1
+                                        initial[1] := declaredInitial[1]
+                                        initial[2] := ast.read(pool, binding, 2)
+                                    }
+                                }
+                            var bound: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, condition, 4), 0)
+                                if initial[0] = 1 && initial[1] >= 0 && initial[1] <= 1000000000 && bound[0] = 1 && bound[1] > initial[1] && bound[1] <= 1000000000 {
+                                // The counter must not be changed, aliased, or
+                                // exposed to inline assembly before this loop.
+                                // The loop-initial-value helper only follows
+                                // direct statements, so scan all AST nodes in
+                                // the source interval as well (including nested
+                                // branches that precede the loop).
+                                var prior: int := functionId
+                                while prior < limit {
+                                    if ast.read(pool, prior, 1) > initial[2] && ast.read(pool, prior, 2) < ast.read(pool, loop, 1) {
+                                        if ast.read(pool, prior, 0) = ast.assignKind() {
+                                            var priorTarget: int := ast.read(pool, prior, 3)
+                                            if priorTarget >= 0 && ast.read(pool, priorTarget, 0) = ast.nameKind() && ast.read(pool, priorTarget, 11) = binding { return result }
+                                        }
+                                        if ast.read(pool, prior, 0) = ast.unaryKind() && ast.read(pool, prior, 10) = 38 {
+                                            var priorAddress: int := ast.read(pool, prior, 3)
+                                            if priorAddress >= 0 && ast.read(pool, priorAddress, 0) = ast.nameKind() && ast.read(pool, priorAddress, 11) = binding { return result }
+                                        }
+                                        if ast.read(pool, prior, 0) = ast.assemblyKind() { return result }
+                                    }
+                                    prior := prior + 1
+                                }
+                                var updates: int := 0
+                                var updateId: int := -1
+                                var candidate: int := functionId
+                                while candidate < limit {
+                                    if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assignKind() && ast.read(pool, candidate, 1) > ast.read(pool, loop, 1) && ast.read(pool, candidate, 2) < ast.read(pool, loop, 2) {
+                                        var target: int := ast.read(pool, candidate, 3)
+                                        if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding {
+                                            updates := updates + 1
+                                            updateId := candidate
+                                        }
+                                    }
+                                    if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.unaryKind() && ast.read(pool, candidate, 10) = 38 {
+                                        var addressed: int := ast.read(pool, candidate, 3)
+                                        if addressed >= 0 && ast.read(pool, addressed, 0) = ast.nameKind() && ast.read(pool, addressed, 11) = binding { updates := updates + 2 }
+                                    }
+                                    if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assemblyKind() { updates := updates + 2 }
+                                    candidate := candidate + 1
+                                }
+                                if updates = 1 && updateId >= 0 && position <= ast.read(pool, updateId, 1) {
+                                    var increment: int := ast.read(pool, updateId, 4)
+                                    if ast.read(pool, increment, 0) = ast.binaryKind() && ast.read(pool, increment, 10) = 43 {
+                                        var incrementIndex: int := ast.read(pool, increment, 3)
+                                        var amount: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, increment, 4), 0)
+                                        if incrementIndex >= 0 && ast.read(pool, incrementIndex, 0) = ast.nameKind() && ast.read(pool, incrementIndex, 11) = binding && amount[0] = 1 && amount[1] = 1 {
+                                            var statement: int := ast.read(pool, bodyBlock, 6)
+                                            while statement >= 0 && statement != updateId { statement := ast.read(pool, statement, 5) }
+                                            if statement = updateId {
+                                                result[0] := 1
+                                                result[1] := initial[1]
+                                                result[2] := bound[1] - 1
+                                                return result
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            loop := loop + 1
+        }
+        return result
+    end
+
+    fn descendingLoopCounterRange(source: string, pool: *[524288]int, functionId: int, binding: int, position: int): [3]int
+    begin
+        var result: [3]int
+        if binding < 0 || ast.read(pool, binding, 6) < 0 { return result }
+        var limit: int := ast.read(pool, functionId, 11)
+        var loop: int := functionId
+        while loop < limit {
+            if ast.read(pool, loop, 9) = functionId && ast.read(pool, loop, 0) = ast.loopKind() && ast.read(pool, loop, 1) <= position && ast.read(pool, loop, 2) > position {
+                var body: int := ast.read(pool, loop, 6)
+                if position >= ast.read(pool, body, 1) && position < ast.read(pool, body, 2) {
+                    var condition: int := ast.read(pool, loop, 3)
+                    if ast.read(pool, condition, 0) = ast.binaryKind() && ast.read(pool, condition, 10) = 260 { condition := ast.read(pool, condition, 3) }
+                    if ast.read(pool, condition, 0) = ast.binaryKind() && ast.read(pool, condition, 10) = 62 {
+                        var counter: int := ast.read(pool, condition, 3)
+                        var lower: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, condition, 4), 0)
+                        if counter >= 0 && ast.read(pool, counter, 0) = ast.nameKind() && ast.read(pool, counter, 11) = binding && lower[0] = 1 && lower[1] = 0 {
+                            var initial: [3]int := expressionIntegerRange(source, pool, functionId, ast.read(pool, binding, 6), ast.read(pool, binding, 1), 0)
+                            if initial[0] = 1 && initial[1] >= 0 && initial[2] > initial[1] {
+                                var writes: int := 0
+                                var update: int := -1
+                                var candidate: int := functionId
+                                while candidate < limit {
+                                    if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 1) >= ast.read(pool, body, 1) && ast.read(pool, candidate, 2) <= ast.read(pool, body, 2) {
+                                        if ast.read(pool, candidate, 0) = ast.loopKind() || ast.read(pool, candidate, 0) = ast.callKind() { return result }
+                                        if ast.read(pool, candidate, 0) = ast.assignKind() {
+                                            var target: int := ast.read(pool, candidate, 3)
+                                            if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding {
+                                                writes := writes + 1
+                                                update := candidate
+                                            }
+                                        }
+                                        if ast.read(pool, candidate, 0) = ast.unaryKind() && ast.read(pool, candidate, 10) = 38 {
+                                            var addressed: int := ast.read(pool, candidate, 3)
+                                            if addressed >= 0 && ast.read(pool, addressed, 0) = ast.nameKind() && ast.read(pool, addressed, 11) = binding { writes := writes + 2 }
+                                        }
+                                        if ast.read(pool, candidate, 0) = ast.assemblyKind() { writes := writes + 2 }
+                                    }
+                                    candidate := candidate + 1
+                                }
+                                if writes = 1 && update >= 0 {
+                                    var increment: int := ast.read(pool, update, 4)
+                                    if ast.read(pool, increment, 0) = ast.binaryKind() && ast.read(pool, increment, 10) = 45 {
+                                        var left: int := ast.read(pool, increment, 3)
+                                        var amount: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, increment, 4), 0)
+                                        if left >= 0 && ast.read(pool, left, 0) = ast.nameKind() && ast.read(pool, left, 11) = binding && amount[0] = 1 && amount[1] = 1 {
+                                            result[0] := 1
+                                            result[1] := 1
+                                            result[2] := initial[2]
+                                            return result
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            loop := loop + 1
+        }
+        return result
+    end
+
+    fn expressionIntegerRange(source: string, pool: *[524288]int, functionId: int, id: int, position: int, depth: int): [3]int
+    begin
+        var result: [3]int
+        if id < 0 || depth > 16 || expressionType(source, pool, functionId, id) != "int" { return result }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() {
+            var constant: [2]int := compileTimeIntegerValue(source, pool, id, 0)
+            if constant[0] = 1 && constant[1] >= -1000000000 && constant[1] <= 1000000000 {
+                result[0] := 1
+                result[1] := constant[1]
+                result[2] := constant[1]
+            }
+            return result
+        }
+        if kind = ast.nameKind() {
+            var binding: int := ast.read(pool, id, 11)
+            if binding < 0 { return result }
+            var constant: [2]int := compileTimeIntegerValue(source, pool, id, 0)
+            if constant[0] = 1 && constant[1] >= -1000000000 && constant[1] <= 1000000000 {
+                result[0] := 1
+                result[1] := constant[1]
+                result[2] := constant[1]
+                return result
+            }
+            var counter: [3]int := loopCounterRange(source, pool, functionId, binding, position)
+            if counter[0] = 1 { return counter }
+            var descending: [3]int := descendingLoopCounterRange(source, pool, functionId, binding, position)
+            if descending[0] = 1 { return descending }
+            var limit: int := ast.read(pool, functionId, 11)
+            var candidate: int := functionId
+            while candidate < limit {
+                if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assignKind() {
+                    var target: int := ast.read(pool, candidate, 3)
+                    if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding { return result }
+                }
+                if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.unaryKind() && ast.read(pool, candidate, 10) = 38 {
+                    var addressed: int := ast.read(pool, candidate, 3)
+                    if addressed >= 0 && ast.read(pool, addressed, 0) = ast.nameKind() && ast.read(pool, addressed, 11) = binding { return result }
+                }
+                if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assemblyKind() { return result }
+                candidate := candidate + 1
+            }
+            var initializer: int := ast.read(pool, binding, 6)
+            if initializer >= 0 && ast.read(pool, binding, 2) <= position {
+                return expressionIntegerRange(source, pool, functionId, initializer, ast.read(pool, binding, 1), depth + 1)
+            }
+            return result
+        }
+        if kind = ast.unaryKind() && ast.read(pool, id, 10) = 45 {
+            var operand: [3]int := expressionIntegerRange(source, pool, functionId, ast.read(pool, id, 3), position, depth + 1)
+            if operand[0] = 1 {
+                result[0] := 1
+                result[1] := -operand[2]
+                result[2] := -operand[1]
+            }
+            return result
+        }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 43 || operation = 45 || operation = 42 {
+                var left: [3]int := expressionIntegerRange(source, pool, functionId, ast.read(pool, id, 3), position, depth + 1)
+                var right: [3]int := expressionIntegerRange(source, pool, functionId, ast.read(pool, id, 4), position, depth + 1)
+                if left[0] = 0 || right[0] = 0 { return result }
+                if operation = 43 {
+                    result[1] := left[1] + right[1]
+                    result[2] := left[2] + right[2]
+                }
+                if operation = 45 {
+                    result[1] := left[1] - right[2]
+                    result[2] := left[2] - right[1]
+                }
+                if operation = 42 {
+                    var values: [4]int
+                    values[0] := left[1] * right[1]
+                    values[1] := left[1] * right[2]
+                    values[2] := left[2] * right[1]
+                    values[3] := left[2] * right[2]
+                    result[1] := values[0]
+                    result[2] := values[0]
+                    var item: int := 1
+                    while item < 4 {
+                        if values[item] < result[1] { result[1] := values[item] }
+                        if values[item] > result[2] { result[2] := values[item] }
+                        item := item + 1
+                    }
+                }
+                if result[1] < -1000000000 || result[2] > 1000000000 {
+                    result[0] := 0
+                    return result
+                }
+                result[0] := 1
+                return result
+            }
+        }
+        return result
+    end
+
+    fn arrayIndexIsProvenInBounds(source: string, pool: *[524288]int, functionId: int, accessId: int, indexId: int, capacity: int): int
+    begin
+        if indexId < 0 || ast.read(pool, indexId, 0) != ast.nameKind() { return 0 }
+        var binding: int := ast.read(pool, indexId, 11)
+        if binding < 0 { return 0 }
+        if ast.read(pool, binding, 6) < 0 { return 0 }
+        var functionFinish: int := ast.read(pool, functionId, 11)
+        var loop: int := functionId
+        while loop < functionFinish {
+            if ast.read(pool, loop, 9) = functionId && ast.read(pool, loop, 0) = ast.loopKind() && ast.read(pool, loop, 1) <= ast.read(pool, accessId, 1) && ast.read(pool, loop, 2) >= ast.read(pool, accessId, 2) {
+                var condition: int := ast.read(pool, loop, 3)
+                if ast.read(pool, condition, 0) = ast.binaryKind() && ast.read(pool, condition, 10) = 60 {
+                    var conditionIndex: int := ast.read(pool, condition, 3)
+                    if conditionIndex >= 0 && ast.read(pool, conditionIndex, 0) = ast.nameKind() && ast.read(pool, conditionIndex, 11) = binding {
+                        var initial: [3]int := loopInitialCounterValue(source, pool, functionId, loop, binding)
+                        var bound: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, condition, 4), 0)
+                        if initial[0] = 1 && initial[1] >= 0 && bound[0] = 1 && bound[1] > initial[1] && bound[1] <= capacity {
+                            var updates: int := 0
+                            var updateId: int := -1
+                            var candidate: int := functionId
+                            while candidate < functionFinish {
+                                if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assemblyKind() { return 0 }
+                                if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.assignKind() {
+                                    var target: int := ast.read(pool, candidate, 3)
+                                    if target >= 0 && ast.read(pool, target, 0) = ast.nameKind() && ast.read(pool, target, 11) = binding && ast.read(pool, candidate, 1) > ast.read(pool, loop, 1) && ast.read(pool, candidate, 2) < ast.read(pool, loop, 2) {
+                                        updates := updates + 1
+                                        updateId := candidate
+                                    }
+                                }
+                                if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.unaryKind() && ast.read(pool, candidate, 10) = 38 {
+                                    var addressTarget: int := ast.read(pool, candidate, 3)
+                                    if addressTarget >= 0 && ast.read(pool, addressTarget, 0) = ast.nameKind() && ast.read(pool, addressTarget, 11) = binding { updates := updates + 2 }
+                                }
+                                candidate := candidate + 1
+                            }
+                            if updates = 1 && updateId >= 0 {
+                                var increment: int := ast.read(pool, updateId, 4)
+                                if ast.read(pool, increment, 0) = ast.binaryKind() && ast.read(pool, increment, 10) = 43 {
+                                    var incrementIndex: int := ast.read(pool, increment, 3)
+                                    var amount: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, increment, 4), 0)
+                                    if incrementIndex >= 0 && ast.read(pool, incrementIndex, 0) = ast.nameKind() && ast.read(pool, incrementIndex, 11) = binding && amount[0] = 1 && amount[1] = 1 && ast.read(pool, accessId, 2) <= ast.read(pool, updateId, 1) {
+                                        var body: int := ast.read(pool, ast.read(pool, loop, 6), 6)
+                                        while body >= 0 && body != updateId { body := ast.read(pool, body, 5) }
+                                        if body = updateId { return 1 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            loop := loop + 1
+        }
+        return 0
+    end
+
     fn arrayElementAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
     begin
         if id < 0 || ast.read(pool, id, 0) != ast.indexKind() { return "" }
-        var base: string := arrayAddress(source, pool, functionId, ast.read(pool, id, 3))
+        var baseId: int := ast.read(pool, id, 3)
         var index: string := integerExpression(source, pool, functionId, ast.read(pool, id, 4))
-        if str.length(base) = 0 || str.length(index) = 0 { return "" }
-        var baseType: string := arrayType(source, pool, functionId, ast.read(pool, id, 3))
+        if str.length(index) = 0 { return "" }
+        var baseType: string := arrayType(source, pool, functionId, baseId)
         var width: int := arrayElementWords(source, baseType) * 8
         if width <= 0 { return "" }
-        var indexCheck: string := ""
         var capacity: int := arrayCapacity(baseType)
+        // A fixed local array can use its compile-time capacity for bounds
+        // checks and a direct stack-relative address, even in a large frame.
+        if capacity > 0 && arrayLengthIsFixedLocal(source, pool, functionId, baseId) = 1 {
+            var offset: int := boundLocalOffset(source, pool, functionId, baseId)
+            if offset < 0 { return "" }
+            var address: string := ""
+            if width = 8 { address := " lea rax, [rbp-" + token.number(offset) + "+rax*8]\n" }
+            else {
+                if isPowerOfTwo(width) = 1 {
+                    var shift: int := 0
+                    var stride: int := width
+                    while stride > 1 {
+                        stride := stride / 2
+                        shift := shift + 1
+                    }
+                    address := " shl rax, " + token.number(shift) + "\n lea rax, [rbp-" + token.number(offset) + "+rax]\n"
+                } else {
+                    address := " imul rax, " + token.number(width) + "\n lea rax, [rbp-" + token.number(offset) + "+rax]\n"
+                }
+            }
+            var indexRange: [3]int := expressionIntegerRange(source, pool, functionId, ast.read(pool, id, 4), ast.read(pool, id, 1), 0)
+            if indexRange[0] = 1 && indexRange[1] >= 0 && indexRange[2] < capacity {
+                var direct: string := directLocalArrayAddress(source, pool, functionId, ast.read(pool, id, 4), offset, width)
+                if str.length(direct) > 0 { return direct }
+                return index + address
+            }
+            if arrayIndexIsProvenInBounds(source, pool, functionId, id, ast.read(pool, id, 4), capacity) = 1 { return index + address }
+            return index + " cmp rax, " + token.number(capacity) + "\n jae .LxeArrayIndexFail\n" + address
+        }
+        var base: string := arrayAddress(source, pool, functionId, baseId)
+        if str.length(base) = 0 { return "" }
+        var indexCheck: string := ""
         if capacity > 0 {
             var lengthOffset: int := capacity * arrayElementWords(source, baseType) * 8
             var label: string := token.number(id)
-            indexCheck := " test rax, rax\n js .LxeArrayIndexFail\n mov rdx, qword ptr [rsp]\n mov rcx, qword ptr [rdx+" + token.number(lengthOffset) + "]\n test rcx, rcx\n jnz .LxeArrayLengthKnown" + label + "\n mov rcx, " + token.number(capacity) + "\n jmp .LxeArrayLengthReady" + label + "\n.LxeArrayLengthKnown" + label + ":\n dec rcx\n.LxeArrayLengthReady" + label + ":\n cmp rax, rcx\n jae .LxeArrayIndexFail\n"
+            indexCheck := " mov rdx, qword ptr [rsp]\n mov rcx, qword ptr [rdx+" + token.number(lengthOffset) + "]\n test rcx, rcx\n jnz .LxeArrayLengthKnown" + label + "\n mov rcx, " + token.number(capacity) + "\n jmp .LxeArrayLengthReady" + label + "\n.LxeArrayLengthKnown" + label + ":\n dec rcx\n.LxeArrayLengthReady" + label + ":\n cmp rax, rcx\n jae .LxeArrayIndexFail\n"
         }
         return base + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + index + indexCheck + " imul rax, " + token.number(width) + "\n mov rcx, rax\n mov rax, qword ptr [rsp]\n add rax, rcx\n add rsp, 16\n"
+    end
+
+    fn directLocalArrayAddress(source: string, pool: *[524288]int, functionId: int, indexId: int, arrayOffset: int, width: int): string
+    begin
+        if indexId < 0 || width <= 0 || width > 8 || isPowerOfTwo(width) = 0 { return "" }
+        var name: int := -1
+        var displacement: int := 0
+        var kind: int := ast.read(pool, indexId, 0)
+        if kind = ast.nameKind() { name := indexId }
+        else {
+            if kind = ast.binaryKind() {
+                var operation: int := ast.read(pool, indexId, 10)
+                if operation != 43 && operation != 45 { return "" }
+                var left: int := ast.read(pool, indexId, 3)
+                var right: int := ast.read(pool, indexId, 4)
+                var constant: [2]int := compileTimeIntegerValue(source, pool, right, 0)
+                if left >= 0 && ast.read(pool, left, 0) = ast.nameKind() && constant[0] = 1 {
+                    name := left
+                    displacement := constant[1]
+                }
+                else {
+                    if operation = 43 {
+                        constant := compileTimeIntegerValue(source, pool, left, 0)
+                        if right >= 0 && ast.read(pool, right, 0) = ast.nameKind() && constant[0] = 1 {
+                            name := right
+                            displacement := constant[1]
+                        }
+                    }
+                }
+                if operation = 45 { displacement := -displacement }
+            }
+        }
+        if name < 0 { return "" }
+        if displacement > 268435455 || displacement < -268435455 { return "" }
+        var register: int := registerIndexForName(source, pool, functionId, name)
+        if register < 0 { return "" }
+        var byteDisplacement: int := displacement * width
+        if byteDisplacement > 2147483647 || byteDisplacement < -2147483647 { return "" }
+        var suffix: string := ""
+        if byteDisplacement > 0 { suffix := "+" + token.number(byteDisplacement) }
+        if byteDisplacement < 0 { suffix := token.number(byteDisplacement) }
+        var scale: string := ""
+        if width > 1 { scale := "*" + token.number(width) }
+        return " lea rax, [rbp-" + token.number(arrayOffset) + "+" + registerName(register) + scale + suffix + "]\n"
+    end
+
+    fn directLocalArrayMemory(source: string, pool: *[524288]int, functionId: int, indexId: int, arrayOffset: int, width: int): string
+    begin
+        if indexId < 0 || arrayOffset < 0 || width <= 0 || width > 8 || isPowerOfTwo(width) = 0 { return "" }
+        var name: int := -1
+        var displacement: int := 0
+        var kind: int := ast.read(pool, indexId, 0)
+        if kind = ast.nameKind() { name := indexId }
+        else {
+            if kind = ast.binaryKind() {
+                var operation: int := ast.read(pool, indexId, 10)
+                if operation != 43 && operation != 45 { return "" }
+                var left: int := ast.read(pool, indexId, 3)
+                var right: int := ast.read(pool, indexId, 4)
+                var constant: [2]int := compileTimeIntegerValue(source, pool, right, 0)
+                if left >= 0 && ast.read(pool, left, 0) = ast.nameKind() && constant[0] = 1 {
+                    name := left
+                    displacement := constant[1]
+                }
+                else {
+                    if operation = 43 {
+                        constant := compileTimeIntegerValue(source, pool, left, 0)
+                        if right >= 0 && ast.read(pool, right, 0) = ast.nameKind() && constant[0] = 1 {
+                            name := right
+                            displacement := constant[1]
+                        }
+                    }
+                }
+                if operation = 45 { displacement := -displacement }
+            }
+        }
+        if name < 0 || displacement > 268435455 || displacement < -268435455 { return "" }
+        var register: int := registerIndexForName(source, pool, functionId, name)
+        if register < 0 { return "" }
+        var byteDisplacement: int := displacement * width
+        if byteDisplacement > 2147483647 || byteDisplacement < -2147483647 { return "" }
+        var suffix: string := ""
+        if byteDisplacement > 0 { suffix := "+" + token.number(byteDisplacement) }
+        if byteDisplacement < 0 { suffix := token.number(byteDisplacement) }
+        var scale: string := ""
+        if width > 1 { scale := "*" + token.number(width) }
+        return "[rbp-" + token.number(arrayOffset) + "+" + registerName(register) + scale + suffix + "]"
     end
 
     fn arrayCopyWords(source: string, pool: *[524288]int, functionId: int, sourceId: int, destinationOffset: int, words: int): string
@@ -1656,7 +2233,10 @@ begin
         var cached: int := ast.read(pool, nameId, 10)
         if cached != 0 { return cached - 2 }
         var name: string := str.slice(source, ast.read(pool, nameId, 1), ast.read(pool, nameId, 2))
-        var result: int := optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, ast.read(pool, nameId, 1))
+        var before: int := ast.read(pool, nameId, 1)
+        var binding: int := ast.read(pool, nameId, 11)
+        if binding >= 0 { before := ast.read(pool, binding, 3) }
+        var result: int := optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, before)
         ast.write(pool, nameId, 10, result + 2)
         return result
     end
@@ -2254,6 +2834,28 @@ begin
         return label + ":\n mov eax, 1\n mov edi, 2\n lea rsi, [rip+" + messageLabel + "]\n mov edx, " + token.number(str.length(message)) + "\n syscall\n mov eax, 60\n mov edi, 1\n syscall\n ud2\n.section .rodata\n" + messageLabel + ":\n.byte " + bytes + "\n.section .text\n"
     end
 
+    fn directCallArgument(source: string, pool: *[524288]int, functionId: int, id: int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() && ast.read(pool, id, 10) = token.numberKind() {
+            if str.find(str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2)), ".") < 0 { return 1 }
+            return 0
+        }
+        if kind = ast.nameKind() {
+            var type: string := expressionType(source, pool, functionId, id)
+            if type = "int" || (str.length(type) > 0 && str.char(type, 0) = 42) || recordWordCount(source, type) > 0 { return 1 }
+            return 0
+        }
+        if kind = ast.unaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            var operand: int := ast.read(pool, id, 3)
+            if operation = 38 && operand >= 0 && ast.read(pool, operand, 0) = ast.nameKind() { return 1 }
+            if operation = 45 && operand >= 0 && ast.read(pool, operand, 0) = ast.literalKind() && ast.read(pool, operand, 10) = token.numberKind() && str.find(str.slice(source, ast.read(pool, operand, 1), ast.read(pool, operand, 2)), ".") < 0 { return 1 }
+        }
+        return 0
+    end
+
     fn callCode(source: string, pool: *[524288]int, functionId: int, id: int): string
     begin
         var called: int := ast.read(pool, id, 3)
@@ -2376,6 +2978,47 @@ begin
         if indirectResult(source, resultType) = 1 { arrayResult := 1 }
         var tempOffset: int := -1
         if arrayResult = 1 { tempOffset := arrayTemporaryOffset(source, pool, functionId, id) }
+        // Simple scalar arguments have no side effects and do not need stack
+        // staging. Pass them straight into the ABI registers to avoid several
+        // stack operations on frequent small Xe-to-Xe calls.
+        if builtin = 0 && count + arrayResult <= 6 {
+            var direct: int := 1
+            var directParameterIndex: int := 0
+            cursor := first
+            while cursor >= 0 {
+                var parameterType: string := functionParameterType(source, pool, functionId, name, directParameterIndex)
+                if target >= 0 { parameterType := functionParameterTypeAt(source, pool, target, directParameterIndex) }
+                if floatExpressionType(source, pool, functionId, cursor) = 1 || directCallArgument(source, pool, functionId, cursor) = 0 { direct := 0 }
+                if recordWordCount(source, parameterType) > 0 && ast.read(pool, cursor, 0) != ast.nameKind() { direct := 0 }
+                cursor := ast.read(pool, cursor, 5)
+                directParameterIndex := directParameterIndex + 1
+            }
+            if direct = 1 && (arrayResult = 0 || tempOffset >= 0) {
+                var directOutput: string := str.builder("")
+                var directIndex: int := 0
+                if arrayResult = 1 {
+                    directOutput := str.append(directOutput, " lea rdi, [rbp-" + token.number(tempOffset) + "]\n")
+                    directIndex := 1
+                }
+                cursor := first
+                directParameterIndex := 0
+                while cursor >= 0 {
+                    var parameterType: string := functionParameterType(source, pool, functionId, name, directParameterIndex)
+                    if target >= 0 { parameterType := functionParameterTypeAt(source, pool, target, directParameterIndex) }
+                    var argumentCode: string := integerExpression(source, pool, functionId, cursor)
+                    if recordWordCount(source, parameterType) > 0 { argumentCode := recordAddress(source, pool, functionId, cursor) }
+                    if str.length(argumentCode) = 0 { direct := 0 }
+                    if direct = 0 { cursor := -1 }
+                    else {
+                    directOutput := str.append(directOutput, argumentCode + " mov " + integerArgumentRegister(directIndex) + ", rax\n")
+                    cursor := ast.read(pool, cursor, 5)
+                    directIndex := directIndex + 1
+                    directParameterIndex := directParameterIndex + 1
+                    }
+                }
+                if direct = 1 { return directOutput + " call " + functionLabel(name) + "\n" }
+            }
+        }
         var output: string := str.builder("")
         cursor := first
         var stagedParameterIndex: int := 0
@@ -2492,12 +3135,18 @@ begin
             }
             else {
                 if name = "runtime.mem.compare" {
+                    // AVX2 is selected only for large inputs; the REP fallback remains for older CPUs and short spans.
                     var equalLabel: string := ".LxeMemCompareEqual" + token.number(id)
                     var differentLabel: string := ".LxeMemCompareDifferent" + token.number(id)
+                    var scalarLabel: string := ".LxeMemCompareScalar" + token.number(id)
+                    var scalarDifferent: string := ".LxeMemCompareScalarDifferent" + token.number(id)
+                    var vectorLabel: string := ".LxeMemCompareVector" + token.number(id)
+                    var vectorMismatch: string := ".LxeMemCompareVectorMismatch" + token.number(id)
+                    var vectorTail: string := ".LxeMemCompareVectorTail" + token.number(id)
                     var doneLabel: string := ".LxeMemCompareDone" + token.number(id)
                     var sizeFailure: string := ".LxeMemCompareSizeFailure" + token.number(id)
                     var pointerFailure: string := ".LxeMemComparePointerFailure" + token.number(id)
-                    output := str.append(output, " test rdx, rdx\n js " + sizeFailure + "\n test rdx, rdx\n jz " + equalLabel + "\n test rdi, rdi\n jz " + pointerFailure + "\n test rsi, rsi\n jz " + pointerFailure + "\n mov rcx, rdx\n cld\n repe cmpsb\n jne " + differentLabel + "\n" + equalLabel + ":\n xor eax, eax\n jmp " + doneLabel + "\n" + differentLabel + ":\n movzx eax, byte ptr [rdi-1]\n movzx ecx, byte ptr [rsi-1]\n sub eax, ecx\n movsxd rax, eax\njmp " + doneLabel + "\n" + memoryFailure(sizeFailure, "memory size cannot be negative\n", id * 2) + memoryFailure(pointerFailure, "memory compare requires non-null pointers\n", id * 2 + 1) + doneLabel + ":\n")
+                    output := str.append(output, " test rdx, rdx\n js " + sizeFailure + "\n test rdx, rdx\n jz " + equalLabel + "\n test rdi, rdi\n jz " + pointerFailure + "\n test rsi, rsi\n jz " + pointerFailure + "\n cmp rdx, 64\n jb " + scalarLabel + "\n call xe.cpu.avx2\n test eax, eax\n jz " + scalarLabel + "\n mov r8, rdx\n" + vectorLabel + ":\n cmp r8, 32\n jb " + vectorTail + "\n vmovdqu ymm0, ymmword ptr [rdi]\n vpcmpeqb ymm0, ymm0, ymmword ptr [rsi]\n vpmovmskb eax, ymm0\n cmp eax, -1\n jne " + vectorMismatch + "\n add rdi, 32\n add rsi, 32\n sub r8, 32\n jmp " + vectorLabel + "\n" + vectorTail + ":\n mov rcx, r8\n cld\n repe cmpsb\n jne " + differentLabel + "\n xor eax, eax\n vzeroupper\n jmp " + doneLabel + "\n" + vectorMismatch + ":\n not eax\n bsf ecx, eax\n movzx eax, byte ptr [rdi+rcx]\n movzx ecx, byte ptr [rsi+rcx]\n sub eax, ecx\n movsxd rax, eax\n vzeroupper\n jmp " + doneLabel + "\n" + scalarLabel + ":\n mov rcx, rdx\n cld\n repe cmpsb\n jne " + differentLabel + "\n" + equalLabel + ":\n xor eax, eax\n jmp " + doneLabel + "\n" + differentLabel + ":\n movzx eax, byte ptr [rdi-1]\n movzx ecx, byte ptr [rsi-1]\n sub eax, ecx\n movsxd rax, eax\njmp " + doneLabel + "\n" + memoryFailure(sizeFailure, "memory size cannot be negative\n", id * 2) + memoryFailure(pointerFailure, "memory compare requires non-null pointers\n", id * 2 + 1) + doneLabel + ":\n")
                 }
                 else {
                     if name = "runtime.hw.read8" { output := str.append(output, " movzx eax, byte ptr [rdi]\n") }
@@ -2582,10 +3231,126 @@ begin
         return ""
     end
 
+    fn arraySumIndexIsSimple(pool: *[524288]int, id: int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.nameKind() || kind = ast.literalKind() { return 1 }
+        if kind = ast.unaryKind() && ast.read(pool, id, 10) = 45 { return arraySumIndexIsSimple(pool, ast.read(pool, id, 3)) }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 43 || operation = 45 || operation = 42 {
+                return arraySumIndexIsSimple(pool, ast.read(pool, id, 3)) * arraySumIndexIsSimple(pool, ast.read(pool, id, 4))
+            }
+        }
+        return 0
+    end
+
+    fn collectArraySumLeaves(source: string, pool: *[524288]int, functionId: int, id: int, leaves: *[32]int, count: *int, arrayCount: *int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.binaryKind() && ast.read(pool, id, 10) = 43 {
+            if collectArraySumLeaves(source, pool, functionId, ast.read(pool, id, 3), leaves, count, arrayCount) = 0 { return 0 }
+            return collectArraySumLeaves(source, pool, functionId, ast.read(pool, id, 4), leaves, count, arrayCount)
+        }
+        if kind = ast.indexKind() && *count < 32 {
+            var baseId: int := ast.read(pool, id, 3)
+            var indexId: int := ast.read(pool, id, 4)
+            if arrayLengthIsFixedLocal(source, pool, functionId, baseId) = 1 && arraySumIndexIsSimple(pool, indexId) = 1 {
+                (*leaves)[*count] := id
+                *count := *count + 1
+                *arrayCount := *arrayCount + 1
+                return 1
+            }
+            return 0
+        }
+        if *count < 32 && expressionType(source, pool, functionId, id) = "int" && arraySumIndexIsSimple(pool, id) = 1 {
+            (*leaves)[*count] := id
+            *count := *count + 1
+            return 1
+        }
+        return 0
+    end
+
+    fn arraySumCode(source: string, pool: *[524288]int, functionId: int, id: int): string
+    begin
+        var leaves: [32]int
+        var count: int := 0
+        var arrayCount: int := 0
+        if collectArraySumLeaves(source, pool, functionId, id, &leaves, &count, &arrayCount) = 0 || count < 2 || arrayCount = 0 { return "" }
+        var output: string := str.builder("")
+        var index: int := 0
+        while index < count {
+            var value: string := integerExpression(source, pool, functionId, leaves[index])
+            if str.length(value) = 0 { return "" }
+            if index = 0 { output := str.append(output, value + " mov r10, rax\n") }
+            else { output := str.append(output, value + " add r10, rax\n") }
+            index := index + 1
+        }
+        return output + " mov rax, r10\n"
+    end
+
+    fn isInsideArrayIndex(pool: *[524288]int, functionId: int, id: int): int
+    begin
+        var start: int := ast.read(pool, id, 1)
+        var finish: int := ast.read(pool, id, 2)
+        var candidate: int := functionId
+        var limit: int := ast.read(pool, functionId, 11)
+        while candidate < limit {
+            if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.indexKind() {
+                var indexId: int := ast.read(pool, candidate, 4)
+                if indexId >= 0 && ast.read(pool, indexId, 1) <= start && ast.read(pool, indexId, 2) >= finish { return 1 }
+            }
+            candidate := candidate + 1
+        }
+        return 0
+    end
+
+    fn scalarProductSumCode(source: string, pool: *[524288]int, functionId: int, id: int): string
+    begin
+        if id < 0 || ast.read(pool, id, 0) != ast.binaryKind() || ast.read(pool, id, 10) != 43 { return "" }
+        var leftId: int := ast.read(pool, id, 3)
+        var rightId: int := ast.read(pool, id, 4)
+        if ast.read(pool, leftId, 0) != ast.nameKind() || ast.read(pool, rightId, 0) != ast.binaryKind() || ast.read(pool, rightId, 10) != 42 { return "" }
+        if ast.read(pool, ast.read(pool, rightId, 3), 0) != ast.nameKind() || ast.read(pool, ast.read(pool, rightId, 4), 0) != ast.nameKind() { return "" }
+        if expressionType(source, pool, functionId, leftId) != "int" || expressionType(source, pool, functionId, rightId) != "int" { return "" }
+        if isInsideArrayIndex(pool, functionId, id) = 1 { return "" }
+        var left: string := integerExpression(source, pool, functionId, leftId)
+        var right: string := integerExpression(source, pool, functionId, rightId)
+        if str.length(left) = 0 || str.length(right) = 0 { return "" }
+        return left + " mov r10, rax\n" + right + " add r10, rax\n mov rax, r10\n"
+    end
+
+    fn expressionContainsCall(pool: *[524288]int, id: int, depth: int): int
+    begin
+        if id < 0 { return 0 }
+        if depth > 32 { return 1 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.callKind() { return 1 }
+        if kind = ast.unaryKind() { return expressionContainsCall(pool, ast.read(pool, id, 3), depth + 1) }
+        if kind = ast.binaryKind() {
+            if expressionContainsCall(pool, ast.read(pool, id, 3), depth + 1) = 1 { return 1 }
+            return expressionContainsCall(pool, ast.read(pool, id, 4), depth + 1)
+        }
+        if kind = ast.indexKind() {
+            if expressionContainsCall(pool, ast.read(pool, id, 3), depth + 1) = 1 { return 1 }
+            return expressionContainsCall(pool, ast.read(pool, id, 4), depth + 1)
+        }
+        if kind = ast.memberKind() { return expressionContainsCall(pool, ast.read(pool, id, 3), depth + 1) }
+        return 0
+    end
+
     fn integerExpression(source: string, pool: *[524288]int, mainId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
+        if kind = ast.binaryKind() && ast.read(pool, id, 10) = 43 {
+            var arraySum: string := arraySumCode(source, pool, mainId, id)
+            if str.length(arraySum) > 0 { return arraySum }
+            var scalarProductSum: string := scalarProductSumCode(source, pool, mainId, id)
+            if str.length(scalarProductSum) > 0 { return scalarProductSum }
+        }
         if kind = ast.literalKind() {
             if ast.read(pool, id, 10) = token.stringKind() { return stringExpression(source, pool, mainId, id) }
             if ast.read(pool, id, 10) != token.numberKind() { return "" }
@@ -2644,6 +3409,18 @@ begin
             return ""
         }
         if kind = ast.indexKind() {
+            var baseId: int := ast.read(pool, id, 3)
+            var baseType: string := arrayType(source, pool, mainId, baseId)
+            var width: int := arrayElementWords(source, baseType) * 8
+            var capacity: int := arrayCapacity(baseType)
+            if capacity > 0 && arrayLengthIsFixedLocal(source, pool, mainId, baseId) = 1 {
+                var range: [3]int := expressionIntegerRange(source, pool, mainId, ast.read(pool, id, 4), ast.read(pool, id, 1), 0)
+                if range[0] = 1 && range[1] >= 0 && range[2] < capacity {
+                    var offset: int := boundLocalOffset(source, pool, mainId, baseId)
+                    var memory: string := directLocalArrayMemory(source, pool, mainId, ast.read(pool, id, 4), offset, width)
+                    if offset >= 0 && str.length(memory) > 0 { return " mov rax, qword ptr " + memory + "\n" }
+                }
+            }
             var address: string := arrayElementAddress(source, pool, mainId, id)
             if str.length(address) = 0 { return "" }
             return address + " mov rax, qword ptr [rax]\n"
@@ -2715,6 +3492,158 @@ begin
                 if operation = 62 { return compare + " seta al\n movzx rax, al\n" }
                 if operation = 258 { return compare + " setbe al\n setnp dl\n and al, dl\n movzx rax, al\n" }
                 if operation = 259 { return compare + " setae al\n movzx rax, al\n" }
+            }
+            var leftId: int := ast.read(pool, id, 3)
+            var rightId: int := ast.read(pool, id, 4)
+            if operation = 43 && leftId >= 0 && ast.read(pool, leftId, 0) = ast.binaryKind() && ast.read(pool, leftId, 10) = 42 {
+                var multiplied: int := ast.read(pool, leftId, 3)
+                var factor: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, leftId, 4), 0)
+                if factor[0] = 0 {
+                    multiplied := ast.read(pool, leftId, 4)
+                    factor := compileTimeIntegerValue(source, pool, ast.read(pool, leftId, 3), 0)
+                }
+                var multipliedKind: int := ast.read(pool, multiplied, 0)
+                var offsetKind: int := ast.read(pool, rightId, 0)
+                if factor[0] = 1 && factor[1] >= 2 && factor[1] <= 1073741824 && isPowerOfTwo(factor[1]) = 1 && multipliedKind = ast.nameKind() && offsetKind = ast.nameKind() && expressionType(source, pool, mainId, multiplied) = "int" && expressionType(source, pool, mainId, rightId) = "int" {
+                    var baseCode: string := integerExpression(source, pool, mainId, multiplied)
+                    var offsetCode: string := integerExpression(source, pool, mainId, rightId)
+                    if str.length(baseCode) > 0 && str.length(offsetCode) > 0 {
+                        var offsetRegister: int := registerIndexForName(source, pool, mainId, rightId)
+                        if offsetRegister >= 0 {
+                            if factor[1] <= 8 { return baseCode + " lea rax, [" + registerName(offsetRegister) + "+rax*" + token.number(factor[1]) + "]\n" }
+                            var shift: int := 0
+                            var stride: int := factor[1]
+                            while stride > 1 {
+                                stride := stride / 2
+                                shift := shift + 1
+                            }
+                            return baseCode + " shl rax, " + token.number(shift) + "\n lea rax, [rax+" + registerName(offsetRegister) + "]\n"
+                        }
+                        return baseCode + " imul rax, rax, " + token.number(factor[1]) + "\n mov rcx, rax\n" + offsetCode + " add rax, rcx\n"
+                    }
+                }
+            }
+            var immediate: [2]int := literalIntegerValue(source, pool, rightId)
+            if immediate[0] = 1 && operation = 47 {
+                var divisor: int := immediate[1]
+                if divisor > 0 && divisor <= 2147483647 {
+                    var left: string := integerExpression(source, pool, mainId, leftId)
+                    if str.length(left) = 0 { return "" }
+                    if divisor = 1 { return left }
+                    var done: string := ".LxeDivDone" + token.number(id)
+                    var negative: string := ".LxeDivNegative" + token.number(id)
+                    if isPowerOfTwo(divisor) = 1 {
+                        var shift: int := 0
+                        var remaining: int := divisor
+                        while remaining > 1 {
+                            remaining := remaining / 2
+                            shift := shift + 1
+                        }
+                        // Bias negative inputs before arithmetic shift to
+                        // preserve truncation toward zero without branching
+                        // into a slow signed divide on every negative value.
+                        var bias: int := divisor - 1
+                        return left + " mov rcx, rax\n sar rcx, 63\n and rcx, " + token.number(bias) + "\n add rax, rcx\n sar rax, " + token.number(shift) + "\n"
+                    }
+                    // For nonnegative inputs, reciprocal multiplication gives
+                    // the quotient with at most one unit of underestimation.
+                    // Correct that rare case; keep signed division for negatives.
+                    var maxInt: int := 9223372036854775807
+                    var reciprocal: int := (maxInt / divisor) * 2 + ((maxInt % divisor) * 2 + 1) / divisor
+                    var exact: string := ".LxeDivExact" + token.number(id)
+                    return left + " test rax, rax\n js " + negative + "\n mov r8, rax\n mov rdx, " + token.number(reciprocal) + "\n mul rdx\n mov rcx, rdx\n imul rcx, " + token.number(divisor) + "\n mov rax, r8\n sub rax, rcx\n cmp rax, " + token.number(divisor) + "\n jb " + exact + "\n inc rdx\n" + exact + ":\n mov rax, rdx\n jmp " + done + "\n" + negative + ":\n mov rcx, " + token.number(divisor) + "\n cqo\n idiv rcx\n" + done + ":\n"
+                }
+            }
+            if immediate[0] = 1 && operation = 37 {
+                var divisor: int := immediate[1]
+                if divisor > 0 && divisor <= 2147483647 {
+                    var left: string := integerExpression(source, pool, mainId, leftId)
+                    if str.length(left) = 0 { return "" }
+                    if divisor = 1 { return left + " xor eax, eax\n" }
+                    var done: string := ".LxeModDone" + token.number(id)
+                    if divisor = 2147483647 {
+                        var negativeMersenne: string := ".LxeModNegative" + token.number(id)
+                        return left + " test rax, rax\n js " + negativeMersenne + "\n mov rcx, rax\n and eax, 2147483647\n shr rcx, 31\n add rax, rcx\n mov rcx, rax\n and eax, 2147483647\n shr rcx, 31\n add rax, rcx\n cmp rax, 2147483647\n jb " + done + "\n sub rax, 2147483647\n jmp " + done + "\n" + negativeMersenne + ":\n mov rcx, 2147483647\n cqo\n idiv rcx\n mov rax, rdx\n" + done + ":\n"
+                    }
+                    if isPowerOfTwo(divisor) = 1 {
+                        var mask: int := divisor - 1
+                        return left + " mov rcx, rax\n sar rcx, 63\n and rcx, " + token.number(mask) + "\n add rax, rcx\n and rax, " + token.number(mask) + "\n sub rax, rcx\n"
+                    }
+                    var maxInt: int := 9223372036854775807
+                    var reciprocal: int := (maxInt / divisor) * 2 + ((maxInt % divisor) * 2 + 1) / divisor
+                    var negative: string := ".LxeModNegative" + token.number(id)
+                    var range: [3]int := expressionIntegerRange(source, pool, mainId, leftId, ast.read(pool, id, 1), 0)
+                    if range[0] = 1 && range[1] >= 0 {
+                        return left + " mov r8, rax\n mov rdx, " + token.number(reciprocal) + "\n mul rdx\n imul rdx, " + token.number(divisor) + "\n mov rax, r8\n sub rax, rdx\n cmp rax, " + token.number(divisor) + "\n jb " + done + "\n sub rax, " + token.number(divisor) + "\n" + done + ":\n"
+                    }
+                    var code: string := left + " test rax, rax\n js " + negative + "\n mov r8, rax\n mov rdx, " + token.number(reciprocal) + "\n mul rdx\n imul rdx, " + token.number(divisor) + "\n mov rax, r8\n sub rax, rdx\n cmp rax, " + token.number(divisor) + "\n jb " + done + "\n sub rax, " + token.number(divisor) + "\n jmp " + done + "\n" + negative + ":\n mov rcx, " + token.number(divisor) + "\n cqo\n idiv rcx\n mov rax, rdx\n" + done + ":\n"
+                    return code
+                }
+            }
+            if immediate[0] = 1 && immediate[1] >= -2147483648 && immediate[1] <= 2147483647 {
+                var value: string := token.number(immediate[1])
+                var left: string := integerExpression(source, pool, mainId, leftId)
+                if str.length(left) = 0 { return "" }
+                if operation = 43 { return left + " add rax, " + value + "\n" }
+                if operation = 45 { return left + " sub rax, " + value + "\n" }
+                if operation = 42 {
+                    if immediate[1] = 0 { return left + " xor eax, eax\n" }
+                    if immediate[1] = 1 { return left }
+                    if isPowerOfTwo(immediate[1]) = 1 {
+                        var shift: int := 0
+                        var factor: int := immediate[1]
+                        while factor > 1 {
+                            factor := factor / 2
+                            shift := shift + 1
+                        }
+                        return left + " shl rax, " + token.number(shift) + "\n"
+                    }
+                    return left + " imul rax, rax, " + value + "\n"
+                }
+                if operation = 38 { return left + " and rax, " + value + "\n" }
+                if operation = 124 { return left + " or rax, " + value + "\n" }
+                if operation = 94 { return left + " xor rax, " + value + "\n" }
+                if operation = token.shiftLeftKind() || operation = token.shiftRightKind() {
+                    if immediate[1] >= 0 && immediate[1] < 64 {
+                        if operation = token.shiftLeftKind() { return left + " shl rax, " + value + "\n" }
+                        return left + " sar rax, " + value + "\n"
+                    }
+                }
+                var condition: string := ""
+                if operation = 256 { condition := "e" }
+                if operation = 257 { condition := "ne" }
+                if operation = 60 { condition := "l" }
+                if operation = 62 { condition := "g" }
+                if operation = 258 { condition := "le" }
+                if operation = 259 { condition := "ge" }
+                if str.length(condition) > 0 { return left + " cmp rax, " + value + "\n set" + condition + " al\n movzx rax, al\n" }
+            }
+            // Keep common register-to-register arithmetic in registers. The
+            // generic expression path spills the left operand to the stack
+            // while computing the right operand; when both operands are
+            // simple locals, that work is unnecessary and dominates tight
+            // scalar loops.
+            if leftId >= 0 && rightId >= 0 && ast.read(pool, leftId, 0) = ast.nameKind() && ast.read(pool, rightId, 0) = ast.nameKind() && expressionType(source, pool, mainId, leftId) = "int" && expressionType(source, pool, mainId, rightId) = "int" {
+                var leftRegister: int := registerIndexForName(source, pool, mainId, leftId)
+                var rightRegister: int := registerIndexForName(source, pool, mainId, rightId)
+                if leftRegister >= 0 && rightRegister >= 0 {
+                    var pair: string := " mov rax, " + registerName(leftRegister) + "\n"
+                    var operand: string := registerName(rightRegister)
+                    if operation = 43 { return pair + " add rax, " + operand + "\n" }
+                    if operation = 45 { return pair + " sub rax, " + operand + "\n" }
+                    if operation = 42 { return pair + " imul rax, " + operand + "\n" }
+                    if operation = 38 { return pair + " and rax, " + operand + "\n" }
+                    if operation = 124 { return pair + " or rax, " + operand + "\n" }
+                    if operation = 94 { return pair + " xor rax, " + operand + "\n" }
+                    var pairCondition: string := ""
+                    if operation = 256 { pairCondition := "e" }
+                    if operation = 257 { pairCondition := "ne" }
+                    if operation = 60 { pairCondition := "l" }
+                    if operation = 62 { pairCondition := "g" }
+                    if operation = 258 { pairCondition := "le" }
+                    if operation = 259 { pairCondition := "ge" }
+                    if str.length(pairCondition) > 0 { return pair + " cmp rax, " + operand + "\n set" + pairCondition + " al\n movzx rax, al\n" }
+                }
             }
             var left: string := integerExpression(source, pool, mainId, ast.read(pool, id, 3))
             var right: string := integerExpression(source, pool, mainId, ast.read(pool, id, 4))
@@ -2870,6 +3799,54 @@ begin
         return output
     end
 
+    fn branchCondition(source: string, pool: *[524288]int, functionId: int, expression: int, label: string, whenTrue: int): string
+    begin
+        if expression < 0 { return "" }
+        var kind: int := ast.read(pool, expression, 0)
+        if kind = ast.unaryKind() && ast.read(pool, expression, 10) = 33 {
+            return branchCondition(source, pool, functionId, ast.read(pool, expression, 3), label, 1 - whenTrue)
+        }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, expression, 10)
+            var leftId: int := ast.read(pool, expression, 3)
+            var rightId: int := ast.read(pool, expression, 4)
+            if operation = 260 {
+                if whenTrue = 0 { return branchCondition(source, pool, functionId, leftId, label, 0) + branchCondition(source, pool, functionId, rightId, label, 0) }
+                var passed: string := ".LxeConditionPass" + token.number(expression)
+                return branchCondition(source, pool, functionId, leftId, passed, 0) + branchCondition(source, pool, functionId, rightId, label, 1) + passed + ":\n"
+            }
+            if operation = 261 {
+                if whenTrue = 1 { return branchCondition(source, pool, functionId, leftId, label, 1) + branchCondition(source, pool, functionId, rightId, label, 1) }
+                var passed: string := ".LxeConditionPass" + token.number(expression)
+                return branchCondition(source, pool, functionId, leftId, passed, 1) + branchCondition(source, pool, functionId, rightId, label, 0) + passed + ":\n"
+            }
+            if operation = 256 || operation = 257 || operation = 60 || operation = 62 || operation = 258 || operation = 259 {
+                if expressionType(source, pool, functionId, leftId) = "int" && expressionType(source, pool, functionId, rightId) = "int" {
+                    var jump: string := ""
+                    if operation = 256 { if whenTrue = 1 { jump := "je" } else { jump := "jne" } }
+                    if operation = 257 { if whenTrue = 1 { jump := "jne" } else { jump := "je" } }
+                    if operation = 60 { if whenTrue = 1 { jump := "jl" } else { jump := "jge" } }
+                    if operation = 62 { if whenTrue = 1 { jump := "jg" } else { jump := "jle" } }
+                    if operation = 258 { if whenTrue = 1 { jump := "jle" } else { jump := "jg" } }
+                    if operation = 259 { if whenTrue = 1 { jump := "jge" } else { jump := "jl" } }
+                    var rightValue: [2]int := compileTimeIntegerValue(source, pool, rightId, 0)
+                    var leftCode: string := integerExpression(source, pool, functionId, leftId)
+                    if str.length(leftCode) = 0 { return "" }
+                    if rightValue[0] = 1 && rightValue[1] >= -2147483648 && rightValue[1] <= 2147483647 {
+                        return leftCode + " cmp rax, " + token.number(rightValue[1]) + "\n " + jump + " " + label + "\n"
+                    }
+                    var rightCode: string := integerExpression(source, pool, functionId, rightId)
+                    if str.length(rightCode) = 0 { return "" }
+                    return leftCode + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + rightCode + " mov rcx, rax\n mov rax, qword ptr [rsp]\n add rsp, 16\n cmp rax, rcx\n " + jump + " " + label + "\n"
+                }
+            }
+        }
+        var value: string := integerExpression(source, pool, functionId, expression)
+        if str.length(value) = 0 { return "" }
+        if whenTrue = 1 { return value + " test rax, rax\n jnz " + label + "\n" }
+        return value + " test rax, rax\n jz " + label + "\n"
+    end
+
     fn emitStatement(source: string, pool: *[524288]int, functionId: int, statement: int): string
     begin
         var kind: int := ast.read(pool, statement, 0)
@@ -2908,6 +3885,19 @@ begin
             var target: int := ast.read(pool, statement, 3)
             if target < 0 { return "" }
             if ast.read(pool, target, 0) = ast.indexKind() {
+                var valueId: int := ast.read(pool, statement, 4)
+                var baseId: int := ast.read(pool, target, 3)
+                var baseType: string := arrayType(source, pool, functionId, baseId)
+                var width: int := arrayElementWords(source, baseType) * 8
+                var capacity: int := arrayCapacity(baseType)
+                if expressionType(source, pool, functionId, target) = "int" && expressionContainsCall(pool, valueId, 0) = 0 && capacity > 0 && arrayLengthIsFixedLocal(source, pool, functionId, baseId) = 1 {
+                    var range: [3]int := expressionIntegerRange(source, pool, functionId, ast.read(pool, target, 4), ast.read(pool, target, 1), 0)
+                    if range[0] = 1 && range[1] >= 0 && range[2] < capacity {
+                        var arrayOffset: int := boundLocalOffset(source, pool, functionId, baseId)
+                        var memory: string := directLocalArrayMemory(source, pool, functionId, ast.read(pool, target, 4), arrayOffset, width)
+                        if arrayOffset >= 0 && str.length(memory) > 0 { return integerExpression(source, pool, functionId, valueId) + " mov qword ptr " + memory + ", rax\n" }
+                    }
+                }
                 var element: string := arrayElementAddress(source, pool, functionId, target)
                 if str.length(element) = 0 { return "" }
                 var recordElementWords: int := recordWordCount(source, expressionType(source, pool, functionId, target))
@@ -2922,7 +3912,10 @@ begin
                 if expressionType(source, pool, functionId, target) = "string" || expressionType(source, pool, functionId, target) = "str" {
                     return element + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + stringExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " mov rcx, qword ptr [rsp]\n mov qword ptr [rcx], rax\n add rsp, 16\n"
                 }
-                return element + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + integerExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " mov rcx, qword ptr [rsp]\n mov qword ptr [rcx], rax\n add rsp, 16\n"
+                if expressionContainsCall(pool, valueId, 0) = 0 {
+                    return element + " mov r11, rax\n" + integerExpression(source, pool, functionId, valueId) + " mov qword ptr [r11], rax\n"
+                }
+                return element + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + integerExpression(source, pool, functionId, valueId) + " mov rcx, qword ptr [rsp]\n mov qword ptr [rcx], rax\n add rsp, 16\n"
             }
             if ast.read(pool, target, 0) = ast.memberKind() {
                 var member: string := memberAddress(source, pool, functionId, target)
@@ -2991,7 +3984,7 @@ begin
             var recordWords: int := recordWordCount(source, type)
             if recordWords > 0 { return recordCopyTo(source, pool, functionId, ast.read(pool, statement, 4), offset, recordWords) }
             if type = "flt" { return floatExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " movsd qword ptr [rbp-" + token.number(offset) + "], xmm0\n" }
-            var register: int := optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, ast.read(pool, target, 1))
+            var register: int := registerIndexForName(source, pool, functionId, target)
             if register >= 0 { return integerExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " mov " + registerName(register) + ", rax\n" }
             if offset < 0 { return "" }
             return integerExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " mov qword ptr [rbp-" + token.number(offset) + "], rax\n"
@@ -3046,9 +4039,9 @@ begin
             var id: string := token.number(statement)
             var otherwise: string := ".LxeElse" + id
             var finish: string := ".LxeIfEnd" + id
-            var condition: string := integerExpression(source, pool, functionId, ast.read(pool, statement, 3))
+            var condition: string := branchCondition(source, pool, functionId, ast.read(pool, statement, 3), otherwise, 0)
             var no: int := ast.read(pool, statement, 4)
-            var output: string := str.builder(condition + " test rax, rax\n jz " + otherwise + "\n" + emitBlock(source, pool, functionId, ast.read(pool, statement, 6)))
+            var output: string := str.builder(condition + emitBlock(source, pool, functionId, ast.read(pool, statement, 6)))
             if no >= 0 { output := str.append(output, " jmp " + finish + "\n" + otherwise + ":\n" + emitBlock(source, pool, functionId, no) + finish + ":\n") }
             else { output := str.append(output, otherwise + ":\n") }
             return output
@@ -3057,8 +4050,8 @@ begin
             var id: string := token.number(statement)
             var again: string := ".LxeWhile" + id
             var finish: string := ".LxeWhileEnd" + id
-            var condition: string := integerExpression(source, pool, functionId, ast.read(pool, statement, 3))
-            return again + ":\n" + condition + " test rax, rax\n jz " + finish + "\n" + emitBlock(source, pool, functionId, ast.read(pool, statement, 6)) + " jmp " + again + "\n" + finish + ":\n"
+            var condition: string := branchCondition(source, pool, functionId, ast.read(pool, statement, 3), finish, 0)
+            return again + ":\n" + condition + emitBlock(source, pool, functionId, ast.read(pool, statement, 6)) + " jmp " + again + "\n" + finish + ":\n"
         }
         if kind = ast.switchKind() {
             var id: string := token.number(statement)

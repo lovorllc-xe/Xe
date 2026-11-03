@@ -1,0 +1,84 @@
+uses json
+uses time
+
+module log
+begin
+    fn level_trace(): int
+    begin
+        return 0
+    end
+
+    fn level_debug(): int
+    begin
+        return 10
+    end
+
+    fn level_info(): int
+    begin
+        return 20
+    end
+
+    fn level_warn(): int
+    begin
+        return 30
+    end
+
+    fn level_error(): int
+    begin
+        return 40
+    end
+
+    fn level_name(level: int): string
+    begin
+        if level <= 0 { return "TRACE" }
+        if level <= 10 { return "DEBUG" }
+        if level <= 20 { return "INFO" }
+        if level <= 30 { return "WARN" }
+        return "ERROR"
+    end
+
+    // Plain text console output. Levels are stable integer values so callers
+    // can add their own filtering policy without hidden global state.
+    fn write(level: int, message: string): void
+    begin
+        writeln("[" + log.level_name(level) + "] " + message)
+    end
+
+    fn write_filtered(minimum_level: int, level: int, message: string): void
+    begin
+        if level < minimum_level { return }
+        log.write(level, message)
+    end
+
+    fn trace(message: string): void
+    begin
+        log.write(log.level_trace(), message)
+    end
+
+    fn debug(message: string): void
+    begin
+        log.write(log.level_debug(), message)
+    end
+
+    fn info(message: string): void
+    begin
+        log.write(log.level_info(), message)
+    end
+
+    fn warn(message: string): void
+    begin
+        log.write(log.level_warn(), message)
+    end
+
+    fn error(message: string): void
+    begin
+        log.write(log.level_error(), message)
+    end
+
+    // One JSON object per line; message escaping is delegated to the existing
+    // JSON string encoder.
+    fn write_json(level: int, message: string): void
+    begin
+        writeln("{\"timestamp\":" + str.number(time.now_seconds()) + ",\"level\":" + json.quote(log.level_name(level)) + ",\"message\":" + json.quote(message) + "}")
+    end
+end

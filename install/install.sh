@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -n "${PREFIX:-}" ]]; then
     prefix="$PREFIX"
 elif (( EUID == 0 )); then
@@ -70,7 +70,7 @@ run_build() {
     rm -f -- "\$diagnostics"
     elapsed=\$((finished - started))
     if (( elapsed < 1000 )); then duration="\${elapsed} ns"
-    elif (( elapsed < 1000000 )); then duration=\$(awk -v n="\$elapsed" 'BEGIN { printf "%.2f µs", n / 1000 }')
+    elif (( elapsed < 1000000 )); then duration=\$(awk -v n="\$elapsed" 'BEGIN { printf "%.2f μs", n / 1000 }')
     elif (( elapsed < 1000000000 )); then duration=\$(awk -v n="\$elapsed" 'BEGIN { printf "%.2f ms", n / 1000000 }')
     elif (( elapsed < 60000000000 )); then duration=\$(awk -v n="\$elapsed" 'BEGIN { printf "%.2f s", n / 1000000000 }')
     elif (( elapsed < 3600000000000 )); then duration=\$(awk -v n="\$elapsed" 'BEGIN { printf "%.2f min", n / 60000000000 }')

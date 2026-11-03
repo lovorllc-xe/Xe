@@ -1,0 +1,51 @@
+module test
+begin
+    fn assert_true(name: string, condition: int): int
+    begin
+        if condition != 0 {
+            writeln("[PASS] " + name)
+            return 1
+        }
+        writeln("[FAIL] " + name)
+        return 0
+    end
+
+    fn assert_false(name: string, condition: int): int
+    begin
+        if condition = 0 {
+            writeln("[PASS] " + name)
+            return 1
+        }
+        writeln("[FAIL] " + name)
+        return 0
+    end
+
+    fn assert_int(name: string, actual: int, expected: int): int
+    begin
+        if actual = expected {
+            writeln("[PASS] " + name)
+            return 1
+        }
+        writeln("[FAIL] " + name + " (expected " + str.number(expected) + ", got " + str.number(actual) + ")")
+        return 0
+    end
+
+    fn assert_string(name: string, actual: string, expected: string): int
+    begin
+        if actual = expected {
+            writeln("[PASS] " + name)
+            return 1
+        }
+        writeln("[FAIL] " + name + " (string values differ)")
+        return 0
+    end
+
+    // Aggregate returned assertion results in the caller and finish with this
+    // helper. It returns 1 only when the suite passed.
+    fn summary(passed: int, failed: int): int
+    begin
+        writeln("Tests: " + str.number(passed) + " passed, " + str.number(failed) + " failed")
+        if failed = 0 { return 1 }
+        return 0
+    end
+end
