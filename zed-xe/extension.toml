@@ -1,0 +1,14 @@
+id = "xe"
+name = "Xe"
+version = "0.1.0"
+schema_version = 1
+authors = ["lovro <crnkovic@lovro.me>"]
+description = "Syntax highlighting for the Xe programming language."
+repository = "https://github.com/lovorllc-xe/Xe"
+
+[grammars.xe]
+# Zed fetches the grammar with git, so `rev` must be a commit that
+# contains zed-xe/tree-sitter-xe. Update it after changing the grammar.
+repository = "file:///home/lovro/Documents/Projects/Xe/Xe"
+rev = "COMMIT_SHA"
+path = "zed-xe/tree-sitter-xe"

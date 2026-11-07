@@ -1,0 +1,4 @@
+*.wasm
+grammars/
+tree-sitter-xe/*.so
+tree-sitter-xe/build/
