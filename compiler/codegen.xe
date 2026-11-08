@@ -3054,7 +3054,7 @@ begin
             bytes := str.append(bytes, token.number(str.char(message, position)))
             position := position + 1
         }
-        return label + ":\n mov eax, 1\n mov edi, 2\n lea rsi, [rip+" + messageLabel + "]\n mov edx, " + token.number(str.length(message)) + "\n syscall\n mov eax, 60\n mov edi, 1\n syscall\n ud2\n.section .rodata\n" + messageLabel + ":\n.byte " + bytes + "\n.section .text\n"
+        return label + ":\n mov eax, 1\n mov edi, 2\n lea rsi, [rip+" + messageLabel + "]\n mov edx, " + token.number(str.length(message)) + "\n syscall\n mov eax, 231\n mov edi, 1\n syscall\n ud2\n.section .rodata\n" + messageLabel + ":\n.byte " + bytes + "\n.section .text\n"
     end
 
     fn directCallArgument(source: string, pool: *[12582912]int, functionId: int, id: int): int
@@ -4439,6 +4439,10 @@ begin
             if name != "main" {
                 var statement: int := ast.read(pool, functionId, 6)
                 var quick: string := ""
+                if statement < 0 {
+                    var emptyLabel: string := functionLabel(qualifiedFunctionName(source, pool, functionId))
+                    output := str.append(output, ".global " + emptyLabel + "\n.type " + emptyLabel + ", @function\n" + emptyLabel + ":\n xor eax, eax\n ret\n")
+                }
                 if statement >= 0 { quick := fast.compile(source, pool, functionId) }
                 if str.length(quick) > 0 { output := str.append(output, quick) }
                 if statement >= 0 && str.length(quick) = 0 {
@@ -4578,7 +4582,7 @@ begin
         var entry: string := runtime.startName()
         var separator: string := runtime.underscore()
         var output: string := str.builder(".intel" + separator + "syntax noprefix\n.section .rodata\n" + messages(source) + stringConstants(source) + floatConstants(source))
-        output := str.append(output, ".section .text\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n mov qword ptr [rip+.LxeStackBase], rsp\n call main\n mov edi, eax\n mov eax, 60\n syscall\n")
+        output := str.append(output, ".section .text\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n mov qword ptr [rip+.LxeStackBase], rsp\n call main\n mov edi, eax\n mov eax, 231\n syscall\n")
         var localCount: int := integerLocalCount(source, pool, mainId)
         var stackSpace: int := 40 + (localCount + arrayTemporaryWords(source, pool, mainId)) * 8
         if stackSpace % 16 != 0 { stackSpace := stackSpace + 8 }
@@ -4597,7 +4601,7 @@ begin
         var runtimeMarker: string := ".section .rodata" + token.character(10) + ".LxeFloatHalf:"
         var runtimeStart: int := str.find(output, runtimeMarker)
         if runtimeStart >= 0 { output := str.slice(output, 0, runtimeStart) }
-        var entry: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rdi, qword ptr [rsp]" + token.character(10) + " mov qword ptr [rip+.LxeArgc], rdi" + token.character(10) + " lea rsi, [rsp+8]" + token.character(10) + " mov qword ptr [rip+.LxeArgv], rsi" + token.character(10) + " lea rdx, [rsi+rdi*8+8]" + token.character(10) + " mov qword ptr [rip+.LxeEnv], rdx" + token.character(10) + " mov qword ptr [rip+.LxeStackBase], rsp" + token.character(10) + " call main" + token.character(10) + " mov edi, eax" + token.character(10) + " mov eax, 60" + token.character(10) + " syscall" + token.character(10)
+        var entry: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rdi, qword ptr [rsp]" + token.character(10) + " mov qword ptr [rip+.LxeArgc], rdi" + token.character(10) + " lea rsi, [rsp+8]" + token.character(10) + " mov qword ptr [rip+.LxeArgv], rsi" + token.character(10) + " lea rdx, [rsi+rdi*8+8]" + token.character(10) + " mov qword ptr [rip+.LxeEnv], rdx" + token.character(10) + " mov qword ptr [rip+.LxeStackBase], rsp" + token.character(10) + " call main" + token.character(10) + " mov edi, eax" + token.character(10) + " mov eax, 231" + token.character(10) + " syscall" + token.character(10)
         var halt: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rsp, 589824" + token.character(10) + " call main" + token.character(10) + ".LxeHalt:" + token.character(10) + " hlt" + token.character(10) + " jmp .LxeHalt" + token.character(10)
         return optimizer.replaceAll(output, entry, halt)
     end

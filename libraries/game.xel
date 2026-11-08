@@ -1,0 +1,348 @@
+// game: building blocks for 2D games - collision tests, tile maps, sprite sheets and animation,
+// a smooth follow camera, particles and a fixed-timestep accumulator.
+// Draws on `canvas`; pair with `window` for input and presenting, and `gfx3d` for 3D games.
+uses canvas
+uses mathx
+
+module game
+begin
+    fn clamp(value: flt, low: flt, high: flt): flt
+    begin
+        if value < low { return low }
+        if value > high { return high }
+        return value
+    end
+
+    fn clamp_int(value: int, low: int, high: int): int
+    begin
+        if value < low { return low }
+        if value > high { return high }
+        return value
+    end
+
+    fn lerp(a: flt, b: flt, t: flt): flt
+    begin
+        return a + (b - a) * t
+    end
+
+    // Move `value` toward `target` by at most `step`.
+    fn approach(value: flt, target: flt, step: flt): flt
+    begin
+        if value < target {
+            if value + step > target { return target }
+            return value + step
+        }
+        if value - step < target { return target }
+        return value - step
+    end
+
+    fn sign(value: flt): flt
+    begin
+        if value > 0.0 { return 1.0 }
+        if value < 0.0 { return -1.0 }
+        return 0.0
+    end
+
+    // ---- collisions ----------------------------------------------------------
+    fn rects_overlap(x1: int, y1: int, w1: int, h1: int, x2: int, y2: int, w2: int, h2: int): int
+    begin
+        if x1 < x2 + w2 && x2 < x1 + w1 && y1 < y2 + h2 && y2 < y1 + h1 { return 1 }
+        return 0
+    end
+
+    fn circles_overlap(x1: flt, y1: flt, r1: flt, x2: flt, y2: flt, r2: flt): int
+    begin
+        var dx: flt := x2 - x1
+        var dy: flt := y2 - y1
+        var r: flt := r1 + r2
+        if dx * dx + dy * dy <= r * r { return 1 }
+        return 0
+    end
+
+    fn point_in_rect(px: int, py: int, x: int, y: int, w: int, h: int): int
+    begin
+        if px >= x && py >= y && px < x + w && py < y + h { return 1 }
+        return 0
+    end
+
+    fn circle_rect_overlap(cx: flt, cy: flt, radius: flt, x: flt, y: flt, w: flt, h: flt): int
+    begin
+        var nx: flt := clamp(cx, x, x + w)
+        var ny: flt := clamp(cy, y, y + h)
+        var dx: flt := cx - nx
+        var dy: flt := cy - ny
+        if dx * dx + dy * dy <= radius * radius { return 1 }
+        return 0
+    end
+
+    // ---- tile maps -----------------------------------------------------------
+    type TileMap: record
+    begin
+        columns: int
+        rows: int
+        tile: int
+        tiles: *[16777216]int
+    end
+
+    fn tilemap_new(columns: int, rows: int, tile: int): *game.TileMap
+    begin
+        var map: *game.TileMap := alloc(48)
+        map.columns := columns
+        map.rows := rows
+        map.tile := tile
+        map.tiles := alloc(columns * rows * 8 + 8)
+        var i: int := 0
+        while i < columns * rows {
+            (*map.tiles)[i] := 0
+            i := i + 1
+        }
+        return map
+    end
+
+    fn tilemap_free(map: *game.TileMap)
+    begin
+        free(map.tiles)
+        free(map)
+    end
+
+    fn tilemap_set(map: *game.TileMap, column: int, row: int, value: int)
+    begin
+        if column < 0 || row < 0 || column >= map.columns || row >= map.rows { return }
+        (*map.tiles)[row * map.columns + column] := value
+    end
+
+    fn tilemap_get(map: *game.TileMap, column: int, row: int): int
+    begin
+        if column < 0 || row < 0 || column >= map.columns || row >= map.rows { return 0 }
+        return (*map.tiles)[row * map.columns + column]
+    end
+
+    // Tile at a pixel position (world coordinates).
+    fn tilemap_at(map: *game.TileMap, x: int, y: int): int
+    begin
+        if x < 0 || y < 0 { return 0 }
+        return tilemap_get(map, x / map.tile, y / map.tile)
+    end
+
+    // Does the pixel rectangle touch any tile >= 1?
+    fn tilemap_blocked(map: *game.TileMap, x: int, y: int, w: int, h: int): int
+    begin
+        if tilemap_at(map, x, y) > 0 || tilemap_at(map, x + w - 1, y) > 0 { return 1 }
+        if tilemap_at(map, x, y + h - 1) > 0 || tilemap_at(map, x + w - 1, y + h - 1) > 0 { return 1 }
+        return 0
+    end
+
+    // Draw the visible tiles. Tile value n >= 1 is frame n-1 of `sheet` (laid out in rows of `per_row`).
+    fn tilemap_draw(dst: *canvas.Canvas, map: *game.TileMap, sheet: *canvas.Canvas, per_row: int, camera_x: int, camera_y: int)
+    begin
+        var first_col: int := camera_x / map.tile
+        var first_row: int := camera_y / map.tile
+        var last_col: int := (camera_x + dst.width) / map.tile + 1
+        var last_row: int := (camera_y + dst.height) / map.tile + 1
+        var row: int := first_row
+        while row <= last_row {
+            var col: int := first_col
+            while col <= last_col {
+                var tile: int := tilemap_get(map, col, row)
+                if tile > 0 {
+                    var index: int := tile - 1
+                    canvas.blit_region(dst, sheet, (index % per_row) * map.tile, (index / per_row) * map.tile, map.tile, map.tile, col * map.tile - camera_x, row * map.tile - camera_y, -1)
+                }
+                col := col + 1
+            }
+            row := row + 1
+        }
+    end
+
+    // ---- sprites -------------------------------------------------------------
+    // Draw frame `frame` of a sprite sheet whose frames are frame_w x frame_h, `key` is the transparent color (-1 for none).
+    fn sprite(dst: *canvas.Canvas, sheet: *canvas.Canvas, frame: int, frame_w: int, frame_h: int, x: int, y: int, key: int)
+    begin
+        var per_row: int := sheet.width / frame_w
+        canvas.blit_region(dst, sheet, (frame % per_row) * frame_w, (frame / per_row) * frame_h, frame_w, frame_h, x, y, key)
+    end
+
+    fn sprite_flipped(dst: *canvas.Canvas, sheet: *canvas.Canvas, frame: int, frame_w: int, frame_h: int, x: int, y: int, key: int)
+    begin
+        var per_row: int := sheet.width / frame_w
+        var sx: int := (frame % per_row) * frame_w
+        var sy: int := (frame / per_row) * frame_h
+        var row: int := 0
+        while row < frame_h {
+            var col: int := 0
+            while col < frame_w {
+                var pixel: int := canvas.get(sheet, sx + frame_w - 1 - col, sy + row)
+                if pixel != key { canvas.set(dst, x + col, y + row, pixel) }
+                col := col + 1
+            }
+            row := row + 1
+        }
+    end
+
+    // Which frame (0..frames-1) of an animation playing at `fps` to show at time_ms.
+    fn anim_frame(time_ms: int, fps: int, frames: int): int
+    begin
+        return (time_ms * fps / 1000) % frames
+    end
+
+    // ---- camera --------------------------------------------------------------
+    type Camera: record
+    begin
+        x: flt
+        y: flt
+    end
+
+    fn camera_new(): *game.Camera
+    begin
+        var cam: *game.Camera := alloc(16)
+        cam.x := 0.0
+        cam.y := 0.0
+        return cam
+    end
+
+    // Ease the camera so (target_x, target_y) is centered in a view_w x view_h window; smooth 0..1 (1 = snap).
+    fn camera_follow(cam: *game.Camera, target_x: flt, target_y: flt, view_w: int, view_h: int, smooth: flt)
+    begin
+        cam.x := lerp(cam.x, target_x - view_w / 2.0, smooth)
+        cam.y := lerp(cam.y, target_y - view_h / 2.0, smooth)
+    end
+
+    // Keep the camera inside a world of world_w x world_h pixels.
+    fn camera_limit(cam: *game.Camera, world_w: int, world_h: int, view_w: int, view_h: int)
+    begin
+        cam.x := clamp(cam.x, 0.0, world_w - view_w * 1.0)
+        cam.y := clamp(cam.y, 0.0, world_h - view_h * 1.0)
+    end
+
+    // ---- particles -----------------------------------------------------------
+    type Particles: record
+    begin
+        count: int
+        capacity: int
+        px: *[65536]flt
+        py: *[65536]flt
+        vx: *[65536]flt
+        vy: *[65536]flt
+        life: *[65536]flt
+        color: int
+        seed: int
+    end
+
+    fn particles_new(capacity: int, color: int): *game.Particles
+    begin
+        var p: *game.Particles := alloc(96)
+        p.count := 0
+        p.capacity := capacity
+        p.px := alloc(capacity * 8 + 8)
+        p.py := alloc(capacity * 8 + 8)
+        p.vx := alloc(capacity * 8 + 8)
+        p.vy := alloc(capacity * 8 + 8)
+        p.life := alloc(capacity * 8 + 8)
+        p.color := color
+        p.seed := 12345
+        return p
+    end
+
+    fn particles_free(p: *game.Particles)
+    begin
+        free(p.px)
+        free(p.py)
+        free(p.vx)
+        free(p.vy)
+        free(p.life)
+        free(p)
+    end
+
+    fn rand01(p: *game.Particles): flt
+    begin
+        p.seed := (p.seed * 1103515245 + 12345) % 2147483648
+        return (p.seed >> 8) % 10000 / 10000.0
+    end
+
+    // Spawn `n` particles at (x, y) flying in random directions with up to `speed` pixels/second for `life` seconds.
+    fn particles_burst(p: *game.Particles, x: flt, y: flt, n: int, speed: flt, life: flt)
+    begin
+        var i: int := 0
+        while i < n && p.count < p.capacity {
+            var angle: flt := rand01(p) * 6.2831853
+            var s: flt := speed * (0.3 + rand01(p) * 0.7)
+            var k: int := p.count
+            (*p.px)[k] := x
+            (*p.py)[k] := y
+            (*p.vx)[k] := s * mathx.cos(angle)
+            (*p.vy)[k] := s * mathx.sin(angle)
+            (*p.life)[k] := life * (0.5 + rand01(p) * 0.5)
+            p.count := p.count + 1
+            i := i + 1
+        }
+    end
+
+    fn particles_update(p: *game.Particles, dt: flt, gravity: flt)
+    begin
+        var i: int := 0
+        while i < p.count {
+            (*p.life)[i] := (*p.life)[i] - dt
+            if (*p.life)[i] <= 0.0 {
+                var last: int := p.count - 1
+                (*p.px)[i] := (*p.px)[last]
+                (*p.py)[i] := (*p.py)[last]
+                (*p.vx)[i] := (*p.vx)[last]
+                (*p.vy)[i] := (*p.vy)[last]
+                (*p.life)[i] := (*p.life)[last]
+                p.count := last
+            }
+            else {
+                (*p.vy)[i] := (*p.vy)[i] + gravity * dt
+                (*p.px)[i] := (*p.px)[i] + (*p.vx)[i] * dt
+                (*p.py)[i] := (*p.py)[i] + (*p.vy)[i] * dt
+                i := i + 1
+            }
+        }
+    end
+
+    fn particles_draw(p: *game.Particles, dst: *canvas.Canvas, camera_x: int, camera_y: int)
+    begin
+        var i: int := 0
+        while i < p.count {
+            var alpha: int := flt.toint((*p.life)[i] * 255.0)
+            if alpha > 255 { alpha := 255 }
+            var x: int := flt.toint((*p.px)[i]) - camera_x
+            var y: int := flt.toint((*p.py)[i]) - camera_y
+            canvas.blend(dst, x, y, p.color, alpha)
+            canvas.blend(dst, x + 1, y, p.color, alpha)
+            canvas.blend(dst, x, y + 1, p.color, alpha)
+            canvas.blend(dst, x + 1, y + 1, p.color, alpha)
+            i := i + 1
+        }
+    end
+
+    // ---- fixed timestep ------------------------------------------------------
+    type Stepper: record
+    begin
+        accumulator: flt
+        step: flt
+    end
+
+    fn stepper_new(updates_per_second: int): *game.Stepper
+    begin
+        var s: *game.Stepper := alloc(16)
+        s.accumulator := 0.0
+        s.step := 1.0 / updates_per_second
+        return s
+    end
+
+    // Add the frame time; returns how many fixed updates to run now (at most 8).
+    //     var n: int := game.steps(stepper, window.delta_time(win))
+    //     while n > 0 { update(step) ... n := n - 1 }
+    fn steps(s: *game.Stepper, dt: flt): int
+    begin
+        s.accumulator := s.accumulator + dt
+        var n: int := 0
+        while s.accumulator >= s.step && n < 8 {
+            s.accumulator := s.accumulator - s.step
+            n := n + 1
+        }
+        if n = 8 { s.accumulator := 0.0 }
+        return n
+    end
+end

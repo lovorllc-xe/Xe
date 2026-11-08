@@ -1,0 +1,654 @@
+// x11: a pure-Xe X11 client. It speaks the X protocol over the display's Unix socket (no libX11/xcb):
+// connect, create a window, show pixels, and read keyboard/mouse/resize/close events.
+// Most programs should use `window` (which wraps this) instead.
+uses syscall
+uses clock
+
+module x11
+begin
+    type Display: record
+    begin
+        fd: int
+        id_base: int
+        id_mask: int
+        next_id: int
+        root: int
+        visual: int
+        depth: int
+        screen_w: int
+        screen_h: int
+        bpp: int
+        lsb_first: int
+        max_request: int
+        window: int
+        gc: int
+        wm_protocols: int
+        wm_delete: int
+        first_keycode: int
+        keysyms_per: int
+        keysyms: *[4096]int
+        inbuf: *void
+        in_len: int
+        out: *void
+        out_capacity: int
+    end
+
+    type Event: record
+    begin
+        kind: int
+        a: int
+        b: int
+        c: int
+        d: int
+        state: int
+    end
+
+    fn kind_key_down(): int
+    begin
+        return 1
+    end
+
+    fn kind_key_up(): int
+    begin
+        return 2
+    end
+
+    fn kind_mouse_down(): int
+    begin
+        return 3
+    end
+
+    fn kind_mouse_up(): int
+    begin
+        return 4
+    end
+
+    fn kind_motion(): int
+    begin
+        return 5
+    end
+
+    fn kind_expose(): int
+    begin
+        return 6
+    end
+
+    fn kind_resize(): int
+    begin
+        return 7
+    end
+
+    fn kind_close(): int
+    begin
+        return 8
+    end
+
+    fn put8(buffer: *void, offset: int, value: int)
+    begin
+        runtime.hw.write8(buffer + offset, value & 255)
+    end
+
+    fn put16(buffer: *void, offset: int, value: int)
+    begin
+        put8(buffer, offset, value)
+        put8(buffer, offset + 1, value >> 8)
+    end
+
+    fn put32(buffer: *void, offset: int, value: int)
+    begin
+        runtime.hw.write32(buffer + offset, value & 4294967295)
+    end
+
+    fn get8(buffer: *void, offset: int): int
+    begin
+        return runtime.hw.read8(buffer + offset)
+    end
+
+    fn get16(buffer: *void, offset: int): int
+    begin
+        return get8(buffer, offset) | (get8(buffer, offset + 1) << 8)
+    end
+
+    fn get16s(buffer: *void, offset: int): int
+    begin
+        var value: int := get16(buffer, offset)
+        if value >= 32768 { return value - 65536 }
+        return value
+    end
+
+    fn get32(buffer: *void, offset: int): int
+    begin
+        return runtime.hw.read32(buffer + offset) & 4294967295
+    end
+
+    fn pad4(n: int): int
+    begin
+        return (n + 3) / 4 * 4
+    end
+
+    fn write_all(fd: int, buffer: *void, count: int): int
+    begin
+        var done: int := 0
+        while done < count {
+            var wrote: int := syscall.io.write(fd, buffer + done, count - done)
+            if wrote <= 0 { return 0 }
+            done := done + wrote
+        }
+        return 1
+    end
+
+    fn read_exact(fd: int, buffer: *void, count: int): int
+    begin
+        var got: int := 0
+        while got < count {
+            var n: int := syscall.io.read(fd, buffer + got, count - got)
+            if n <= 0 { return 0 }
+            got := got + n
+        }
+        return 1
+    end
+
+    fn connect_socket(path: string): int
+    begin
+        var fd: int := syscall.raw.invoke3(41, 1, 1, 0)
+        if fd < 0 { return -1 }
+        var address: *void := alloc(128)
+        runtime.mem.set(address, 0, 128)
+        put16(address, 0, 1)
+        var i: int := 0
+        while i < str.length(path) {
+            put8(address, 2 + i, str.char(path, i))
+            i := i + 1
+        }
+        var result: int := syscall.raw.invoke3(42, fd, @address, 2 + str.length(path) + 1)
+        free(address)
+        if result < 0 {
+            syscall.io.close(fd)
+            return -1
+        }
+        return fd
+    end
+
+    // The cookie for MIT-MAGIC-COOKIE-1 of the given display number from ~/.Xauthority, as a raw string
+    // of 16 bytes stored in out (returns 16, or 0 when there is none).
+    fn read_cookie(number: string, out: *void): int
+    begin
+        var path: string := env.get("XAUTHORITY")
+        if str.length(path) = 0 { path := env.get("HOME") + "/.Xauthority" }
+        var fd: int := syscall.io.open(path, 0, 0)
+        if fd < 0 { return 0 }
+        var data: *void := alloc(65536)
+        var total: int := 0
+        var reading: int := 1
+        while reading = 1 && total < 65000 {
+            var n: int := syscall.io.read(fd, data + total, 65000 - total)
+            if n <= 0 { reading := 0 }
+            else { total := total + n }
+        }
+        syscall.io.close(fd)
+        var p: int := 0
+        var found: int := 0
+        while p + 2 < total && found = 0 {
+            var family: int := (get8(data, p) << 8) | get8(data, p + 1)
+            p := p + 2
+            var alen: int := (get8(data, p) << 8) | get8(data, p + 1)
+            p := p + 2 + alen
+            var nlen: int := (get8(data, p) << 8) | get8(data, p + 1)
+            p := p + 2
+            var matches: int := 0
+            if nlen = str.length(number) {
+                matches := 1
+                var i: int := 0
+                while i < nlen {
+                    if get8(data, p + i) != str.char(number, i) { matches := 0 }
+                    i := i + 1
+                }
+            }
+            p := p + nlen
+            var mlen: int := (get8(data, p) << 8) | get8(data, p + 1)
+            p := p + 2
+            var good: int := 0
+            if mlen = 18 && matches = 1 && get8(data, p) = 77 && get8(data, p + 3) = 45 { good := 1 }
+            p := p + mlen
+            var dlen: int := (get8(data, p) << 8) | get8(data, p + 1)
+            p := p + 2
+            if good = 1 && dlen = 16 {
+                var j: int := 0
+                while j < 16 {
+                    put8(out, j, get8(data, p + j))
+                    j := j + 1
+                }
+                found := 16
+            }
+            p := p + dlen
+        }
+        free(data)
+        return found
+    end
+
+    fn send(d: *x11.Display, length: int): int
+    begin
+        return write_all(d.fd, d.out, length)
+    end
+
+    fn new_id(d: *x11.Display): int
+    begin
+        var id: int := d.id_base | d.next_id
+        d.next_id := d.next_id + 1
+        return id
+    end
+
+    fn begin_request(d: *x11.Display, opcode: int, data: int, words: int)
+    begin
+        put8(d.out, 0, opcode)
+        put8(d.out, 1, data)
+        put16(d.out, 2, words)
+    end
+
+    fn intern_atom(d: *x11.Display, name: string): int
+    begin
+        var n: int := str.length(name)
+        var words: int := 2 + pad4(n) / 4
+        runtime.mem.set(d.out, 0, words * 4)
+        begin_request(d, 16, 0, words)
+        put16(d.out, 4, n)
+        var i: int := 0
+        while i < n {
+            put8(d.out, 8 + i, str.char(name, i))
+            i := i + 1
+        }
+        send(d, words * 4)
+        var reply: *void := alloc(64)
+        var atom: int := 0
+        if read_exact(d.fd, reply, 32) = 1 {
+            atom := get32(reply, 8)
+            var extra: int := get32(reply, 4)
+            if extra > 0 {
+                var junk: *void := alloc(extra * 4 + 8)
+                read_exact(d.fd, junk, extra * 4)
+                free(junk)
+            }
+        }
+        free(reply)
+        return atom
+    end
+
+    fn set_title(d: *x11.Display, title: string)
+    begin
+        var n: int := str.length(title)
+        var words: int := 6 + pad4(n) / 4
+        runtime.mem.set(d.out, 0, words * 4)
+        begin_request(d, 18, 0, words)
+        put32(d.out, 4, d.window)
+        put32(d.out, 8, 39)
+        put32(d.out, 12, 31)
+        put8(d.out, 16, 8)
+        put32(d.out, 20, n)
+        var i: int := 0
+        while i < n {
+            put8(d.out, 24 + i, str.char(title, i))
+            i := i + 1
+        }
+        send(d, words * 4)
+    end
+
+    fn load_keymap(d: *x11.Display, min_code: int, max_code: int)
+    begin
+        var count: int := max_code - min_code + 1
+        runtime.mem.set(d.out, 0, 8)
+        begin_request(d, 101, 0, 2)
+        put8(d.out, 4, min_code)
+        put8(d.out, 5, count)
+        send(d, 8)
+        var head: *void := alloc(64)
+        if read_exact(d.fd, head, 32) = 1 {
+            var per: int := get8(head, 1)
+            var words: int := get32(head, 4)
+            var body: *void := alloc(words * 4 + 8)
+            if read_exact(d.fd, body, words * 4) = 1 {
+                d.first_keycode := min_code
+                d.keysyms_per := per
+                var i: int := 0
+                while i < words && i < 4096 {
+                    (*d.keysyms)[i] := get32(body, i * 4)
+                    i := i + 1
+                }
+            }
+            free(body)
+        }
+        free(head)
+    end
+
+    // Connects to the X server named by $DISPLAY. Returns 0 (a null pointer) when that fails.
+    fn open_display(): *x11.Display
+    begin
+        var none: *x11.Display
+        var name: string := env.get("DISPLAY")
+        if str.length(name) < 2 || str.char(name, 0) != 58 { return none }
+        var number: string := ""
+        var i: int := 1
+        while i < str.length(name) && str.char(name, i) >= 48 && str.char(name, i) <= 57 {
+            number := number + str.fromchar(str.char(name, i))
+            i := i + 1
+        }
+        var fd: int := connect_socket("/tmp/.X11-unix/X" + number)
+        if fd < 0 { return none }
+        var cookie: *void := alloc(32)
+        var cookie_len: int := read_cookie(number, cookie)
+        var auth_name: string := ""
+        if cookie_len = 16 { auth_name := "MIT-MAGIC-COOKIE-1" }
+        var request: *void := alloc(256)
+        runtime.mem.set(request, 0, 256)
+        put8(request, 0, 108)
+        put16(request, 2, 11)
+        put16(request, 4, 0)
+        put16(request, 6, str.length(auth_name))
+        put16(request, 8, cookie_len)
+        var at: int := 12
+        var k: int := 0
+        while k < str.length(auth_name) {
+            put8(request, at + k, str.char(auth_name, k))
+            k := k + 1
+        }
+        at := at + pad4(str.length(auth_name))
+        k := 0
+        while k < cookie_len {
+            put8(request, at + k, get8(cookie, k))
+            k := k + 1
+        }
+        at := at + pad4(cookie_len)
+        var ok: int := write_all(fd, request, at)
+        free(request)
+        free(cookie)
+        if ok = 0 {
+            syscall.io.close(fd)
+            return none
+        }
+        var head: *void := alloc(16)
+        if read_exact(fd, head, 8) = 0 || get8(head, 0) != 1 {
+            syscall.io.close(fd)
+            free(head)
+            return none
+        }
+        var extra: int := get16(head, 6) * 4
+        free(head)
+        var info: *void := alloc(extra + 16)
+        if read_exact(fd, info, extra) = 0 {
+            syscall.io.close(fd)
+            free(info)
+            return none
+        }
+        var d: *x11.Display := alloc(256)
+        d.fd := fd
+        d.id_base := get32(info, 4)
+        d.id_mask := get32(info, 8)
+        d.next_id := 1
+        d.max_request := get16(info, 18) * 4
+        d.lsb_first := 1
+        if get8(info, 22) != 0 { d.lsb_first := 0 }
+        var vendor_len: int := get16(info, 16)
+        var screens: int := get8(info, 20)
+        var formats: int := get8(info, 21)
+        var min_code: int := get8(info, 26)
+        var max_code: int := get8(info, 27)
+        var cursor: int := 32 + pad4(vendor_len)
+        d.bpp := 32
+        var f: int := 0
+        while f < formats {
+            if get8(info, cursor) = 24 { d.bpp := get8(info, cursor + 1) }
+            cursor := cursor + 8
+            f := f + 1
+        }
+        d.root := get32(info, cursor)
+        d.screen_w := get16(info, cursor + 20)
+        d.screen_h := get16(info, cursor + 22)
+        d.visual := get32(info, cursor + 32)
+        d.depth := get8(info, cursor + 38)
+        free(info)
+        d.out_capacity := 1048576
+        d.out := alloc(d.out_capacity)
+        d.inbuf := alloc(65536)
+        d.in_len := 0
+        d.keysyms := alloc(4096 * 8)
+        d.keysyms_per := 0
+        d.first_keycode := 0
+        d.wm_protocols := intern_atom(d, "WM_PROTOCOLS")
+        d.wm_delete := intern_atom(d, "WM_DELETE_WINDOW")
+        load_keymap(d, min_code, max_code)
+        return d
+    end
+
+    fn create_window(d: *x11.Display, title: string, x: int, y: int, w: int, h: int)
+    begin
+        d.window := new_id(d)
+        runtime.mem.set(d.out, 0, 48)
+        begin_request(d, 1, 0, 10)
+        put32(d.out, 4, d.window)
+        put32(d.out, 8, d.root)
+        put16(d.out, 12, x)
+        put16(d.out, 14, y)
+        put16(d.out, 16, w)
+        put16(d.out, 18, h)
+        put16(d.out, 20, 0)
+        put16(d.out, 22, 1)
+        put32(d.out, 24, 0)
+        put32(d.out, 28, 2 + 2048)
+        put32(d.out, 32, 0)
+        // key press/release, button press/release, pointer motion, exposure, structure changes
+        put32(d.out, 36, 1 + 2 + 4 + 8 + 64 + 32768 + 131072)
+        send(d, 40)
+        set_title(d, title)
+        // ask the window manager to send a message instead of killing us when the window is closed
+        runtime.mem.set(d.out, 0, 32)
+        begin_request(d, 18, 0, 7)
+        put32(d.out, 4, d.window)
+        put32(d.out, 8, d.wm_protocols)
+        put32(d.out, 12, 4)
+        put8(d.out, 16, 32)
+        put32(d.out, 20, 1)
+        put32(d.out, 24, d.wm_delete)
+        send(d, 28)
+        d.gc := new_id(d)
+        runtime.mem.set(d.out, 0, 16)
+        begin_request(d, 55, 0, 4)
+        put32(d.out, 4, d.gc)
+        put32(d.out, 8, d.window)
+        put32(d.out, 12, 0)
+        send(d, 16)
+        runtime.mem.set(d.out, 0, 8)
+        begin_request(d, 8, 0, 2)
+        put32(d.out, 4, d.window)
+        send(d, 8)
+    end
+
+    // Fixed-size windows: ask the window manager to not resize (min = max = size).
+    fn fix_size(d: *x11.Display, w: int, h: int)
+    begin
+        runtime.mem.set(d.out, 0, 96)
+        begin_request(d, 18, 0, 24)
+        put32(d.out, 4, d.window)
+        put32(d.out, 8, 40)
+        put32(d.out, 12, 41)
+        put8(d.out, 16, 32)
+        put32(d.out, 20, 18)
+        put32(d.out, 24, 16 + 32)
+        put32(d.out, 44, w)
+        put32(d.out, 48, h)
+        put32(d.out, 52, w)
+        put32(d.out, 56, h)
+        send(d, 96)
+    end
+
+    // Draw w x h pixels (ints 0xRRGGBB, one per 8-byte slot) at (x, y) of the window.
+    fn put_pixels(d: *x11.Display, pixels: *[268435456]int, stride: int, x0: int, y0: int, w: int, h: int)
+    begin
+        var row_bytes: int := w * 4
+        var rows_per: int := (d.max_request - 32) / row_bytes
+        if rows_per < 1 { rows_per := 1 }
+        if rows_per > h { rows_per := h }
+        var row: int := 0
+        while row < h {
+            var rows: int := rows_per
+            if row + rows > h { rows := h - row }
+            var bytes: int := rows * row_bytes
+            var words: int := 6 + bytes / 4
+            runtime.mem.set(d.out, 0, 24)
+            begin_request(d, 72, 2, words)
+            put32(d.out, 4, d.window)
+            put32(d.out, 8, d.gc)
+            put16(d.out, 12, w)
+            put16(d.out, 14, rows)
+            put16(d.out, 16, x0)
+            put16(d.out, 18, y0 + row)
+            put8(d.out, 20, 0)
+            put8(d.out, 21, 24)
+            var out: *void := d.out + 24
+            var r: int := 0
+            while r < rows {
+                var base: int := (y0 + row + r) * stride + x0
+                var c: int := 0
+                var line: *void := out + r * row_bytes
+                while c < w {
+                    runtime.hw.write32(line + c * 4, (*pixels)[base + c])
+                    c := c + 1
+                }
+                r := r + 1
+            }
+            send(d, words * 4)
+            row := row + rows
+        }
+    end
+
+    fn keysym_of(d: *x11.Display, keycode: int, shifted: int): int
+    begin
+        if d.keysyms_per = 0 || keycode < d.first_keycode { return 0 }
+        var index: int := (keycode - d.first_keycode) * d.keysyms_per
+        if shifted = 1 && d.keysyms_per > 1 && (*d.keysyms)[index + 1] != 0 { index := index + 1 }
+        if index >= 4096 { return 0 }
+        return (*d.keysyms)[index]
+    end
+
+    fn decode(d: *x11.Display, raw: *void, ev: *x11.Event): int
+    begin
+        var code: int := get8(raw, 0) & 127
+        ev.kind := 0
+        if code = 2 || code = 3 {
+            var shifted: int := get16(raw, 28) & 1
+            ev.kind := kind_key_down()
+            if code = 3 { ev.kind := kind_key_up() }
+            ev.a := keysym_of(d, get8(raw, 1), shifted)
+            ev.b := get8(raw, 1)
+            ev.c := get16s(raw, 24)
+            ev.d := get16s(raw, 26)
+            ev.state := get16(raw, 28)
+        }
+        if code = 4 || code = 5 {
+            ev.kind := kind_mouse_down()
+            if code = 5 { ev.kind := kind_mouse_up() }
+            ev.a := get8(raw, 1)
+            ev.b := get16s(raw, 24)
+            ev.c := get16s(raw, 26)
+            ev.state := get16(raw, 28)
+        }
+        if code = 6 {
+            ev.kind := kind_motion()
+            ev.b := get16s(raw, 24)
+            ev.c := get16s(raw, 26)
+            ev.state := get16(raw, 28)
+        }
+        if code = 12 { ev.kind := kind_expose() }
+        if code = 22 {
+            ev.kind := kind_resize()
+            ev.b := get16(raw, 20)
+            ev.c := get16(raw, 22)
+        }
+        if code = 33 && get32(raw, 12) = d.wm_delete { ev.kind := kind_close() }
+        return ev.kind
+    end
+
+    // Reads one pixel of the window back from the server (0xRRGGBB, or -1 on error). Handy in tests.
+    fn get_pixel(d: *x11.Display, x: int, y: int): int
+    begin
+        runtime.mem.set(d.out, 0, 20)
+        begin_request(d, 73, 2, 5)
+        put32(d.out, 4, d.window)
+        put16(d.out, 8, x)
+        put16(d.out, 10, y)
+        put16(d.out, 12, 1)
+        put16(d.out, 14, 1)
+        put32(d.out, 16, 4294967295)
+        send(d, 20)
+        var head: *void := alloc(64)
+        var result: int := -1
+        var waiting: int := 1
+        while waiting = 1 {
+            if read_exact(d.fd, head, 32) = 0 { waiting := 0 }
+            else {
+                var code: int := get8(head, 0)
+                if code = 1 {
+                    var words: int := get32(head, 4)
+                    var data: *void := alloc(words * 4 + 8)
+                    if read_exact(d.fd, data, words * 4) = 1 { result := get32(data, 0) & 16777215 }
+                    free(data)
+                    waiting := 0
+                }
+                else {
+                    if code = 0 { waiting := 0 }
+                }
+            }
+        }
+        free(head)
+        return result
+    end
+
+    // Waits up to timeout_ms (0 = do not wait, -1 = forever) for the next event.
+    // Returns its kind, or 0 when there was none. Unknown events are skipped.
+    fn next_event(d: *x11.Display, ev: *x11.Event, timeout_ms: int): int
+    begin
+        var waited: int := 0
+        var result: int := 0
+        var searching: int := 1
+        while searching = 1 {
+            if d.in_len >= 32 {
+                var kind: int := decode(d, d.inbuf, ev)
+                runtime.mem.copy(d.inbuf, d.inbuf + 32, d.in_len - 32)
+                d.in_len := d.in_len - 32
+                if kind != 0 {
+                    result := kind
+                    searching := 0
+                }
+            }
+            else {
+                var fds: *void := alloc(16)
+                put32(fds, 0, d.fd)
+                put16(fds, 4, 1)
+                put16(fds, 6, 0)
+                var limit: int := timeout_ms
+                if waited = 1 { limit := 0 }
+                var ready: int := syscall.raw.invoke3(7, @fds, 1, limit)
+                free(fds)
+                if ready <= 0 { searching := 0 }
+                else {
+                    var n: int := syscall.io.read(d.fd, d.inbuf + d.in_len, 65536 - d.in_len)
+                    if n <= 0 {
+                        ev.kind := kind_close()
+                        result := kind_close()
+                        searching := 0
+                    }
+                    else { d.in_len := d.in_len + n }
+                    waited := 1
+                }
+            }
+        }
+        return result
+    end
+
+    fn close_display(d: *x11.Display)
+    begin
+        syscall.io.close(d.fd)
+        free(d.out)
+        free(d.inbuf)
+        free(d.keysyms)
+        free(d)
+    end
+end

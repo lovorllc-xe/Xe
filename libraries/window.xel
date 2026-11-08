@@ -1,0 +1,409 @@
+// window: open a window on Linux (X11 / XWayland), draw into its canvas, read the keyboard and mouse.
+// The loop of every GUI app or game looks like:
+//     var win: *window.Window := window.open("title", 640, 480)
+//     while window.is_open(win) {
+//         window.poll(win)                       // events -> key_down, mouse_x, ...
+//         canvas.clear(win.canvas, canvas.rgb(0, 0, 0))
+//         ...draw on win.canvas...
+//         window.present(win)                    // show it
+//         window.limit_fps(win, 60)
+//     }
+uses x11
+uses canvas
+uses clock
+
+module window
+begin
+    type Window: record
+    begin
+        display: *x11.Display
+        canvas: *canvas.Canvas
+        width: int
+        height: int
+        is_open: int
+        mouse_x: int
+        mouse_y: int
+        buttons: int
+        pressed: int
+        released: int
+        wheel: int
+        resized: int
+        keys: *[1024]int
+        edges: *[1024]int
+        keycode_symbol: *[256]int
+        typed: *[64]int
+        typed_count: int
+        event: *x11.Event
+        last_frame: int
+        delta_ns: int
+        fps_count: int
+        fps_time: int
+        fps: int
+    end
+
+    fn key_escape(): int
+    begin
+        return 256 + 27
+    end
+
+    fn key_enter(): int
+    begin
+        return 256 + 13
+    end
+
+    fn key_backspace(): int
+    begin
+        return 256 + 8
+    end
+
+    fn key_tab(): int
+    begin
+        return 256 + 9
+    end
+
+    fn key_delete(): int
+    begin
+        return 256 + 255
+    end
+
+    fn key_home(): int
+    begin
+        return 256 + 80
+    end
+
+    fn key_left(): int
+    begin
+        return 256 + 81
+    end
+
+    fn key_up(): int
+    begin
+        return 256 + 82
+    end
+
+    fn key_right(): int
+    begin
+        return 256 + 83
+    end
+
+    fn key_down_arrow(): int
+    begin
+        return 256 + 84
+    end
+
+    fn key_end(): int
+    begin
+        return 256 + 87
+    end
+
+    fn key_shift(): int
+    begin
+        return 256 + 225
+    end
+
+    fn key_control(): int
+    begin
+        return 256 + 227
+    end
+
+    fn key_alt(): int
+    begin
+        return 256 + 233
+    end
+
+    fn key_space(): int
+    begin
+        return 32
+    end
+
+    fn key_f(n: int): int
+    begin
+        return 256 + 190 + n - 1
+    end
+
+    // Letters are lowercase ('a' = 97) regardless of shift.
+    fn key_index(symbol: int): int
+    begin
+        if symbol >= 65 && symbol <= 90 { return symbol + 32 }
+        if symbol > 0 && symbol < 256 { return symbol }
+        if (symbol & 65280) = 65280 { return 256 + (symbol & 255) }
+        return 1023
+    end
+
+    fn open(title: string, width: int, height: int): *window.Window
+    begin
+        var none: *window.Window
+        var d: *x11.Display := x11.open_display()
+        if @d = 0 { return none }
+        var win: *window.Window := alloc(256)
+        win.display := d
+        win.width := width
+        win.height := height
+        win.canvas := canvas.new(width, height)
+        win.is_open := 1
+        win.mouse_x := 0
+        win.mouse_y := 0
+        win.buttons := 0
+        win.pressed := 0
+        win.released := 0
+        win.wheel := 0
+        win.resized := 0
+        win.keys := alloc(1024 * 8)
+        win.edges := alloc(1024 * 8)
+        win.keycode_symbol := alloc(256 * 8)
+        win.typed := alloc(64 * 8)
+        win.typed_count := 0
+        win.event := alloc(64)
+        var i: int := 0
+        while i < 1024 {
+            (*win.keys)[i] := 0
+            (*win.edges)[i] := 0
+            i := i + 1
+        }
+        i := 0
+        while i < 256 {
+            (*win.keycode_symbol)[i] := 0
+            i := i + 1
+        }
+        x11.create_window(d, title, 100, 100, width, height)
+        win.last_frame := clock.monotonic()
+        win.fps_time := win.last_frame
+        win.fps_count := 0
+        win.fps := 0
+        win.delta_ns := 16666667
+        // wait for the window to be shown so the first frame is not lost
+        var waited: int := 0
+        var exposed: int := 0
+        while waited < 50 && exposed = 0 {
+            var kind: int := x11.next_event(d, win.event, 50)
+            if kind = x11.kind_expose() { exposed := 1 }
+            waited := waited + 1
+        }
+        // let the window manager finish placing/resizing it, so the first frame is not wiped
+        var kind: int := x11.next_event(d, win.event, 60)
+        while kind != 0 {
+            handle(win, kind)
+            kind := x11.next_event(d, win.event, 60)
+        }
+        win.resized := 0
+        return win
+    end
+
+    // Like open, but asks the window manager not to resize the window.
+    fn open_fixed(title: string, width: int, height: int): *window.Window
+    begin
+        var win: *window.Window := open(title, width, height)
+        if @win != 0 { x11.fix_size(win.display, width, height) }
+        return win
+    end
+
+    fn close(win: *window.Window)
+    begin
+        win.is_open := 0
+    end
+
+    fn is_open(win: *window.Window): int
+    begin
+        return win.is_open
+    end
+
+    fn destroy(win: *window.Window)
+    begin
+        x11.close_display(win.display)
+        canvas.release(win.canvas)
+        free(win.keys)
+        free(win.edges)
+        free(win.keycode_symbol)
+        free(win.typed)
+        free(win.event)
+        free(win)
+    end
+
+    fn queue_char(win: *window.Window, code: int)
+    begin
+        if win.typed_count < 64 {
+            (*win.typed)[win.typed_count] := code
+            win.typed_count := win.typed_count + 1
+        }
+    end
+
+    fn handle(win: *window.Window, kind: int)
+    begin
+        var ev: *x11.Event := win.event
+        if kind = x11.kind_key_down() {
+            var symbol: int := ev.a
+            (*win.keycode_symbol)[ev.b] := symbol
+            var index: int := key_index(symbol)
+            if (*win.keys)[index] = 0 { (*win.edges)[index] := 1 }
+            (*win.keys)[index] := 1
+            if symbol >= 32 && symbol <= 126 { queue_char(win, symbol) }
+            if symbol = 65293 { queue_char(win, 10) }
+            if symbol = 65288 { queue_char(win, 8) }
+            if symbol = 65289 { queue_char(win, 9) }
+        }
+        if kind = x11.kind_key_up() {
+            var symbol: int := (*win.keycode_symbol)[ev.b]
+            if symbol = 0 { symbol := ev.a }
+            (*win.keys)[key_index(symbol)] := 0
+        }
+        if kind = x11.kind_mouse_down() {
+            win.mouse_x := ev.b
+            win.mouse_y := ev.c
+            if ev.a = 4 { win.wheel := win.wheel + 1 }
+            if ev.a = 5 { win.wheel := win.wheel - 1 }
+            if ev.a <= 3 {
+                var mask: int := 1 << (ev.a - 1)
+                win.buttons := win.buttons | mask
+                win.pressed := win.pressed | mask
+            }
+        }
+        if kind = x11.kind_mouse_up() {
+            win.mouse_x := ev.b
+            win.mouse_y := ev.c
+            if ev.a <= 3 {
+                var mask: int := 1 << (ev.a - 1)
+                win.buttons := win.buttons & ~mask
+                win.released := win.released | mask
+            }
+        }
+        if kind = x11.kind_motion() {
+            win.mouse_x := ev.b
+            win.mouse_y := ev.c
+        }
+        if kind = x11.kind_resize() {
+            if ev.b != win.width || ev.c != win.height { win.resized := 1 }
+            win.width := ev.b
+            win.height := ev.c
+        }
+        if kind = x11.kind_close() { win.is_open := 0 }
+    end
+
+    // Process all pending events and clear the per-frame state (pressed/released/wheel).
+    fn poll(win: *window.Window)
+    begin
+        var i: int := 0
+        while i < 1024 {
+            (*win.edges)[i] := 0
+            i := i + 1
+        }
+        win.pressed := 0
+        win.released := 0
+        win.wheel := 0
+        win.resized := 0
+        var kind: int := x11.next_event(win.display, win.event, 0)
+        while kind != 0 {
+            handle(win, kind)
+            kind := x11.next_event(win.display, win.event, 0)
+        }
+    end
+
+    // Like poll, but waits up to timeout_ms for something to happen (for apps that only redraw on input).
+    fn wait_event(win: *window.Window, timeout_ms: int)
+    begin
+        var kind: int := x11.next_event(win.display, win.event, timeout_ms)
+        if kind != 0 { handle(win, kind) }
+        poll_rest(win)
+    end
+
+    fn poll_rest(win: *window.Window)
+    begin
+        var kind: int := x11.next_event(win.display, win.event, 0)
+        while kind != 0 {
+            handle(win, kind)
+            kind := x11.next_event(win.display, win.event, 0)
+        }
+    end
+
+    // After the window was resized: make the canvas match the new window size.
+    fn fit_canvas(win: *window.Window)
+    begin
+        if win.canvas.width != win.width || win.canvas.height != win.height {
+            canvas.release(win.canvas)
+            win.canvas := canvas.new(win.width, win.height)
+        }
+        win.resized := 0
+    end
+
+    fn present(win: *window.Window)
+    begin
+        x11.put_pixels(win.display, win.canvas.pixels, win.canvas.width, 0, 0, win.canvas.width, win.canvas.height)
+    end
+
+    fn key_down(win: *window.Window, key: int): int
+    begin
+        return (*win.keys)[key_index(key)]
+    end
+
+    fn key_pressed(win: *window.Window, key: int): int
+    begin
+        return (*win.edges)[key_index(key)]
+    end
+
+    // 1 = left, 2 = middle, 3 = right
+    fn mouse_down(win: *window.Window, button: int): int
+    begin
+        if (win.buttons & (1 << (button - 1))) != 0 { return 1 }
+        return 0
+    end
+
+    fn mouse_pressed(win: *window.Window, button: int): int
+    begin
+        if (win.pressed & (1 << (button - 1))) != 0 { return 1 }
+        return 0
+    end
+
+    fn mouse_released(win: *window.Window, button: int): int
+    begin
+        if (win.released & (1 << (button - 1))) != 0 { return 1 }
+        return 0
+    end
+
+    // Next typed character (as a character code, 8 = backspace, 10 = enter), or 0 when none is waiting.
+    fn typed_char(win: *window.Window): int
+    begin
+        if win.typed_count = 0 { return 0 }
+        var code: int := (*win.typed)[0]
+        var i: int := 1
+        while i < win.typed_count {
+            (*win.typed)[i - 1] := (*win.typed)[i]
+            i := i + 1
+        }
+        win.typed_count := win.typed_count - 1
+        return code
+    end
+
+    // Sleep so the loop runs at about `fps` frames per second; updates delta_time() and fps().
+    fn limit_fps(win: *window.Window, fps: int)
+    begin
+        var now: int := clock.monotonic()
+        var target: int := 1000000000 / fps
+        var spent: int := now - win.last_frame
+        if spent < target { clock.sleep_ns(target - spent) }
+        var after: int := clock.monotonic()
+        win.delta_ns := after - win.last_frame
+        win.last_frame := after
+        win.fps_count := win.fps_count + 1
+        if after - win.fps_time >= 1000000000 {
+            win.fps := win.fps_count
+            win.fps_count := 0
+            win.fps_time := after
+        }
+    end
+
+    // Seconds the last frame took.
+    fn delta_time(win: *window.Window): flt
+    begin
+        return win.delta_ns / 1000000000.0
+    end
+
+    fn fps(win: *window.Window): int
+    begin
+        return win.fps
+    end
+
+    // Milliseconds since the program started using the window clock.
+    fn time_ms(): int
+    begin
+        return clock.monotonic() / 1000000
+    end
+end

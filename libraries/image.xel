@@ -1,0 +1,343 @@
+// image: load and save canvas pixels as PPM, BMP and PNG files (PNG is written uncompressed).
+uses syscall
+uses bytes
+uses canvas
+
+module image
+begin
+    fn save_buffer(path: string, buffer: *bytes.Buffer): int
+    begin
+        var fd: int := syscall.io.open(path, 577, 420)
+        if fd < 0 { return 0 }
+        var offset: int := 0
+        var total: int := bytes.len(buffer)
+        var ok: int := 1
+        while offset < total && ok = 1 {
+            var wrote: int := syscall.io.write(fd, buffer.data + offset, total - offset)
+            if wrote <= 0 { ok := 0 }
+            else { offset := offset + wrote }
+        }
+        syscall.io.close(fd)
+        return ok
+    end
+
+    fn load_file(path: string): *bytes.Buffer
+    begin
+        var fd: int := syscall.io.open(path, 0, 0)
+        var none: *bytes.Buffer
+        if fd < 0 { return none }
+        var buffer: *bytes.Buffer := bytes.new()
+        var chunk: *void := alloc(65536)
+        var reading: int := 1
+        while reading = 1 {
+            var got: int := syscall.io.read(fd, chunk, 65536)
+            if got <= 0 { reading := 0 }
+            else {
+                var i: int := 0
+                while i < got {
+                    bytes.push(buffer, runtime.hw.read8(chunk + i))
+                    i := i + 1
+                }
+            }
+        }
+        free(chunk)
+        syscall.io.close(fd)
+        return buffer
+    end
+
+    fn save_ppm(c: *canvas.Canvas, path: string): int
+    begin
+        var buffer: *bytes.Buffer := bytes.new()
+        bytes.append_string(buffer, "P6\n" + str.number(c.width) + " " + str.number(c.height) + "\n255\n")
+        var i: int := 0
+        var count: int := c.width * c.height
+        while i < count {
+            var color: int := (*c.pixels)[i]
+            bytes.push(buffer, canvas.red(color))
+            bytes.push(buffer, canvas.green(color))
+            bytes.push(buffer, canvas.blue(color))
+            i := i + 1
+        }
+        var ok: int := save_buffer(path, buffer)
+        bytes.release(buffer)
+        return ok
+    end
+
+    fn save_bmp(c: *canvas.Canvas, path: string): int
+    begin
+        var buffer: *bytes.Buffer := bytes.new()
+        var rowBytes: int := (c.width * 3 + 3) / 4 * 4
+        var imageSize: int := rowBytes * c.height
+        bytes.push(buffer, 66)
+        bytes.push(buffer, 77)
+        bytes.write_le(buffer, 54 + imageSize, 4)
+        bytes.write_le(buffer, 0, 4)
+        bytes.write_le(buffer, 54, 4)
+        bytes.write_le(buffer, 40, 4)
+        bytes.write_le(buffer, c.width, 4)
+        bytes.write_le(buffer, c.height, 4)
+        bytes.write_le(buffer, 1, 2)
+        bytes.write_le(buffer, 24, 2)
+        bytes.write_le(buffer, 0, 4)
+        bytes.write_le(buffer, imageSize, 4)
+        bytes.write_le(buffer, 2835, 4)
+        bytes.write_le(buffer, 2835, 4)
+        bytes.write_le(buffer, 0, 4)
+        bytes.write_le(buffer, 0, 4)
+        var y: int := c.height - 1
+        while y >= 0 {
+            var x: int := 0
+            while x < c.width {
+                var color: int := (*c.pixels)[y * c.width + x]
+                bytes.push(buffer, canvas.blue(color))
+                bytes.push(buffer, canvas.green(color))
+                bytes.push(buffer, canvas.red(color))
+                x := x + 1
+            }
+            var pad: int := rowBytes - c.width * 3
+            while pad > 0 {
+                bytes.push(buffer, 0)
+                pad := pad - 1
+            }
+            y := y - 1
+        }
+        var ok: int := save_buffer(path, buffer)
+        bytes.release(buffer)
+        return ok
+    end
+
+    fn crc_table(): *[256]int
+    begin
+        var table: *[256]int := alloc(256 * 8)
+        var n: int := 0
+        while n < 256 {
+            var value: int := n
+            var k: int := 0
+            while k < 8 {
+                if (value & 1) = 1 { value := 3988292384 ^ (value >> 1) }
+                else { value := value >> 1 }
+                k := k + 1
+            }
+            (*table)[n] := value
+            n := n + 1
+        }
+        return table
+    end
+
+    fn crc_range(table: *[256]int, buffer: *bytes.Buffer, start: int, finish: int): int
+    begin
+        var crc: int := 4294967295
+        var i: int := start
+        while i < finish {
+            crc := (*table)[(crc ^ bytes.get(buffer, i)) & 255] ^ (crc >> 8)
+            i := i + 1
+        }
+        return crc ^ 4294967295
+    end
+
+    fn write_chunk(out: *bytes.Buffer, table: *[256]int, kind: string, data: *bytes.Buffer)
+    begin
+        bytes.write_be(out, bytes.len(data), 4)
+        var start: int := bytes.len(out)
+        bytes.append_string(out, kind)
+        var i: int := 0
+        while i < bytes.len(data) {
+            bytes.push(out, bytes.get(data, i))
+            i := i + 1
+        }
+        bytes.write_be(out, crc_range(table, out, start, bytes.len(out)), 4)
+    end
+
+    fn save_png(c: *canvas.Canvas, path: string): int
+    begin
+        var table: *[256]int := crc_table()
+        var out: *bytes.Buffer := bytes.new()
+        bytes.push(out, 137)
+        bytes.append_string(out, "PNG")
+        bytes.push(out, 13)
+        bytes.push(out, 10)
+        bytes.push(out, 26)
+        bytes.push(out, 10)
+        var header: *bytes.Buffer := bytes.new()
+        bytes.write_be(header, c.width, 4)
+        bytes.write_be(header, c.height, 4)
+        bytes.push(header, 8)
+        bytes.push(header, 2)
+        bytes.push(header, 0)
+        bytes.push(header, 0)
+        bytes.push(header, 0)
+        write_chunk(out, table, "IHDR", header)
+        bytes.release(header)
+        // raw scanlines: filter byte 0 then RGB
+        var raw: *bytes.Buffer := bytes.new()
+        var y: int := 0
+        while y < c.height {
+            bytes.push(raw, 0)
+            var x: int := 0
+            while x < c.width {
+                var color: int := (*c.pixels)[y * c.width + x]
+                bytes.push(raw, canvas.red(color))
+                bytes.push(raw, canvas.green(color))
+                bytes.push(raw, canvas.blue(color))
+                x := x + 1
+            }
+            y := y + 1
+        }
+        // zlib stream of stored blocks
+        var data: *bytes.Buffer := bytes.new()
+        bytes.push(data, 120)
+        bytes.push(data, 1)
+        var total: int := bytes.len(raw)
+        var offset: int := 0
+        var a: int := 1
+        var b: int := 0
+        while offset < total || total = 0 {
+            var take: int := total - offset
+            if take > 65535 { take := 65535 }
+            var last: int := 0
+            if offset + take >= total { last := 1 }
+            bytes.push(data, last)
+            bytes.write_le(data, take, 2)
+            bytes.write_le(data, 65535 - take, 2)
+            var i: int := 0
+            while i < take {
+                var value: int := bytes.get(raw, offset + i)
+                bytes.push(data, value)
+                a := (a + value) % 65521
+                b := (b + a) % 65521
+                i := i + 1
+            }
+            offset := offset + take
+            if last = 1 { total := 0 - 1 }
+        }
+        bytes.write_be(data, b * 65536 + a, 4)
+        write_chunk(out, table, "IDAT", data)
+        var empty: *bytes.Buffer := bytes.new()
+        write_chunk(out, table, "IEND", empty)
+        var ok: int := save_buffer(path, out)
+        bytes.release(empty)
+        bytes.release(data)
+        bytes.release(raw)
+        bytes.release(out)
+        free(table)
+        return ok
+    end
+
+    fn skip_space(buffer: *bytes.Buffer, position: int): int
+    begin
+        var p: int := position
+        var running: int := 1
+        while running = 1 && p < bytes.len(buffer) {
+            var ch: int := bytes.get(buffer, p)
+            if ch = 35 {
+                while p < bytes.len(buffer) && bytes.get(buffer, p) != 10 { p := p + 1 }
+            }
+            else {
+                if ch = 32 || ch = 10 || ch = 13 || ch = 9 { p := p + 1 }
+                else { running := 0 }
+            }
+        }
+        return p
+    end
+
+    fn number_at(buffer: *bytes.Buffer, position: int): [2]int
+    begin
+        var result: [2]int
+        var p: int := skip_space(buffer, position)
+        var value: int := 0
+        while p < bytes.len(buffer) && bytes.get(buffer, p) >= 48 && bytes.get(buffer, p) <= 57 {
+            value := value * 10 + bytes.get(buffer, p) - 48
+            p := p + 1
+        }
+        result[0] := value
+        result[1] := p
+        return result
+    end
+
+    fn load_ppm(path: string): *canvas.Canvas
+    begin
+        var none: *canvas.Canvas
+        var buffer: *bytes.Buffer := load_file(path)
+        if @buffer = 0 { return none }
+        if bytes.len(buffer) < 10 || bytes.get(buffer, 0) != 80 || bytes.get(buffer, 1) != 54 {
+            bytes.release(buffer)
+            return none
+        }
+        var w: [2]int := number_at(buffer, 2)
+        var h: [2]int := number_at(buffer, w[1])
+        var m: [2]int := number_at(buffer, h[1])
+        var p: int := m[1] + 1
+        var c: *canvas.Canvas := canvas.new(w[0], h[0])
+        var i: int := 0
+        var count: int := w[0] * h[0]
+        while i < count && p + 2 < bytes.len(buffer) {
+            (*c.pixels)[i] := canvas.rgb(bytes.get(buffer, p), bytes.get(buffer, p + 1), bytes.get(buffer, p + 2))
+            p := p + 3
+            i := i + 1
+        }
+        bytes.release(buffer)
+        return c
+    end
+
+    // Reads uncompressed 24 or 32 bit BMP files.
+    fn load_bmp(path: string): *canvas.Canvas
+    begin
+        var none: *canvas.Canvas
+        var buffer: *bytes.Buffer := load_file(path)
+        if @buffer = 0 { return none }
+        if bytes.len(buffer) < 54 || bytes.get(buffer, 0) != 66 || bytes.get(buffer, 1) != 77 {
+            bytes.release(buffer)
+            return none
+        }
+        var offset: int := bytes.read_le_at(buffer, 10, 4)
+        var w: int := bytes.read_le_at(buffer, 18, 4)
+        var h: int := bytes.read_le_at(buffer, 22, 4)
+        var bits: int := bytes.read_le_at(buffer, 28, 2)
+        var compression: int := bytes.read_le_at(buffer, 30, 4)
+        var flipped: int := 1
+        if h >= 2147483648 {
+            h := 4294967296 - h
+            flipped := 0
+        }
+        if (bits != 24 && bits != 32) || compression != 0 || w <= 0 || h <= 0 {
+            bytes.release(buffer)
+            return none
+        }
+        var pixel: int := bits / 8
+        var rowBytes: int := (w * pixel + 3) / 4 * 4
+        var c: *canvas.Canvas := canvas.new(w, h)
+        var y: int := 0
+        while y < h {
+            var row: int := y
+            if flipped = 1 { row := h - 1 - y }
+            var x: int := 0
+            while x < w {
+                var p: int := offset + y * rowBytes + x * pixel
+                if p + 2 < bytes.len(buffer) { (*c.pixels)[row * w + x] := canvas.rgb(bytes.get(buffer, p + 2), bytes.get(buffer, p + 1), bytes.get(buffer, p)) }
+                x := x + 1
+            }
+            y := y + 1
+        }
+        bytes.release(buffer)
+        return c
+    end
+
+    fn load(path: string): *canvas.Canvas
+    begin
+        var buffer: *bytes.Buffer := load_file(path)
+        var none: *canvas.Canvas
+        if @buffer = 0 { return none }
+        var first: int := bytes.get(buffer, 0)
+        bytes.release(buffer)
+        if first = 66 { return load_bmp(path) }
+        return load_ppm(path)
+    end
+
+    fn save(c: *canvas.Canvas, path: string): int
+    begin
+        var n: int := str.length(path)
+        if n > 4 && str.slice(path, n - 4, n) = ".bmp" { return save_bmp(c, path) }
+        if n > 4 && str.slice(path, n - 4, n) = ".png" { return save_png(c, path) }
+        return save_ppm(c, path)
+    end
+end

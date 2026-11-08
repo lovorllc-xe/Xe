@@ -1,0 +1,83 @@
+uses canvas
+uses image
+uses gfx3d
+uses game
+uses window
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    // ---- canvas ----
+    var c: *canvas.Canvas := canvas.new(64, 48)
+    canvas.clear(c, canvas.rgb(1, 2, 3))
+    canvas.fill_rect(c, 4, 4, 10, 8, canvas.rgb(200, 0, 0))
+    canvas.fill_circle(c, 40, 24, 8, canvas.rgb(0, 200, 0))
+    canvas.fill_triangle(c, 4, 40, 20, 40, 12, 28, canvas.rgb(0, 0, 200))
+    canvas.line(c, 0, 47, 63, 47, canvas.rgb(9, 9, 9))
+    canvas.text(c, 20, 4, "Xe", canvas.rgb(255, 255, 255))
+    failed := failed + expect("rect", canvas.get(c, 8, 8) = canvas.rgb(200, 0, 0))
+    failed := failed + expect("circle", canvas.get(c, 40, 24) = canvas.rgb(0, 200, 0))
+    failed := failed + expect("triangle", canvas.get(c, 12, 38) = canvas.rgb(0, 0, 200))
+    failed := failed + expect("line", canvas.get(c, 30, 47) = canvas.rgb(9, 9, 9))
+    failed := failed + expect("background", canvas.get(c, 60, 10) = canvas.rgb(1, 2, 3))
+    failed := failed + expect("clip", canvas.get(c, 100, 100) = 0)
+    canvas.blend(c, 60, 10, canvas.rgb(255, 255, 255), 255)
+    failed := failed + expect("blend", canvas.get(c, 60, 10) = canvas.rgb(255, 255, 255))
+    // ---- images ----
+    failed := failed + expect("save png", image.save(c, "/tmp/xe_graphics_test.png") = 1)
+    failed := failed + expect("save bmp", image.save(c, "/tmp/xe_graphics_test.bmp") = 1)
+    failed := failed + expect("save ppm", image.save(c, "/tmp/xe_graphics_test.ppm") = 1)
+    var bmp: *canvas.Canvas := image.load("/tmp/xe_graphics_test.bmp")
+    var ppm: *canvas.Canvas := image.load("/tmp/xe_graphics_test.ppm")
+    failed := failed + expect("bmp round trip", canvas.get(bmp, 8, 8) = canvas.rgb(200, 0, 0) && canvas.get(bmp, 40, 24) = canvas.rgb(0, 200, 0) && bmp.width = 64 && bmp.height = 48)
+    failed := failed + expect("ppm round trip", canvas.get(ppm, 12, 38) = canvas.rgb(0, 0, 200) && ppm.width = 64)
+    // ---- 3D ----
+    var view: *canvas.Canvas := canvas.new(160, 120)
+    var r: *gfx3d.Renderer := gfx3d.new(view)
+    var cube: *gfx3d.Mesh := gfx3d.mesh_cube(2.0)
+    gfx3d.clear(r, canvas.rgb(0, 0, 0))
+    gfx3d.set_camera(r, 0.0, 0.0, 6.0, 0.0, 0.0, 0.0, 50.0)
+    var id: *[16]flt := gfx3d.mat4_identity()
+    gfx3d.draw_mesh(r, cube, id, canvas.rgb(200, 100, 50))
+    failed := failed + expect("3d center drawn", canvas.get(view, 80, 60) != 0)
+    failed := failed + expect("3d corner empty", canvas.get(view, 2, 2) = 0)
+    failed := failed + expect("3d triangles", r.triangles_drawn >= 2 && r.triangles_drawn <= 6)
+    failed := failed + expect("project", gfx3d.project(r, 0.0, 0.0, 0.0) = 1 && r.screen_x > 79.0 && r.screen_x < 81.0)
+    var a: gfx3d.Vec3 := gfx3d.vec3(1.0, 0.0, 0.0)
+    var b: gfx3d.Vec3 := gfx3d.vec3(0.0, 1.0, 0.0)
+    var cr: gfx3d.Vec3 := gfx3d.cross(a, b)
+    failed := failed + expect("cross", cr.z > 0.999 && cr.z < 1.001)
+    failed := failed + expect("dot", gfx3d.dot(a, b) = 0.0)
+    // ---- game ----
+    failed := failed + expect("rects", game.rects_overlap(0, 0, 10, 10, 5, 5, 10, 10) = 1 && game.rects_overlap(0, 0, 10, 10, 10, 0, 5, 5) = 0)
+    failed := failed + expect("circles", game.circles_overlap(0.0, 0.0, 5.0, 8.0, 0.0, 4.0) = 1)
+    var map: *game.TileMap := game.tilemap_new(10, 10, 16)
+    game.tilemap_set(map, 3, 2, 1)
+    failed := failed + expect("tilemap", game.tilemap_blocked(map, 48, 32, 8, 8) = 1 && game.tilemap_blocked(map, 0, 0, 8, 8) = 0)
+    var sparks: *game.Particles := game.particles_new(64, 255)
+    game.particles_burst(sparks, 10.0, 10.0, 20, 50.0, 1.0)
+    failed := failed + expect("particles", sparks.count = 20)
+    // ---- window (only when an X display is available) ----
+    var win: *window.Window := window.open("Xe graphics test", 120, 80)
+    if @win != 0 {
+        canvas.clear(win.canvas, canvas.rgb(10, 20, 30))
+        canvas.fill_rect(win.canvas, 10, 10, 20, 20, canvas.rgb(250, 100, 20))
+        window.present(win)
+        window.poll(win)
+        failed := failed + expect("window pixels", x11.get_pixel(win.display, 15, 15) = canvas.rgb(250, 100, 20) && x11.get_pixel(win.display, 100, 70) = canvas.rgb(10, 20, 30))
+        window.destroy(win)
+        writeln("window ok")
+    }
+    else { writeln("no display: window checks skipped") }
+    if failed = 0 { writeln("graphics ok") }
+    return failed
+end

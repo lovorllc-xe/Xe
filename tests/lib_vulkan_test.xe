@@ -1,0 +1,67 @@
+uses vulkan
+uses vkscene
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+// Runs a SPIR-V compute shader (tests/shaders/mandelbrot.spv) on the GPU and checks the result.
+fn main(): int
+begin
+    var failed: int := 0
+    var vk: *vulkan.Vulkan := vulkan.open("xe vulkan test")
+    if @vk = 0 {
+        writeln("no Vulkan device: vulkan checks skipped")
+        return 0
+    }
+    writeln("GPU ", vulkan.device_name(vk), " Vulkan ", vulkan.api_version(vk))
+    var w: int := 64
+    var h: int := 48
+    var out: *vulkan.Buffer := vulkan.buffer_new(vk, w * h * 4)
+    failed := failed + expect("buffer", @out != 0)
+    var path: string := "tests/shaders/mandelbrot.spv"
+    var job: *vulkan.Compute := vulkan.compute_new(vk, path, 1, 20)
+    if @job = 0 { job := vulkan.compute_new(vk, "shaders/mandelbrot.spv", 1, 20) }
+    if @job = 0 {
+        writeln("shader not found next to the tests: dispatch skipped")
+        vulkan.close(vk)
+        return failed
+    }
+    vulkan.compute_bind(vk, job, 0, out)
+    var push: *void := ffi.block(32)
+    ffi.put32(push, 0, w)
+    ffi.put32(push, 4, h)
+    ffi.put_float32(push, 8, -0.5)
+    ffi.put_float32(push, 12, 0.0)
+    ffi.put_float32(push, 16, 1.0)
+    failed := failed + expect("dispatch", vulkan.compute_run(vk, job, w / 8, h / 8, 1, push) = 0)
+    // the centre of the picture (c = -0.5 + 0i) is inside the set -> black, the far corner escapes quickly
+    var centre: int := ffi.get32(out.data, ((h / 2) * w + w / 2) * 4)
+    var corner: int := ffi.get32(out.data, 0)
+    failed := failed + expect("inside the set is black", centre = 0)
+    failed := failed + expect("outside the set is colored", corner != 0)
+    vulkan.compute_free(vk, job)
+    vulkan.buffer_free(vk, out)
+    // graphics: a lit cube rendered with the z-buffer; the middle of the frame is covered, the corner is background
+    var scene: *vkscene.Scene := vkscene.new(vk, 96, 64)
+    failed := failed + expect("scene", @scene != 0)
+    if @scene != 0 {
+        var cube: *vkscene.Model := vkscene.model(vk, gfx3d.mesh_cube(1.5), 1.0, 0.5, 0.2)
+        var identity: *[16]flt := gfx3d.mat4_identity()
+        vkscene.start(scene, 0.0, 0.0, 0.0)
+        vkscene.draw(scene, cube, identity, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 50.0)
+        failed := failed + expect("frame", vkscene.finish(scene) = 0)
+        failed := failed + expect("cube drawn", vulkan.pixel(scene.target, 48, 32) != 0)
+        failed := failed + expect("background kept", vulkan.pixel(scene.target, 2, 2) = 0)
+        vkscene.model_free(vk, cube)
+        vkscene.release(scene)
+    }
+    vulkan.close(vk)
+    if failed = 0 { writeln("vulkan ok") }
+    return failed
+end

@@ -1,6 +1,6 @@
 # Xe library index
 
-155 importable libraries. Add one with `uses name` at the top of a source file.
+165 importable libraries. Add one with `uses name` at the top of a source file.
 
 ## Containers
 
@@ -157,6 +157,21 @@
 | `inotify` | watch files and directories for changes (create, modify, delete, move). |
 | `epoll` | scalable I/O readiness notification (Linux epoll) for event loops and servers. |
 | `kvstore` | a small persistent key-value store. Writes append to a log file; opening replays it. |
+
+## Graphics, GUI and games
+
+| Library | What it does |
+|---|---|
+| `canvas` | a software pixel surface with 2D drawing - lines, rectangles, circles, triangles, |
+| `image` | load and save canvas pixels as PPM, BMP and PNG files (PNG is written uncompressed). |
+| `window` | open a window on Linux (X11 / XWayland), draw into its canvas, read the keyboard and mouse. |
+| `x11` | a pure-Xe X11 client. It speaks the X protocol over the display's Unix socket (no libX11/xcb): |
+| `gui` | an immediate-mode GUI toolkit. Widgets are plain function calls made every frame; |
+| `gfx3d` | a software 3D renderer - vectors, 4x4 matrices, meshes (cube, plane, sphere, torus, OBJ files), |
+| `game` | building blocks for 2D games - collision tests, tile maps, sprite sheets and animation, |
+| `vkscene` | GPU-rendered 3D scenes with Vulkan, ready to use. It bundles lit vertex/fragment shaders, uploads |
+| `vulkan` | Vulkan bindings written in Xe. The program links dynamically against the system Vulkan loader |
+| `ffi` | call C functions from shared libraries (Vulkan, libc, ...) and build C structs in raw memory. |
 
 ## Concurrency
 

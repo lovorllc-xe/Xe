@@ -42,7 +42,12 @@ end
 - **More intuitive pointers.** Record fields auto-dereference through pointers
   (`node.next`, not `(*node).next`); pointer locals live in registers;
   `*p`, `&x`, `@p` (address as an int, e.g. `@p = 0` for a null check).
-- **155 libraries** covering containers, math, text, encodings, hashing and
+- **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG/BMP/PPM), `window` + `x11`
+  (windows, keyboard, mouse over the X11 protocol, no libX11), `gui` (immediate-mode widgets), `gfx3d` (software 3D:
+  meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
+  `vulkan` (instance/device/buffers/compute/graphics pipelines/depth/render targets), `vkscene` (GPU-lit 3D
+  scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
+- **165 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -135,7 +140,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-155 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+165 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -143,6 +148,50 @@ text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 `mmapfile`), concurrency (`mutex`, `channel`, `waitgroup`, `parallel`),
 networking (`tcp`, `udp`, `dns`, `http`, `httpserver`) and more. Import with
 `uses name`. The index is [docs/libraries.md](docs/libraries.md).
+
+## Graphics, GUI and games
+
+```sh
+xe examples/gui_demo.xe && ./examples/gui_demo        # widgets: buttons, sliders, text box, list
+xe examples/cube3d.xe && ./examples/cube3d            # software 3D, mouse orbit
+xe examples/pong.xe && ./examples/pong                # 2D game
+xe examples/vulkan_3d.xe && ./examples/vulkan_3d      # the same kind of scene rendered by the GPU through Vulkan
+```
+
+```xe
+uses gui
+
+fn main(): int
+begin
+    var win: *window.Window := window.open("hello", 320, 200)
+    var ui: *gui.Gui := gui.new(win)
+    var clicks: int := 0
+    while window.is_open(win) {
+        window.poll(win)                       // events -> mouse, keyboard
+        gui.start(ui)
+        if gui.button(ui, 20, 20, 140, 30, "clicked " + str.number(clicks)) { clicks := clicks + 1 }
+        gui.finish(ui)                         // draw + present
+        window.limit_fps(win, 60)
+    }
+    return 0
+end
+```
+
+- **2D:** `canvas` draws pixels, lines, rectangles, circles, triangles, text (8x14 bitmap font), alpha
+  blending and sprites; `image` loads/saves PNG, BMP and PPM; `game` adds collisions, tile maps, animation,
+  particles and a fixed-timestep helper.
+- **3D:** `gfx3d` is a complete software renderer (vectors, 4x4 matrices, perspective camera, z-buffer, flat
+  shading, wireframes, cube/sphere/torus/plane generators, `.obj` loader).
+- **GUI:** `gui` is immediate-mode: widgets are function calls (`button`, `checkbox`, `radio`, `slider`,
+  `textbox`, `list`, `progress`, `panel`, auto-layout variants).
+- **Vulkan:** `vulkan` binds the core API directly (the compiler links `libvulkan.so.1` dynamically when a
+  library asks for it). It covers instance/GPU selection, devices and queues, memory and buffers, SPIR-V
+  shader modules, compute pipelines (`compute_new/bind/run`) and graphics (offscreen render targets with
+  depth, render passes, pipelines, vertex/index buffers, push constants, `frame_begin/draw/end`). `vkscene`
+  gives ready-made lit 3D rendering on the GPU. Compile shaders with `glslc`. Frames are read back into a
+  `canvas` and shown through `window`; **swapchain presentation directly to a window surface and textures /
+  descriptor sets for graphics pipelines are not implemented yet.**
+- Windows use X11 (also works on Wayland through XWayland). There is no audio library yet.
 
 ## Benchmarks
 

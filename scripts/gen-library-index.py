@@ -33,6 +33,7 @@ groups = [
  ("Encoding, hashing and crypto", "base64 base32 ascii85 hex varint uuid semver color sha256 sha1 md5 hmac checksum chacha20 securerandom crypto"),
  ("Compression", "compression lzss huffman inflate rle tar"),
  ("Files and operating system", "fs path os stat dir clock time datetime duration calendar cron cstr subprocess process tempfile signals tty sysinfo mmapfile argparse cli terminal slog log progress style sys syscall inotify epoll kvstore"),
+ ("Graphics, GUI and games", "canvas image window x11 gui gfx3d game vkscene vulkan ffi"),
  ("Concurrency", "threading atomic futex mutex condvar waitgroup semaphore channel once parallel ratelimit retry"),
  ("Networking", "net ip tcp udp dns mime http httpserver"),
  ("Data and testing", "json jsonx serde fsm arena heapstats bench assert test"),

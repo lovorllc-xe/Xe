@@ -16,7 +16,11 @@ Syntax is unchanged. The compiler, runtime and library set changed:
  - Names that match builtins (new, delete, read, write, free) cannot be used
    unqualified for module functions; call them as module.new().
  - xe --version / -v / -V prints the colored logo.
- - 155 libraries; see docs/libraries.md.
+ - 165 libraries; see docs/libraries.md. New: canvas, image, window, x11, gui, gfx3d, game, ffi, vulkan,
+   vkscene (2D/3D graphics, GUI widgets, games, Vulkan). Libraries can request shared objects with a line
+   comment "xe-link: NAME" at the start of a line; the program is then linked dynamically (vulkan.xel uses it).
+ - Programs exit with exit_group, so helper threads of loaded C libraries cannot keep a finished process alive.
+ - Functions with an empty body are emitted (they used to be missing at link time).
  - Parenthesised names such as (n) * 8 now parse correctly.
 
 A first description, complete language tutorial, and library reference

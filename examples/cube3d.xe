@@ -1,0 +1,70 @@
+// Spinning 3D scene rendered in software: cube, sphere, torus and a floor.
+// Mouse: drag to orbit the camera, wheel to zoom.   Esc quits.
+uses gfx3d
+uses window
+uses strconv
+
+fn main(): int
+begin
+    var win: *window.Window := window.open("Xe 3D", 640, 420)
+    if @win = 0 {
+        writeln("no display found (set DISPLAY)")
+        return 1
+    }
+    var limit: int := -1
+    if arg.count() > 0 { limit := strconv.parse_int(arg.get(0)) }
+    var r: *gfx3d.Renderer := gfx3d.new(win.canvas)
+    var cube: *gfx3d.Mesh := gfx3d.mesh_cube(1.2)
+    var ball: *gfx3d.Mesh := gfx3d.mesh_sphere(0.7, 16, 24)
+    var ring: *gfx3d.Mesh := gfx3d.mesh_torus(0.8, 0.28, 28, 16)
+    var floor: *gfx3d.Mesh := gfx3d.mesh_plane(10.0, 10)
+    var angle: flt := 0.0
+    var yaw: flt := 0.6
+    var pitch: flt := 0.45
+    var distance: flt := 6.0
+    var last_x: int := 0
+    var last_y: int := 0
+    var frames: int := 0
+    while window.is_open(win) && (limit < 0 || frames < limit) {
+        window.poll(win)
+        if window.key_pressed(win, window.key_escape()) = 1 { window.close(win) }
+        if window.mouse_down(win, 1) = 1 {
+            yaw := yaw - (win.mouse_x - last_x) * 0.01
+            pitch := pitch + (win.mouse_y - last_y) * 0.01
+            if pitch > 1.4 { pitch := 1.4 }
+            if pitch < -0.2 { pitch := -0.2 }
+        }
+        last_x := win.mouse_x
+        last_y := win.mouse_y
+        distance := distance - win.wheel * 0.4
+        if distance < 2.5 { distance := 2.5 }
+        angle := angle + window.delta_time(win) * 1.2
+        gfx3d.clear(r, canvas.rgb(16, 18, 30))
+        gfx3d.set_camera(r, distance * mathx.sin(yaw) * mathx.cos(pitch), distance * mathx.sin(pitch) + 0.5, distance * mathx.cos(yaw) * mathx.cos(pitch), 0.0, 0.3, 0.0, 55.0)
+        var down: *[16]flt := gfx3d.mat4_translate(0.0, -0.7, 0.0)
+        gfx3d.draw_mesh(r, floor, down, canvas.rgb(60, 85, 65))
+        var spin: *[16]flt := gfx3d.mat4_rot_y(angle)
+        var lift: *[16]flt := gfx3d.mat4_translate(-1.7, 0.0, 0.0)
+        var cube_model: *[16]flt := gfx3d.mat4_mul(lift, spin)
+        gfx3d.draw_mesh(r, cube, cube_model, canvas.rgb(225, 95, 65))
+        var ball_model: *[16]flt := gfx3d.mat4_translate(1.7, 0.0 + mathx.sin(angle * 2.0) * 0.3, 0.0)
+        gfx3d.draw_mesh(r, ball, ball_model, canvas.rgb(80, 150, 235))
+        var tilt: *[16]flt := gfx3d.mat4_rot_x(angle)
+        var back: *[16]flt := gfx3d.mat4_translate(0.0, 0.5, -2.2)
+        var ring_model: *[16]flt := gfx3d.mat4_mul(back, tilt)
+        gfx3d.draw_mesh(r, ring, ring_model, canvas.rgb(235, 195, 70))
+        canvas.text(win.canvas, 8, 6, "fps " + str.number(window.fps(win)) + "  triangles " + str.number(r.triangles_drawn), canvas.rgb(255, 255, 255))
+        window.present(win)
+        gfx3d.mat4_free(down)
+        gfx3d.mat4_free(spin)
+        gfx3d.mat4_free(lift)
+        gfx3d.mat4_free(cube_model)
+        gfx3d.mat4_free(ball_model)
+        gfx3d.mat4_free(tilt)
+        gfx3d.mat4_free(back)
+        gfx3d.mat4_free(ring_model)
+        window.limit_fps(win, 60)
+        frames := frames + 1
+    }
+    return 0
+end

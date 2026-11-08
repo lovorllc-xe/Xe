@@ -1,0 +1,244 @@
+// vkscene: GPU-rendered 3D scenes with Vulkan, ready to use. It bundles lit vertex/fragment shaders, uploads
+// `gfx3d` meshes to the GPU, and draws them with a z-buffer into an offscreen target that you copy into a
+// `canvas` (to show with `window`) or save with `image`.
+//
+//     var vk: *vulkan.Vulkan := vulkan.open("game")
+//     var scene: *vkscene.Scene := vkscene.new(vk, 640, 420)
+//     var cube: *vkscene.Model := vkscene.model(vk, gfx3d.mesh_cube(1.0), 0.9, 0.4, 0.3)
+//     // every frame:
+//     vkscene.start(scene, 0.05, 0.06, 0.1)
+//     vkscene.draw(scene, cube, model_matrix, camera_position_x, y, z, target_x, y, z, 60.0)
+//     vkscene.finish(scene)
+//     vkscene.to_canvas(scene, win.canvas)
+uses vulkan
+uses gfx3d
+uses canvas
+
+module vkscene
+begin
+    type Scene: record
+    begin
+        vk: *vulkan.Vulkan
+        target: *vulkan.Target
+        pipeline: *vulkan.Pipeline
+        push: *void
+        width: int
+        height: int
+    end
+
+    type Model: record
+    begin
+        vertices: *vulkan.Buffer
+        count: int
+    end
+
+    fn hex_digit(c: int): int
+    begin
+        if c >= 97 { return c - 87 }
+        return c - 48
+    end
+
+    // Decodes a hex string into raw memory; returns the byte size through size_out[0].
+    fn decode(text: string, size_out: *[1]int): *void
+    begin
+        var bytes: int := str.length(text) / 2
+        var data: *void := alloc(bytes + 16)
+        var i: int := 0
+        while i < bytes {
+            runtime.hw.write8(data + i, hex_digit(str.char(text, i * 2)) * 16 + hex_digit(str.char(text, i * 2 + 1)))
+            i := i + 1
+        }
+        (*size_out)[0] := bytes
+        return data
+    end
+
+    fn vertex_spirv(): string
+    begin
+        var text: string := str.builder("")
+        text := str.append(text, "03022307000001000b000d00360000000000000011000200010000000b00060001000000474c534c2e7374642e343530")
+        text := str.append(text, "000000000e00030000000000010000000f000b0000000000040000006d61696e000000000d0000001900000024000000")
+        text := str.append(text, "2500000027000000330000000300030002000000c201000004000a00474c5f474f4f474c455f6370705f7374796c655f")
+        text := str.append(text, "6c696e655f646972656374697665000004000800474c5f474f4f474c455f696e636c7564655f64697265637469766500")
+        text := str.append(text, "05000400040000006d61696e00000000050006000b000000676c5f50657256657274657800000000060006000b000000")
+        text := str.append(text, "00000000676c5f506f736974696f6e00060007000b00000001000000676c5f506f696e7453697a650000000006000700")
+        text := str.append(text, "0b00000002000000676c5f436c697044697374616e636500060007000b00000003000000676c5f43756c6c4469737461")
+        text := str.append(text, "6e636500050003000d00000000000000050004001100000050757368000000000600040011000000000000006d767000")
+        text := str.append(text, "0600050011000000010000006d6f64656c000000050004001300000070757368000000000500050019000000706f7369")
+        text := str.append(text, "74696f6e0000000005000600240000007665727465785f636f6c6f72000000000500040025000000636f6c6f72000000")
+        text := str.append(text, "0500060027000000776f726c645f6e6f726d616c0000000005000400330000006e6f726d616c0000470003000b000000")
+        text := str.append(text, "02000000480005000b000000000000000b00000000000000480005000b000000010000000b0000000100000048000500")
+        text := str.append(text, "0b000000020000000b00000003000000480005000b000000030000000b00000004000000470003001100000002000000")
+        text := str.append(text, "480004001100000000000000050000004800050011000000000000000700000010000000480005001100000000000000")
+        text := str.append(text, "230000000000000048000400110000000100000005000000480005001100000001000000070000001000000048000500")
+        text := str.append(text, "1100000001000000230000004000000047000400190000001e0000000000000047000400240000001e00000000000000")
+        text := str.append(text, "47000400250000001e0000000200000047000400270000001e0000000100000047000400330000001e00000001000000")
+        text := str.append(text, "130002000200000021000300030000000200000016000300060000002000000017000400070000000600000004000000")
+        text := str.append(text, "150004000800000020000000000000002b0004000800000009000000010000001c0004000a0000000600000009000000")
+        text := str.append(text, "1e0006000b00000007000000060000000a0000000a000000200004000c000000030000000b0000003b0004000c000000")
+        text := str.append(text, "0d00000003000000150004000e00000020000000010000002b0004000e0000000f000000000000001800040010000000")
+        text := str.append(text, "07000000040000001e000400110000001000000010000000200004001200000009000000110000003b00040012000000")
+        text := str.append(text, "130000000900000020000400140000000900000010000000170004001700000006000000030000002000040018000000")
+        text := str.append(text, "01000000170000003b0004001800000019000000010000002b000400060000001b0000000000803f2000040021000000")
+        text := str.append(text, "0300000007000000200004002300000003000000170000003b0004002300000024000000030000003b00040018000000")
+        text := str.append(text, "25000000010000003b0004002300000027000000030000002b0004000e0000002800000001000000180004002b000000")
+        text := str.append(text, "17000000030000003b0004001800000033000000010000003600050002000000040000000000000003000000f8000200")
+        text := str.append(text, "05000000410005001400000015000000130000000f0000003d0004001000000016000000150000003d00040017000000")
+        text := str.append(text, "1a0000001900000051000500060000001c0000001a0000000000000051000500060000001d0000001a00000001000000")
+        text := str.append(text, "51000500060000001e0000001a0000000200000050000700070000001f0000001c0000001d0000001e0000001b000000")
+        text := str.append(text, "910005000700000020000000160000001f0000004100050021000000220000000d0000000f0000003e00030022000000")
+        text := str.append(text, "200000003d0004001700000026000000250000003e000300240000002600000041000500140000002900000013000000")
+        text := str.append(text, "280000003d000400100000002a0000002900000051000500070000002c0000002a000000000000004f00080017000000")
+        text := str.append(text, "2d0000002c0000002c00000000000000010000000200000051000500070000002e0000002a000000010000004f000800")
+        text := str.append(text, "170000002f0000002e0000002e0000000000000001000000020000005100050007000000300000002a00000002000000")
+        text := str.append(text, "4f00080017000000310000003000000030000000000000000100000002000000500006002b000000320000002d000000")
+        text := str.append(text, "2f000000310000003d00040017000000340000003300000091000500170000003500000032000000340000003e000300")
+        text := str.append(text, "2700000035000000fd00010038000100")
+        return text
+    end
+
+    fn fragment_spirv(): string
+    begin
+        var text: string := str.builder("")
+        text := str.append(text, "03022307000001000b000d00280000000000000011000200010000000b00060001000000474c534c2e7374642e343530")
+        text := str.append(text, "000000000e00030000000000010000000f00080004000000040000006d61696e00000000110000001a0000001b000000")
+        text := str.append(text, "1000030004000000070000000300030002000000c201000004000a00474c5f474f4f474c455f6370705f7374796c655f")
+        text := str.append(text, "6c696e655f646972656374697665000004000800474c5f474f4f474c455f696e636c7564655f64697265637469766500")
+        text := str.append(text, "05000400040000006d61696e0000000005000400090000006c69676874000000050004000f0000006469666675736500")
+        text := str.append(text, "0500060011000000776f726c645f6e6f726d616c00000000050005001a0000006f75745f636f6c6f7200000005000600")
+        text := str.append(text, "1b0000007665727465785f636f6c6f720000000047000400110000001e00000001000000470004001a0000001e000000")
+        text := str.append(text, "00000000470004001b0000001e0000000000000013000200020000002100030003000000020000001600030006000000")
+        text := str.append(text, "2000000017000400070000000600000003000000200004000800000007000000070000002b000400060000000a000000")
+        text := str.append(text, "45ddc73e2b000400060000000b00000045dd473f2b000400060000000c00000096d4f93e2c000600070000000d000000")
+        text := str.append(text, "0a0000000b0000000c000000200004000e0000000700000006000000200004001000000001000000070000003b000400")
+        text := str.append(text, "1000000011000000010000002b0004000600000016000000000000001700040018000000060000000400000020000400")
+        text := str.append(text, "1900000003000000180000003b000400190000001a000000030000003b000400100000001b000000010000002b000400")
+        text := str.append(text, "060000001d0000000000803e2b000400060000001e0000000000403f2b00040006000000230000000000803f36000500")
+        text := str.append(text, "02000000040000000000000003000000f8000200050000003b0004000800000009000000070000003b0004000e000000")
+        text := str.append(text, "0f000000070000003e000300090000000d0000003d0004000700000012000000110000000c0006000700000013000000")
+        text := str.append(text, "0100000045000000120000003d0004000700000014000000090000009400050006000000150000001300000014000000")
+        text := str.append(text, "0c0007000600000017000000010000002800000015000000160000003e0003000f000000170000003d00040007000000")
+        text := str.append(text, "1c0000001b0000003d000400060000001f0000000f0000008500050006000000200000001e0000001f00000081000500")
+        text := str.append(text, "06000000210000001d000000200000008e00050007000000220000001c00000021000000510005000600000024000000")
+        text := str.append(text, "220000000000000051000500060000002500000022000000010000005100050006000000260000002200000002000000")
+        text := str.append(text, "500007001800000027000000240000002500000026000000230000003e0003001a00000027000000fd00010038000100")
+        return text
+    end
+
+    // A drawing context of width x height pixels (uses its own render target and pipeline).
+    fn new(vk: *vulkan.Vulkan, width: int, height: int): *vkscene.Scene
+    begin
+        var none: *vkscene.Scene
+        var scene: *vkscene.Scene := alloc(64)
+        scene.vk := vk
+        scene.width := width
+        scene.height := height
+        scene.target := vulkan.target_new(vk, width, height, 1)
+        var sizes: *[1]int := alloc(16)
+        var vertex_code: *void := decode(vertex_spirv(), sizes)
+        var vertex_size: int := (*sizes)[0]
+        var fragment_code: *void := decode(fragment_spirv(), sizes)
+        var fragment_size: int := (*sizes)[0]
+        var attributes: *[8]int := alloc(64)
+        (*attributes)[0] := 3
+        (*attributes)[1] := 3
+        (*attributes)[2] := 3
+        scene.pipeline := vulkan.pipeline_from_memory(vk, scene.target, vertex_code, vertex_size, fragment_code, fragment_size, attributes, 3, 128, 1, 0)
+        free(vertex_code)
+        free(fragment_code)
+        free(sizes)
+        free(attributes)
+        if @scene.pipeline = 0 {
+            free(scene)
+            return none
+        }
+        scene.push := ffi.block(128)
+        return scene
+    end
+
+    fn release(scene: *vkscene.Scene)
+    begin
+        vulkan.pipeline_free(scene.vk, scene.pipeline)
+        vulkan.target_free(scene.vk, scene.target)
+        free(scene.push)
+        free(scene)
+    end
+
+    fn add_vertex(buffer: *vulkan.Buffer, index: int, x: flt, y: flt, z: flt, nx: flt, ny: flt, nz: flt, r: flt, g: flt, b: flt)
+    begin
+        var at: int := index * 36
+        ffi.put_float32(buffer.data, at, x)
+        ffi.put_float32(buffer.data, at + 4, y)
+        ffi.put_float32(buffer.data, at + 8, z)
+        ffi.put_float32(buffer.data, at + 12, nx)
+        ffi.put_float32(buffer.data, at + 16, ny)
+        ffi.put_float32(buffer.data, at + 20, nz)
+        ffi.put_float32(buffer.data, at + 24, r)
+        ffi.put_float32(buffer.data, at + 28, g)
+        ffi.put_float32(buffer.data, at + 32, b)
+    end
+
+    // Uploads a gfx3d mesh (flat-shaded: every triangle gets its own face normal) in one color (0.0 - 1.0).
+    fn model(vk: *vulkan.Vulkan, mesh: *gfx3d.Mesh, r: flt, g: flt, b: flt): *vkscene.Model
+    begin
+        var m: *vkscene.Model := alloc(32)
+        m.count := mesh.triangle_count * 3
+        m.vertices := vulkan.buffer_new(vk, m.count * 36 + 36)
+        var t: int := 0
+        while t < mesh.triangle_count {
+            var ia: int := (*mesh.indices)[t * 3] * 3
+            var ib: int := (*mesh.indices)[t * 3 + 1] * 3
+            var ic: int := (*mesh.indices)[t * 3 + 2] * 3
+            var pa: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ia], (*mesh.vertices)[ia + 1], (*mesh.vertices)[ia + 2])
+            var pb: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ib], (*mesh.vertices)[ib + 1], (*mesh.vertices)[ib + 2])
+            var pc: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ic], (*mesh.vertices)[ic + 1], (*mesh.vertices)[ic + 2])
+            var n: gfx3d.Vec3 := gfx3d.normalize(gfx3d.cross(gfx3d.vsub(pb, pa), gfx3d.vsub(pc, pa)))
+            add_vertex(m.vertices, t * 3, pa.x, pa.y, pa.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(m.vertices, t * 3 + 1, pb.x, pb.y, pb.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(m.vertices, t * 3 + 2, pc.x, pc.y, pc.z, n.x, n.y, n.z, r, g, b)
+            t := t + 1
+        }
+        return m
+    end
+
+    fn model_free(vk: *vulkan.Vulkan, m: *vkscene.Model)
+    begin
+        vulkan.buffer_free(vk, m.vertices)
+        free(m)
+    end
+
+    // Begin a frame with the given background color (0.0 - 1.0).
+    fn start(scene: *vkscene.Scene, r: flt, g: flt, b: flt)
+    begin
+        vulkan.frame_begin(scene.vk, scene.target, r, g, b)
+    end
+
+    // Draw a model transformed by `model_matrix` (a gfx3d mat4) seen from a camera looking at a target.
+    fn draw(scene: *vkscene.Scene, m: *vkscene.Model, model_matrix: *[16]flt, eye_x: flt, eye_y: flt, eye_z: flt, target_x: flt, target_y: flt, target_z: flt, fov_degrees: flt)
+    begin
+        var aspect: flt := scene.width * 1.0 / scene.height
+        var view: *[16]flt := gfx3d.mat4_look_at(gfx3d.vec3(eye_x, eye_y, eye_z), gfx3d.vec3(target_x, target_y, target_z), gfx3d.vec3(0.0, 1.0, 0.0))
+        var projection: *[16]flt := gfx3d.mat4_perspective(gfx3d.radians(fov_degrees), aspect, 0.1, 100.0)
+        gfx3d.mat4_to_vulkan(projection)
+        var view_model: *[16]flt := gfx3d.mat4_mul(view, model_matrix)
+        var mvp: *[16]flt := gfx3d.mat4_mul(projection, view_model)
+        gfx3d.mat4_push(mvp, scene.push, 0)
+        gfx3d.mat4_push(model_matrix, scene.push, 64)
+        vulkan.frame_draw(scene.vk, scene.pipeline, m.vertices, m.count, scene.push)
+        gfx3d.mat4_free(view)
+        gfx3d.mat4_free(projection)
+        gfx3d.mat4_free(view_model)
+        gfx3d.mat4_free(mvp)
+    end
+
+    // Finish the frame: runs it on the GPU and waits. Returns 0 on success.
+    fn finish(scene: *vkscene.Scene): int
+    begin
+        return vulkan.frame_end(scene.vk, scene.target)
+    end
+
+    // Copy the finished frame into a canvas of at least the same size.
+    fn to_canvas(scene: *vkscene.Scene, cv: *canvas.Canvas)
+    begin
+        vulkan.read_pixels(scene.target, cv.pixels, cv.width)
+    end
+end

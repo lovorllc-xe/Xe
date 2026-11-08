@@ -294,9 +294,35 @@ begin
         return name
     end
 
-    fn linkCommand(output: string, assembly: string, object: string, target: int, keep: int): string
+    // A library can ask for a shared object with a line comment of the form "xe-link: NAME" at the
+    // start of a line (see libraries/vulkan.xel). The program is then linked dynamically (the system
+    // loader starts it) against those objects.
+    fn sharedLibraries(source: string): string
     begin
-        var command: string := "as -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object)
+        var marker: string := "/" + "/ xe-link: "
+        var found: string := ""
+        var at: int := str.find(source, marker)
+        var seen: int := 0
+        while at >= 0 && seen < 16 {
+            var atLineStart: int := 1
+            if at > 0 && str.char(source, at - 1) != 10 { atLineStart := 0 }
+            var start: int := at + str.length(marker)
+            var finish: int := start
+            while finish < str.length(source) && str.char(source, finish) > 32 { finish := finish + 1 }
+            var name: string := str.slice(source, start, finish)
+            if atLineStart = 1 && str.length(name) > 0 && str.find(found, " -l:" + name + " ") < 0 { found := found + " -l:" + name + " " }
+            var rest: int := str.find(str.slice(source, finish, str.length(source)), marker)
+            if rest < 0 { at := -1 }
+            else { at := finish + rest }
+            seen := seen + 1
+        }
+        if str.length(found) = 0 { return "" }
+        return " -dynamic-linker /lib64/ld-linux-x86-64.so.2 -L/usr/lib -L/usr/lib64 -L/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu " + found
+    end
+
+    fn linkCommand(output: string, assembly: string, object: string, target: int, keep: int, shared: string): string
+    begin
+        var command: string := "as -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object) + shared
         if target = 1 || target = 4 { command := "nasm -f elf64 -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object) }
         if target = 2 {
             var definitions: string := output + ".def"
@@ -458,7 +484,7 @@ begin
         }
         var result: int := compile(source, assembly, target)
         if result != 0 { return result }
-        result := process.run(linkCommand(output, assembly, object, target, keep))
+        result := process.run(linkCommand(output, assembly, object, target, keep, sharedLibraries(source)))
         var elapsed: int := nanoseconds() - started
         if result != 0 { return err("error: assembling or linking failed (exit status " + str.number(result) + ")") }
         if runAfter = 1 {

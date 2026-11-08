@@ -38,10 +38,21 @@ if ((${#test_files[@]} == 0)); then
     exit 1
 fi
 
+have_vulkan=0
+for dir in /usr/lib /usr/lib64 /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu; do
+    [[ -e "$dir/libvulkan.so.1" ]] && have_vulkan=1
+done
+
 passed=0
 failed=0
+skipped=0
 for source_file in "${test_files[@]}"; do
     test_name="$(basename -- "$source_file")"
+    if [[ "$test_name" == lib_vulkan_test.xe && $have_vulkan -eq 0 ]]; then
+        printf '[SKIPPED] %s — libvulkan.so.1 is not installed\n' "$test_name"
+        skipped=$((skipped + 1))
+        continue
+    fi
     executable="$temp_dir/${test_name%.xe}.xee"
     build_log="$temp_dir/${test_name}.build.log"
     run_log="$temp_dir/${test_name}.run.log"
@@ -89,5 +100,5 @@ for source_file in "${test_files[@]}"; do
     passed=$((passed + 1))
 done
 
-printf '\nTests: %d passed, %d failed\n' "$passed" "$failed"
+printf '\nTests: %d passed, %d failed, %d skipped\n' "$passed" "$failed" "$skipped"
 ((failed == 0))

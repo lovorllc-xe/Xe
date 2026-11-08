@@ -1,0 +1,186 @@
+// vkscene: GPU-rendered 3D scenes with Vulkan, ready to use. It bundles lit vertex/fragment shaders, uploads
+// `gfx3d` meshes to the GPU, and draws them with a z-buffer into an offscreen target that you copy into a
+// `canvas` (to show with `window`) or save with `image`.
+//
+//     var vk: *vulkan.Vulkan := vulkan.open("game")
+//     var scene: *vkscene.Scene := vkscene.new(vk, 640, 420)
+//     var cube: *vkscene.Model := vkscene.model(vk, gfx3d.mesh_cube(1.0), 0.9, 0.4, 0.3)
+//     // every frame:
+//     vkscene.start(scene, 0.05, 0.06, 0.1)
+//     vkscene.draw(scene, cube, model_matrix, camera_position_x, y, z, target_x, y, z, 60.0)
+//     vkscene.finish(scene)
+//     vkscene.to_canvas(scene, win.canvas)
+uses vulkan
+uses gfx3d
+uses canvas
+
+module vkscene
+begin
+    type Scene: record
+    begin
+        vk: *vulkan.Vulkan
+        target: *vulkan.Target
+        pipeline: *vulkan.Pipeline
+        push: *void
+        width: int
+        height: int
+    end
+
+    type Model: record
+    begin
+        vertices: *vulkan.Buffer
+        count: int
+    end
+
+    fn hex_digit(c: int): int
+    begin
+        if c >= 97 { return c - 87 }
+        return c - 48
+    end
+
+    // Decodes a hex string into raw memory; returns the byte size through size_out[0].
+    fn decode(text: string, size_out: *[1]int): *void
+    begin
+        var bytes: int := str.length(text) / 2
+        var data: *void := alloc(bytes + 16)
+        var i: int := 0
+        while i < bytes {
+            runtime.hw.write8(data + i, hex_digit(str.char(text, i * 2)) * 16 + hex_digit(str.char(text, i * 2 + 1)))
+            i := i + 1
+        }
+        (*size_out)[0] := bytes
+        return data
+    end
+
+    fn vertex_spirv(): string
+    begin
+        var text: string := str.builder("")
+@@VERT@@
+        return text
+    end
+
+    fn fragment_spirv(): string
+    begin
+        var text: string := str.builder("")
+@@FRAG@@
+        return text
+    end
+
+    // A drawing context of width x height pixels (uses its own render target and pipeline).
+    fn new(vk: *vulkan.Vulkan, width: int, height: int): *vkscene.Scene
+    begin
+        var none: *vkscene.Scene
+        var scene: *vkscene.Scene := alloc(64)
+        scene.vk := vk
+        scene.width := width
+        scene.height := height
+        scene.target := vulkan.target_new(vk, width, height, 1)
+        var sizes: *[1]int := alloc(16)
+        var vertex_code: *void := decode(vertex_spirv(), sizes)
+        var vertex_size: int := (*sizes)[0]
+        var fragment_code: *void := decode(fragment_spirv(), sizes)
+        var fragment_size: int := (*sizes)[0]
+        var attributes: *[8]int := alloc(64)
+        (*attributes)[0] := 3
+        (*attributes)[1] := 3
+        (*attributes)[2] := 3
+        scene.pipeline := vulkan.pipeline_from_memory(vk, scene.target, vertex_code, vertex_size, fragment_code, fragment_size, attributes, 3, 128, 1, 0)
+        free(vertex_code)
+        free(fragment_code)
+        free(sizes)
+        free(attributes)
+        if @scene.pipeline = 0 {
+            free(scene)
+            return none
+        }
+        scene.push := ffi.block(128)
+        return scene
+    end
+
+    fn release(scene: *vkscene.Scene)
+    begin
+        vulkan.pipeline_free(scene.vk, scene.pipeline)
+        vulkan.target_free(scene.vk, scene.target)
+        free(scene.push)
+        free(scene)
+    end
+
+    fn add_vertex(buffer: *vulkan.Buffer, index: int, x: flt, y: flt, z: flt, nx: flt, ny: flt, nz: flt, r: flt, g: flt, b: flt)
+    begin
+        var at: int := index * 36
+        ffi.put_float32(buffer.data, at, x)
+        ffi.put_float32(buffer.data, at + 4, y)
+        ffi.put_float32(buffer.data, at + 8, z)
+        ffi.put_float32(buffer.data, at + 12, nx)
+        ffi.put_float32(buffer.data, at + 16, ny)
+        ffi.put_float32(buffer.data, at + 20, nz)
+        ffi.put_float32(buffer.data, at + 24, r)
+        ffi.put_float32(buffer.data, at + 28, g)
+        ffi.put_float32(buffer.data, at + 32, b)
+    end
+
+    // Uploads a gfx3d mesh (flat-shaded: every triangle gets its own face normal) in one color (0.0 - 1.0).
+    fn model(vk: *vulkan.Vulkan, mesh: *gfx3d.Mesh, r: flt, g: flt, b: flt): *vkscene.Model
+    begin
+        var m: *vkscene.Model := alloc(32)
+        m.count := mesh.triangle_count * 3
+        m.vertices := vulkan.buffer_new(vk, m.count * 36 + 36)
+        var t: int := 0
+        while t < mesh.triangle_count {
+            var ia: int := (*mesh.indices)[t * 3] * 3
+            var ib: int := (*mesh.indices)[t * 3 + 1] * 3
+            var ic: int := (*mesh.indices)[t * 3 + 2] * 3
+            var pa: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ia], (*mesh.vertices)[ia + 1], (*mesh.vertices)[ia + 2])
+            var pb: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ib], (*mesh.vertices)[ib + 1], (*mesh.vertices)[ib + 2])
+            var pc: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ic], (*mesh.vertices)[ic + 1], (*mesh.vertices)[ic + 2])
+            var n: gfx3d.Vec3 := gfx3d.normalize(gfx3d.cross(gfx3d.vsub(pb, pa), gfx3d.vsub(pc, pa)))
+            add_vertex(m.vertices, t * 3, pa.x, pa.y, pa.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(m.vertices, t * 3 + 1, pb.x, pb.y, pb.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(m.vertices, t * 3 + 2, pc.x, pc.y, pc.z, n.x, n.y, n.z, r, g, b)
+            t := t + 1
+        }
+        return m
+    end
+
+    fn model_free(vk: *vulkan.Vulkan, m: *vkscene.Model)
+    begin
+        vulkan.buffer_free(vk, m.vertices)
+        free(m)
+    end
+
+    // Begin a frame with the given background color (0.0 - 1.0).
+    fn start(scene: *vkscene.Scene, r: flt, g: flt, b: flt)
+    begin
+        vulkan.frame_begin(scene.vk, scene.target, r, g, b)
+    end
+
+    // Draw a model transformed by `model_matrix` (a gfx3d mat4) seen from a camera looking at a target.
+    fn draw(scene: *vkscene.Scene, m: *vkscene.Model, model_matrix: *[16]flt, eye_x: flt, eye_y: flt, eye_z: flt, target_x: flt, target_y: flt, target_z: flt, fov_degrees: flt)
+    begin
+        var aspect: flt := scene.width * 1.0 / scene.height
+        var view: *[16]flt := gfx3d.mat4_look_at(gfx3d.vec3(eye_x, eye_y, eye_z), gfx3d.vec3(target_x, target_y, target_z), gfx3d.vec3(0.0, 1.0, 0.0))
+        var projection: *[16]flt := gfx3d.mat4_perspective(gfx3d.radians(fov_degrees), aspect, 0.1, 100.0)
+        gfx3d.mat4_to_vulkan(projection)
+        var view_model: *[16]flt := gfx3d.mat4_mul(view, model_matrix)
+        var mvp: *[16]flt := gfx3d.mat4_mul(projection, view_model)
+        gfx3d.mat4_push(mvp, scene.push, 0)
+        gfx3d.mat4_push(model_matrix, scene.push, 64)
+        vulkan.frame_draw(scene.vk, scene.pipeline, m.vertices, m.count, scene.push)
+        gfx3d.mat4_free(view)
+        gfx3d.mat4_free(projection)
+        gfx3d.mat4_free(view_model)
+        gfx3d.mat4_free(mvp)
+    end
+
+    // Finish the frame: runs it on the GPU and waits. Returns 0 on success.
+    fn finish(scene: *vkscene.Scene): int
+    begin
+        return vulkan.frame_end(scene.vk, scene.target)
+    end
+
+    // Copy the finished frame into a canvas of at least the same size.
+    fn to_canvas(scene: *vkscene.Scene, cv: *canvas.Canvas)
+    begin
+        vulkan.read_pixels(scene.target, cv.pixels, cv.width)
+    end
+end

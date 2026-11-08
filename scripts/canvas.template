@@ -1,0 +1,463 @@
+// canvas: a software pixel surface with 2D drawing - lines, rectangles, circles, triangles,
+// bitmap text, blitting with transparency and alpha blending. Colors are ints 0xRRGGBB.
+// Pair it with `window` (to show it), `image` (to save it) and `gui` (widgets).
+
+module canvas
+begin
+    type Canvas: record
+    begin
+        width: int
+        height: int
+        pixels: *[268435456]int
+        font: *[1400]int
+        clip_x0: int
+        clip_y0: int
+        clip_x1: int
+        clip_y1: int
+    end
+
+    fn rgb(r: int, g: int, b: int): int
+    begin
+        return ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)
+    end
+
+    fn red(color: int): int
+    begin
+        return (color >> 16) & 255
+    end
+
+    fn green(color: int): int
+    begin
+        return (color >> 8) & 255
+    end
+
+    fn blue(color: int): int
+    begin
+        return color & 255
+    end
+
+    fn mix(a: int, b: int, amount: int): int
+    begin
+        // amount 0..255: 0 gives a, 255 gives b
+        var inverse: int := 255 - amount
+        var r: int := (red(a) * inverse + red(b) * amount) / 255
+        var g: int := (green(a) * inverse + green(b) * amount) / 255
+        var bl: int := (blue(a) * inverse + blue(b) * amount) / 255
+        return rgb(r, g, bl)
+    end
+
+    fn hex_digit(c: int): int
+    begin
+        if c >= 97 { return c - 87 }
+        return c - 48
+    end
+
+    fn load_glyph(font: *[1400]int, glyph: int, hex: string)
+    begin
+        var row: int := 0
+        while row < 14 {
+            (*font)[glyph * 14 + row] := hex_digit(str.char(hex, row * 2)) * 16 + hex_digit(str.char(hex, row * 2 + 1))
+            row := row + 1
+        }
+    end
+
+    fn load_font(font: *[1400]int)
+    begin
+@@FONT@@
+    end
+
+    fn new(width: int, height: int): *canvas.Canvas
+    begin
+        var c: *canvas.Canvas := alloc(80)
+        var count: int := width * height
+        c.width := width
+        c.height := height
+        c.pixels := alloc(count * 8 + 8)
+        c.font := alloc(1400 * 8)
+        c.clip_x0 := 0
+        c.clip_y0 := 0
+        c.clip_x1 := width
+        c.clip_y1 := height
+        var i: int := 0
+        while i < count {
+            (*c.pixels)[i] := 0
+            i := i + 1
+        }
+        load_font(c.font)
+        return c
+    end
+
+    fn release(c: *canvas.Canvas)
+    begin
+        free(c.pixels)
+        free(c.font)
+        free(c)
+    end
+
+    fn set_clip(c: *canvas.Canvas, x: int, y: int, w: int, h: int)
+    begin
+        var x1: int := x + w
+        var y1: int := y + h
+        if x < 0 { x := 0 }
+        if y < 0 { y := 0 }
+        if x1 > c.width { x1 := c.width }
+        if y1 > c.height { y1 := c.height }
+        c.clip_x0 := x
+        c.clip_y0 := y
+        c.clip_x1 := x1
+        c.clip_y1 := y1
+    end
+
+    fn reset_clip(c: *canvas.Canvas)
+    begin
+        c.clip_x0 := 0
+        c.clip_y0 := 0
+        c.clip_x1 := c.width
+        c.clip_y1 := c.height
+    end
+
+    fn clear(c: *canvas.Canvas, color: int)
+    begin
+        var count: int := c.width * c.height
+        var i: int := 0
+        while i < count {
+            (*c.pixels)[i] := color
+            i := i + 1
+        }
+    end
+
+    fn set(c: *canvas.Canvas, x: int, y: int, color: int)
+    begin
+        if x < c.clip_x0 || y < c.clip_y0 || x >= c.clip_x1 || y >= c.clip_y1 { return }
+        (*c.pixels)[y * c.width + x] := color
+    end
+
+    fn get(c: *canvas.Canvas, x: int, y: int): int
+    begin
+        if x < 0 || y < 0 || x >= c.width || y >= c.height { return 0 }
+        return (*c.pixels)[y * c.width + x]
+    end
+
+    // Blend color over the pixel at (x, y); alpha is 0 (nothing) to 255 (opaque).
+    fn blend(c: *canvas.Canvas, x: int, y: int, color: int, alpha: int)
+    begin
+        if x < c.clip_x0 || y < c.clip_y0 || x >= c.clip_x1 || y >= c.clip_y1 { return }
+        var index: int := y * c.width + x
+        (*c.pixels)[index] := mix((*c.pixels)[index], color, alpha)
+    end
+
+    fn hline(c: *canvas.Canvas, x0: int, x1: int, y: int, color: int)
+    begin
+        if y < c.clip_y0 || y >= c.clip_y1 { return }
+        var a: int := x0
+        var b: int := x1
+        if a > b {
+            a := x1
+            b := x0
+        }
+        if a < c.clip_x0 { a := c.clip_x0 }
+        if b >= c.clip_x1 { b := c.clip_x1 - 1 }
+        var row: int := y * c.width
+        while a <= b {
+            (*c.pixels)[row + a] := color
+            a := a + 1
+        }
+    end
+
+    fn vline(c: *canvas.Canvas, x: int, y0: int, y1: int, color: int)
+    begin
+        if x < c.clip_x0 || x >= c.clip_x1 { return }
+        var a: int := y0
+        var b: int := y1
+        if a > b {
+            a := y1
+            b := y0
+        }
+        if a < c.clip_y0 { a := c.clip_y0 }
+        if b >= c.clip_y1 { b := c.clip_y1 - 1 }
+        while a <= b {
+            (*c.pixels)[a * c.width + x] := color
+            a := a + 1
+        }
+    end
+
+    fn line(c: *canvas.Canvas, x0: int, y0: int, x1: int, y1: int, color: int)
+    begin
+        var dx: int := x1 - x0
+        var dy: int := y1 - y0
+        var sx: int := 1
+        var sy: int := 1
+        if dx < 0 {
+            dx := 0 - dx
+            sx := -1
+        }
+        if dy < 0 {
+            dy := 0 - dy
+            sy := -1
+        }
+        var err: int := dx - dy
+        var x: int := x0
+        var y: int := y0
+        var running: int := 1
+        while running = 1 {
+            set(c, x, y, color)
+            if x = x1 && y = y1 { running := 0 }
+            else {
+                var e2: int := err * 2
+                if e2 > 0 - dy {
+                    err := err - dy
+                    x := x + sx
+                }
+                if e2 < dx {
+                    err := err + dx
+                    y := y + sy
+                }
+            }
+        }
+    end
+
+    fn thick_line(c: *canvas.Canvas, x0: int, y0: int, x1: int, y1: int, width: int, color: int)
+    begin
+        var half: int := width / 2
+        var ox: int := 0 - half
+        while ox <= half {
+            var oy: int := 0 - half
+            while oy <= half {
+                line(c, x0 + ox, y0 + oy, x1 + ox, y1 + oy, color)
+                oy := oy + 1
+            }
+            ox := ox + 1
+        }
+    end
+
+    fn fill_rect(c: *canvas.Canvas, x: int, y: int, w: int, h: int, color: int)
+    begin
+        var row: int := 0
+        while row < h {
+            hline(c, x, x + w - 1, y + row, color)
+            row := row + 1
+        }
+    end
+
+    fn rect(c: *canvas.Canvas, x: int, y: int, w: int, h: int, color: int)
+    begin
+        hline(c, x, x + w - 1, y, color)
+        hline(c, x, x + w - 1, y + h - 1, color)
+        vline(c, x, y, y + h - 1, color)
+        vline(c, x + w - 1, y, y + h - 1, color)
+    end
+
+    fn blend_rect(c: *canvas.Canvas, x: int, y: int, w: int, h: int, color: int, alpha: int)
+    begin
+        var row: int := 0
+        while row < h {
+            var col: int := 0
+            while col < w {
+                blend(c, x + col, y + row, color, alpha)
+                col := col + 1
+            }
+            row := row + 1
+        }
+    end
+
+    fn round_rect(c: *canvas.Canvas, x: int, y: int, w: int, h: int, radius: int, color: int)
+    begin
+        fill_rect(c, x + radius, y, w - radius * 2, h, color)
+        fill_rect(c, x, y + radius, radius, h - radius * 2, color)
+        fill_rect(c, x + w - radius, y + radius, radius, h - radius * 2, color)
+        fill_circle(c, x + radius, y + radius, radius, color)
+        fill_circle(c, x + w - radius - 1, y + radius, radius, color)
+        fill_circle(c, x + radius, y + h - radius - 1, radius, color)
+        fill_circle(c, x + w - radius - 1, y + h - radius - 1, radius, color)
+    end
+
+    fn circle(c: *canvas.Canvas, cx: int, cy: int, radius: int, color: int)
+    begin
+        var x: int := radius
+        var y: int := 0
+        var err: int := 1 - radius
+        while x >= y {
+            set(c, cx + x, cy + y, color)
+            set(c, cx - x, cy + y, color)
+            set(c, cx + x, cy - y, color)
+            set(c, cx - x, cy - y, color)
+            set(c, cx + y, cy + x, color)
+            set(c, cx - y, cy + x, color)
+            set(c, cx + y, cy - x, color)
+            set(c, cx - y, cy - x, color)
+            y := y + 1
+            if err < 0 { err := err + 2 * y + 1 }
+            else {
+                x := x - 1
+                err := err + 2 * (y - x) + 1
+            }
+        }
+    end
+
+    fn fill_circle(c: *canvas.Canvas, cx: int, cy: int, radius: int, color: int)
+    begin
+        var dy: int := 0 - radius
+        while dy <= radius {
+            var span: int := 0
+            while (span + 1) * (span + 1) + dy * dy <= radius * radius { span := span + 1 }
+            if span * span + dy * dy <= radius * radius { hline(c, cx - span, cx + span, cy + dy, color) }
+            dy := dy + 1
+        }
+    end
+
+    fn edge(ax: int, ay: int, bx: int, by: int, px: int, py: int): int
+    begin
+        return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+    end
+
+    fn fill_triangle(c: *canvas.Canvas, x0: int, y0: int, x1: int, y1: int, x2: int, y2: int, color: int)
+    begin
+        var minx: int := x0
+        var maxx: int := x0
+        var miny: int := y0
+        var maxy: int := y0
+        if x1 < minx { minx := x1 }
+        if x2 < minx { minx := x2 }
+        if x1 > maxx { maxx := x1 }
+        if x2 > maxx { maxx := x2 }
+        if y1 < miny { miny := y1 }
+        if y2 < miny { miny := y2 }
+        if y1 > maxy { maxy := y1 }
+        if y2 > maxy { maxy := y2 }
+        if minx < c.clip_x0 { minx := c.clip_x0 }
+        if miny < c.clip_y0 { miny := c.clip_y0 }
+        if maxx >= c.clip_x1 { maxx := c.clip_x1 - 1 }
+        if maxy >= c.clip_y1 { maxy := c.clip_y1 - 1 }
+        var area: int := edge(x0, y0, x1, y1, x2, y2)
+        if area = 0 { return }
+        var y: int := miny
+        while y <= maxy {
+            var x: int := minx
+            while x <= maxx {
+                var w0: int := edge(x1, y1, x2, y2, x, y)
+                var w1: int := edge(x2, y2, x0, y0, x, y)
+                var w2: int := edge(x0, y0, x1, y1, x, y)
+                var inside: int := 0
+                if area > 0 && w0 >= 0 && w1 >= 0 && w2 >= 0 { inside := 1 }
+                if area < 0 && w0 <= 0 && w1 <= 0 && w2 <= 0 { inside := 1 }
+                if inside = 1 { (*c.pixels)[y * c.width + x] := color }
+                x := x + 1
+            }
+            y := y + 1
+        }
+    end
+
+    fn triangle(c: *canvas.Canvas, x0: int, y0: int, x1: int, y1: int, x2: int, y2: int, color: int)
+    begin
+        line(c, x0, y0, x1, y1, color)
+        line(c, x1, y1, x2, y2, color)
+        line(c, x2, y2, x0, y0, color)
+    end
+
+    fn text_width(text: string): int
+    begin
+        return str.length(text) * 8
+    end
+
+    fn text_height(): int
+    begin
+        return 14
+    end
+
+    fn glyph(c: *canvas.Canvas, x: int, y: int, code: int, color: int, scale: int)
+    begin
+        if code < 32 || code > 126 { return }
+        var base: int := (code - 32) * 14
+        var row: int := 0
+        while row < 14 {
+            var bits: int := (*c.font)[base + row]
+            if bits != 0 {
+                var col: int := 0
+                while col < 8 {
+                    if ((bits >> (7 - col)) & 1) = 1 {
+                        if scale = 1 { set(c, x + col, y + row, color) }
+                        else { fill_rect(c, x + col * scale, y + row * scale, scale, scale, color) }
+                    }
+                    col := col + 1
+                }
+            }
+            row := row + 1
+        }
+    end
+
+    fn text_scaled(c: *canvas.Canvas, x: int, y: int, message: string, color: int, scale: int)
+    begin
+        var i: int := 0
+        var cursor: int := x
+        while i < str.length(message) {
+            var code: int := str.char(message, i)
+            if code = 10 {
+                cursor := x
+                y := y + 14 * scale
+            }
+            else {
+                glyph(c, cursor, y, code, color, scale)
+                cursor := cursor + 8 * scale
+            }
+            i := i + 1
+        }
+    end
+
+    fn text(c: *canvas.Canvas, x: int, y: int, message: string, color: int)
+    begin
+        text_scaled(c, x, y, message, color, 1)
+    end
+
+    fn blit(dst: *canvas.Canvas, src: *canvas.Canvas, x: int, y: int)
+    begin
+        blit_region(dst, src, 0, 0, src.width, src.height, x, y, -1)
+    end
+
+    fn blit_key(dst: *canvas.Canvas, src: *canvas.Canvas, x: int, y: int, key: int)
+    begin
+        blit_region(dst, src, 0, 0, src.width, src.height, x, y, key)
+    end
+
+    // Copy the w x h region at (sx, sy) of src to (dx, dy); pixels equal to key (>= 0) are skipped.
+    fn blit_region(dst: *canvas.Canvas, src: *canvas.Canvas, sx: int, sy: int, w: int, h: int, dx: int, dy: int, key: int)
+    begin
+        var row: int := 0
+        while row < h {
+            var col: int := 0
+            while col < w {
+                var pixel: int := get(src, sx + col, sy + row)
+                if pixel != key { set(dst, dx + col, dy + row, pixel) }
+                col := col + 1
+            }
+            row := row + 1
+        }
+    end
+
+    fn copy(src: *canvas.Canvas): *canvas.Canvas
+    begin
+        var result: *canvas.Canvas := canvas.new(src.width, src.height)
+        var count: int := src.width * src.height
+        var i: int := 0
+        while i < count {
+            (*result.pixels)[i] := (*src.pixels)[i]
+            i := i + 1
+        }
+        return result
+    end
+
+    // Nearest-neighbour resize into a new canvas.
+    fn scaled(src: *canvas.Canvas, w: int, h: int): *canvas.Canvas
+    begin
+        var result: *canvas.Canvas := canvas.new(w, h)
+        var y: int := 0
+        while y < h {
+            var x: int := 0
+            while x < w {
+                (*result.pixels)[y * w + x] := get(src, x * src.width / w, y * src.height / h)
+                x := x + 1
+            }
+            y := y + 1
+        }
+        return result
+    end
+end

@@ -1,0 +1,409 @@
+// gui: an immediate-mode GUI toolkit. Widgets are plain function calls made every frame;
+// they draw themselves on the window's canvas and return what the user did.
+//
+//     var ui: *gui.Gui := gui.new(win)
+//     var volume: int := 50
+//     while window.is_open(win) {
+//         window.poll(win)
+//         gui.start(ui)                                   // clears and resets layout
+//         gui.panel(ui, 10, 10, 220, 160, "Settings")
+//         if gui.button(ui, 24, 44, 90, 26, "Reset") { volume := 50 }
+//         gui.slider(ui, 24, 84, 180, &volume, 0, 100)
+//         gui.label(ui, 24, 120, "volume " + str.number(volume))
+//         gui.finish(ui)                                     // presents the frame
+//         window.limit_fps(win, 60)
+//     }
+// There is also an auto-layout flavour (button_auto, label_auto, ...) that stacks widgets
+// down a column starting at gui.layout(ui, x, y, width).
+uses window
+uses canvas
+
+module gui
+begin
+    type Gui: record
+    begin
+        win: *window.Window
+        cv: *canvas.Canvas
+        next_id: int
+        hot: int
+        active: int
+        focus: int
+        cx: int
+        cy: int
+        cw: int
+        gap: int
+        background: int
+        panel_color: int
+        widget: int
+        widget_hot: int
+        widget_active: int
+        border: int
+        text_color: int
+        dim_color: int
+        accent: int
+        blink: int
+    end
+
+    type TextBuf: record
+    begin
+        data: *void
+        length: int
+        capacity: int
+    end
+
+    fn new(win: *window.Window): *gui.Gui
+    begin
+        var ui: *gui.Gui := alloc(256)
+        ui.win := win
+        ui.cv := win.canvas
+        ui.next_id := 0
+        ui.hot := 0
+        ui.active := 0
+        ui.focus := 0
+        ui.cx := 10
+        ui.cy := 10
+        ui.cw := 200
+        ui.gap := 6
+        ui.background := canvas.rgb(28, 30, 38)
+        ui.panel_color := canvas.rgb(40, 43, 54)
+        ui.widget := canvas.rgb(62, 67, 84)
+        ui.widget_hot := canvas.rgb(80, 87, 110)
+        ui.widget_active := canvas.rgb(45, 120, 200)
+        ui.border := canvas.rgb(90, 96, 120)
+        ui.text_color := canvas.rgb(235, 238, 245)
+        ui.dim_color := canvas.rgb(150, 156, 175)
+        ui.accent := canvas.rgb(70, 150, 240)
+        ui.blink := 0
+        return ui
+    end
+
+    fn release(ui: *gui.Gui)
+    begin
+        free(ui)
+    end
+
+    // Start a frame: clears the canvas and resets ids and layout. Call window.poll first.
+    fn start(ui: *gui.Gui)
+    begin
+        ui.cv := ui.win.canvas
+        ui.next_id := 0
+        ui.hot := 0
+        ui.blink := ui.blink + 1
+        canvas.clear(ui.cv, ui.background)
+        ui.cx := 10
+        ui.cy := 10
+        canvas.reset_clip(ui.cv)
+    end
+
+    // End the frame: shows it.
+    fn finish(ui: *gui.Gui)
+    begin
+        if ui.win.mouse_x < 0 { ui.active := 0 }
+        if window.mouse_down(ui.win, 1) = 0 { ui.active := 0 }
+        window.present(ui.win)
+    end
+
+    fn id(ui: *gui.Gui): int
+    begin
+        ui.next_id := ui.next_id + 1
+        return ui.next_id
+    end
+
+    fn inside(ui: *gui.Gui, x: int, y: int, w: int, h: int): int
+    begin
+        var mx: int := ui.win.mouse_x
+        var my: int := ui.win.mouse_y
+        if mx >= x && my >= y && mx < x + w && my < y + h { return 1 }
+        return 0
+    end
+
+    // Shared click logic: returns 1 on the frame the button is released over the widget.
+    fn press(ui: *gui.Gui, my_id: int, x: int, y: int, w: int, h: int): int
+    begin
+        var over: int := inside(ui, x, y, w, h)
+        if over = 1 { ui.hot := my_id }
+        if over = 1 && window.mouse_pressed(ui.win, 1) = 1 {
+            ui.active := my_id
+            ui.focus := 0
+        }
+        if window.mouse_released(ui.win, 1) = 1 && ui.active = my_id {
+            ui.active := 0
+            if over = 1 { return 1 }
+        }
+        return 0
+    end
+
+    fn label(ui: *gui.Gui, x: int, y: int, message: string)
+    begin
+        canvas.text(ui.cv, x, y, message, ui.text_color)
+    end
+
+    fn dim_label(ui: *gui.Gui, x: int, y: int, message: string)
+    begin
+        canvas.text(ui.cv, x, y, message, ui.dim_color)
+    end
+
+    fn panel(ui: *gui.Gui, x: int, y: int, w: int, h: int, title: string)
+    begin
+        canvas.round_rect(ui.cv, x, y, w, h, 6, ui.border)
+        canvas.round_rect(ui.cv, x + 1, y + 1, w - 2, h - 2, 6, ui.panel_color)
+        if str.length(title) > 0 {
+            canvas.text(ui.cv, x + 10, y + 6, title, ui.accent)
+            canvas.hline(ui.cv, x + 8, x + w - 9, y + 24, ui.border)
+        }
+    end
+
+    fn separator(ui: *gui.Gui, x: int, y: int, w: int)
+    begin
+        canvas.hline(ui.cv, x, x + w - 1, y, ui.border)
+    end
+
+    fn button(ui: *gui.Gui, x: int, y: int, w: int, h: int, caption: string): int
+    begin
+        var my_id: int := id(ui)
+        var clicked: int := press(ui, my_id, x, y, w, h)
+        var color: int := ui.widget
+        if ui.hot = my_id { color := ui.widget_hot }
+        if ui.active = my_id { color := ui.widget_active }
+        canvas.round_rect(ui.cv, x, y, w, h, 4, ui.border)
+        canvas.round_rect(ui.cv, x + 1, y + 1, w - 2, h - 2, 4, color)
+        var tx: int := x + (w - canvas.text_width(caption)) / 2
+        var ty: int := y + (h - canvas.text_height()) / 2
+        canvas.text(ui.cv, tx, ty, caption, ui.text_color)
+        return clicked
+    end
+
+    // state: pointer to an int that holds 0 or 1. Returns 1 when it was toggled this frame.
+    fn checkbox(ui: *gui.Gui, x: int, y: int, caption: string, state: *int): int
+    begin
+        var my_id: int := id(ui)
+        var w: int := 26 + canvas.text_width(caption)
+        var clicked: int := press(ui, my_id, x, y, w, 18)
+        if clicked = 1 {
+            if *state = 0 { *state := 1 }
+            else { *state := 0 }
+        }
+        var color: int := ui.widget
+        if ui.hot = my_id { color := ui.widget_hot }
+        canvas.fill_rect(ui.cv, x, y, 18, 18, ui.border)
+        canvas.fill_rect(ui.cv, x + 1, y + 1, 16, 16, color)
+        if *state != 0 { canvas.fill_rect(ui.cv, x + 4, y + 4, 10, 10, ui.accent) }
+        canvas.text(ui.cv, x + 26, y + 2, caption, ui.text_color)
+        return clicked
+    end
+
+    // A group of radio buttons shares one int; this one selects `value`.
+    fn radio(ui: *gui.Gui, x: int, y: int, caption: string, group: *int, value: int): int
+    begin
+        var my_id: int := id(ui)
+        var w: int := 26 + canvas.text_width(caption)
+        var clicked: int := press(ui, my_id, x, y, w, 18)
+        if clicked = 1 { *group := value }
+        var color: int := ui.widget
+        if ui.hot = my_id { color := ui.widget_hot }
+        canvas.fill_circle(ui.cv, x + 9, y + 9, 9, ui.border)
+        canvas.fill_circle(ui.cv, x + 9, y + 9, 8, color)
+        if *group = value { canvas.fill_circle(ui.cv, x + 9, y + 9, 4, ui.accent) }
+        canvas.text(ui.cv, x + 26, y + 2, caption, ui.text_color)
+        return clicked
+    end
+
+    // Horizontal slider for an int between low and high. Returns 1 while the value changes.
+    fn slider(ui: *gui.Gui, x: int, y: int, w: int, value: *int, low: int, high: int): int
+    begin
+        var my_id: int := id(ui)
+        var over: int := inside(ui, x, y, w, 18)
+        if over = 1 { ui.hot := my_id }
+        if over = 1 && window.mouse_pressed(ui.win, 1) = 1 {
+            ui.active := my_id
+            ui.focus := 0
+        }
+        var changed: int := 0
+        if ui.active = my_id && high > low {
+            var position: int := ui.win.mouse_x - x - 6
+            var span: int := w - 12
+            if position < 0 { position := 0 }
+            if position > span { position := span }
+            var next: int := low + position * (high - low) / span
+            if next != *value {
+                *value := next
+                changed := 1
+            }
+        }
+        canvas.fill_rect(ui.cv, x, y + 7, w, 4, ui.border)
+        var knob: int := 0
+        if high > low { knob := (*value - low) * (w - 12) / (high - low) }
+        var color: int := ui.widget_hot
+        if ui.active = my_id { color := ui.accent }
+        canvas.fill_rect(ui.cv, x, y + 7, knob + 6, 4, ui.accent)
+        canvas.round_rect(ui.cv, x + knob, y, 12, 18, 3, color)
+        return changed
+    end
+
+    fn progress(ui: *gui.Gui, x: int, y: int, w: int, h: int, value: int, high: int)
+    begin
+        canvas.fill_rect(ui.cv, x, y, w, h, ui.border)
+        canvas.fill_rect(ui.cv, x + 1, y + 1, w - 2, h - 2, ui.widget)
+        if high > 0 {
+            var filled: int := (w - 2) * value / high
+            if filled > w - 2 { filled := w - 2 }
+            canvas.fill_rect(ui.cv, x + 1, y + 1, filled, h - 2, ui.accent)
+        }
+    end
+
+    fn text_buffer(capacity: int): *gui.TextBuf
+    begin
+        var buf: *gui.TextBuf := alloc(32)
+        buf.data := alloc(capacity + 8)
+        buf.length := 0
+        buf.capacity := capacity
+        return buf
+    end
+
+    fn text_set(buf: *gui.TextBuf, value: string)
+    begin
+        buf.length := 0
+        var i: int := 0
+        while i < str.length(value) && buf.length < buf.capacity {
+            runtime.hw.write8(buf.data + buf.length, str.char(value, i))
+            buf.length := buf.length + 1
+            i := i + 1
+        }
+    end
+
+    fn text_get(buf: *gui.TextBuf): string
+    begin
+        var result: string := str.builder("")
+        var i: int := 0
+        while i < buf.length {
+            result := str.append(result, str.fromchar(runtime.hw.read8(buf.data + i)))
+            i := i + 1
+        }
+        return result
+    end
+
+    // A single-line text field. Click to focus, then type. Returns 1 when Enter was pressed in it.
+    fn textbox(ui: *gui.Gui, x: int, y: int, w: int, buf: *gui.TextBuf): int
+    begin
+        var my_id: int := id(ui)
+        var over: int := inside(ui, x, y, w, 24)
+        if over = 1 { ui.hot := my_id }
+        if over = 1 && window.mouse_pressed(ui.win, 1) = 1 { ui.focus := my_id }
+        if window.mouse_pressed(ui.win, 1) = 1 && over = 0 && ui.focus = my_id { ui.focus := 0 }
+        var entered: int := 0
+        if ui.focus = my_id {
+            var code: int := window.typed_char(ui.win)
+            while code != 0 {
+                if code = 8 {
+                    if buf.length > 0 { buf.length := buf.length - 1 }
+                }
+                else {
+                    if code = 10 { entered := 1 }
+                    else {
+                        if code >= 32 && code < 127 && buf.length < buf.capacity {
+                            runtime.hw.write8(buf.data + buf.length, code)
+                            buf.length := buf.length + 1
+                        }
+                    }
+                }
+                code := window.typed_char(ui.win)
+            }
+        }
+        var border: int := ui.border
+        if ui.focus = my_id { border := ui.accent }
+        canvas.fill_rect(ui.cv, x, y, w, 24, border)
+        canvas.fill_rect(ui.cv, x + 1, y + 1, w - 2, 22, canvas.rgb(20, 22, 28))
+        var shown: string := text_get(buf)
+        var max_chars: int := (w - 12) / 8
+        if str.length(shown) > max_chars { shown := str.slice(shown, str.length(shown) - max_chars, str.length(shown)) }
+        canvas.set_clip(ui.cv, x + 1, y + 1, w - 2, 22)
+        canvas.text(ui.cv, x + 6, y + 5, shown, ui.text_color)
+        if ui.focus = my_id && (ui.blink / 30) % 2 = 0 { canvas.fill_rect(ui.cv, x + 6 + str.length(shown) * 8, y + 4, 2, 16, ui.text_color) }
+        canvas.reset_clip(ui.cv)
+        return entered
+    end
+
+    // Items of a drop-down style list: draws the strings (separated by '|') and returns the clicked index or -1.
+    fn list(ui: *gui.Gui, x: int, y: int, w: int, items: string, selected: *int): int
+    begin
+        var clicked: int := -1
+        var start: int := 0
+        var index: int := 0
+        var n: int := str.length(items)
+        var i: int := 0
+        while i <= n {
+            if i = n || str.char(items, i) = 124 {
+                var caption: string := str.slice(items, start, i)
+                var my_id: int := id(ui)
+                var row_y: int := y + index * 24
+                var hit: int := press(ui, my_id, x, row_y, w, 22)
+                var color: int := ui.widget
+                if ui.hot = my_id { color := ui.widget_hot }
+                if *selected = index { color := ui.widget_active }
+                canvas.fill_rect(ui.cv, x, row_y, w, 22, color)
+                canvas.text(ui.cv, x + 8, row_y + 4, caption, ui.text_color)
+                if hit = 1 {
+                    *selected := index
+                    clicked := index
+                }
+                index := index + 1
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return clicked
+    end
+
+    // ---- auto layout ----------------------------------------------------------
+    fn layout(ui: *gui.Gui, x: int, y: int, width: int)
+    begin
+        ui.cx := x
+        ui.cy := y
+        ui.cw := width
+    end
+
+    fn space(ui: *gui.Gui, pixels: int)
+    begin
+        ui.cy := ui.cy + pixels
+    end
+
+    fn label_auto(ui: *gui.Gui, message: string)
+    begin
+        label(ui, ui.cx, ui.cy, message)
+        ui.cy := ui.cy + 14 + ui.gap
+    end
+
+    fn button_auto(ui: *gui.Gui, caption: string): int
+    begin
+        var clicked: int := button(ui, ui.cx, ui.cy, ui.cw, 26, caption)
+        ui.cy := ui.cy + 26 + ui.gap
+        return clicked
+    end
+
+    fn checkbox_auto(ui: *gui.Gui, caption: string, state: *int): int
+    begin
+        var changed: int := checkbox(ui, ui.cx, ui.cy, caption, state)
+        ui.cy := ui.cy + 18 + ui.gap
+        return changed
+    end
+
+    fn slider_auto(ui: *gui.Gui, value: *int, low: int, high: int): int
+    begin
+        var changed: int := slider(ui, ui.cx, ui.cy, ui.cw, value, low, high)
+        ui.cy := ui.cy + 18 + ui.gap
+        return changed
+    end
+
+    fn textbox_auto(ui: *gui.Gui, buf: *gui.TextBuf): int
+    begin
+        var entered: int := textbox(ui, ui.cx, ui.cy, ui.cw, buf)
+        ui.cy := ui.cy + 24 + ui.gap
+        return entered
+    end
+
+    fn separator_auto(ui: *gui.Gui)
+    begin
+        separator(ui, ui.cx, ui.cy + 2, ui.cw)
+        ui.cy := ui.cy + 6 + ui.gap
+    end
+end

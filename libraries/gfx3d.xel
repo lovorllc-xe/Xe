@@ -1,0 +1,754 @@
+// gfx3d: a software 3D renderer - vectors, 4x4 matrices, meshes (cube, plane, sphere, torus, OBJ files),
+// a perspective camera, z-buffer, flat shading with a directional light, and wireframes.
+// It draws into a `canvas`, so it works with `window`, `gui` and `image` unchanged.
+//
+//     var r: *gfx3d.Renderer := gfx3d.new(win.canvas)
+//     var cube: *gfx3d.Mesh := gfx3d.mesh_cube(1.0)
+//     gfx3d.set_camera(r, 0.0, 1.5, 4.0,  0.0, 0.0, 0.0,  60.0)
+//     gfx3d.clear(r, canvas.rgb(20, 20, 30))
+//     var model: *[16]flt := gfx3d.mat4_rot_y(angle)
+//     gfx3d.draw_mesh(r, cube, model, canvas.rgb(220, 90, 60))
+//     gfx3d.mat4_free(model)
+uses mathx
+uses canvas
+
+module gfx3d
+begin
+    type Vec3: record
+    begin
+        x: flt
+        y: flt
+        z: flt
+    end
+
+    type Mesh: record
+    begin
+        vertices: *[268435456]flt
+        indices: *[268435456]int
+        vertex_count: int
+        triangle_count: int
+        vertex_capacity: int
+        triangle_capacity: int
+    end
+
+    type Renderer: record
+    begin
+        target: *canvas.Canvas
+        depth: *[268435456]flt
+        view_proj: *[16]flt
+        eye: gfx3d.Vec3
+        light: gfx3d.Vec3
+        ambient: flt
+        fov: flt
+        near: flt
+        far: flt
+        screen_x: flt
+        screen_y: flt
+        triangles_drawn: int
+    end
+
+    // ---------------------------------------------------------------- vectors
+    fn vec3(x: flt, y: flt, z: flt): gfx3d.Vec3
+    begin
+        var v: gfx3d.Vec3
+        v.x := x
+        v.y := y
+        v.z := z
+        return v
+    end
+
+    fn vadd(a: gfx3d.Vec3, b: gfx3d.Vec3): gfx3d.Vec3
+    begin
+        return vec3(a.x + b.x, a.y + b.y, a.z + b.z)
+    end
+
+    fn vsub(a: gfx3d.Vec3, b: gfx3d.Vec3): gfx3d.Vec3
+    begin
+        return vec3(a.x - b.x, a.y - b.y, a.z - b.z)
+    end
+
+    fn vmul(a: gfx3d.Vec3, s: flt): gfx3d.Vec3
+    begin
+        return vec3(a.x * s, a.y * s, a.z * s)
+    end
+
+    fn dot(a: gfx3d.Vec3, b: gfx3d.Vec3): flt
+    begin
+        return a.x * b.x + a.y * b.y + a.z * b.z
+    end
+
+    fn cross(a: gfx3d.Vec3, b: gfx3d.Vec3): gfx3d.Vec3
+    begin
+        return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+    end
+
+    fn vlen(a: gfx3d.Vec3): flt
+    begin
+        return mathx.sqrt(dot(a, a))
+    end
+
+    fn normalize(a: gfx3d.Vec3): gfx3d.Vec3
+    begin
+        var length: flt := vlen(a)
+        if length < 0.000000001 { return vec3(0.0, 0.0, 0.0) }
+        return vmul(a, 1.0 / length)
+    end
+
+    // --------------------------------------------------------------- matrices
+    // 4x4 matrices are *[16]flt in row-major order and transform column vectors: p' = M * p.
+    fn mat4_new(): *[16]flt
+    begin
+        var m: *[16]flt := alloc(16 * 8)
+        var i: int := 0
+        while i < 16 {
+            (*m)[i] := 0.0
+            i := i + 1
+        }
+        return m
+    end
+
+    fn mat4_free(m: *[16]flt)
+    begin
+        free(m)
+    end
+
+    fn mat4_identity(): *[16]flt
+    begin
+        var m: *[16]flt := mat4_new()
+        (*m)[0] := 1.0
+        (*m)[5] := 1.0
+        (*m)[10] := 1.0
+        (*m)[15] := 1.0
+        return m
+    end
+
+    fn mat4_mul_into(out: *[16]flt, a: *[16]flt, b: *[16]flt)
+    begin
+        var row: int := 0
+        while row < 4 {
+            var col: int := 0
+            while col < 4 {
+                var sum: flt := 0.0
+                var k: int := 0
+                while k < 4 {
+                    sum := sum + (*a)[row * 4 + k] * (*b)[k * 4 + col]
+                    k := k + 1
+                }
+                (*out)[row * 4 + col] := sum
+                col := col + 1
+            }
+            row := row + 1
+        }
+    end
+
+    // a * b as a new matrix (apply b first, then a).
+    fn mat4_mul(a: *[16]flt, b: *[16]flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_new()
+        mat4_mul_into(m, a, b)
+        return m
+    end
+
+    fn mat4_translate(x: flt, y: flt, z: flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_identity()
+        (*m)[3] := x
+        (*m)[7] := y
+        (*m)[11] := z
+        return m
+    end
+
+    fn mat4_scale(x: flt, y: flt, z: flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_identity()
+        (*m)[0] := x
+        (*m)[5] := y
+        (*m)[10] := z
+        return m
+    end
+
+    fn mat4_rot_x(angle: flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_identity()
+        var c: flt := mathx.cos(angle)
+        var s: flt := mathx.sin(angle)
+        (*m)[5] := c
+        (*m)[6] := 0.0 - s
+        (*m)[9] := s
+        (*m)[10] := c
+        return m
+    end
+
+    fn mat4_rot_y(angle: flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_identity()
+        var c: flt := mathx.cos(angle)
+        var s: flt := mathx.sin(angle)
+        (*m)[0] := c
+        (*m)[2] := s
+        (*m)[8] := 0.0 - s
+        (*m)[10] := c
+        return m
+    end
+
+    fn mat4_rot_z(angle: flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_identity()
+        var c: flt := mathx.cos(angle)
+        var s: flt := mathx.sin(angle)
+        (*m)[0] := c
+        (*m)[1] := 0.0 - s
+        (*m)[4] := s
+        (*m)[5] := c
+        return m
+    end
+
+    // fov in radians, aspect = width / height.
+    fn mat4_perspective(fov: flt, aspect: flt, near: flt, far: flt): *[16]flt
+    begin
+        var m: *[16]flt := mat4_new()
+        var f: flt := 1.0 / mathx.tan(fov / 2.0)
+        (*m)[0] := f / aspect
+        (*m)[5] := f
+        (*m)[10] := (far + near) / (near - far)
+        (*m)[11] := 2.0 * far * near / (near - far)
+        (*m)[14] := 0.0 - 1.0
+        return m
+    end
+
+    fn mat4_look_at(eye: gfx3d.Vec3, target: gfx3d.Vec3, up: gfx3d.Vec3): *[16]flt
+    begin
+        var forward: gfx3d.Vec3 := normalize(vsub(target, eye))
+        var side: gfx3d.Vec3 := normalize(cross(forward, up))
+        var upward: gfx3d.Vec3 := cross(side, forward)
+        var m: *[16]flt := mat4_identity()
+        (*m)[0] := side.x
+        (*m)[1] := side.y
+        (*m)[2] := side.z
+        (*m)[3] := 0.0 - dot(side, eye)
+        (*m)[4] := upward.x
+        (*m)[5] := upward.y
+        (*m)[6] := upward.z
+        (*m)[7] := 0.0 - dot(upward, eye)
+        (*m)[8] := 0.0 - forward.x
+        (*m)[9] := 0.0 - forward.y
+        (*m)[10] := 0.0 - forward.z
+        (*m)[11] := dot(forward, eye)
+        return m
+    end
+
+    fn transform_point(m: *[16]flt, p: gfx3d.Vec3): gfx3d.Vec3
+    begin
+        return vec3((*m)[0] * p.x + (*m)[1] * p.y + (*m)[2] * p.z + (*m)[3], (*m)[4] * p.x + (*m)[5] * p.y + (*m)[6] * p.z + (*m)[7], (*m)[8] * p.x + (*m)[9] * p.y + (*m)[10] * p.z + (*m)[11])
+    end
+
+    // Turns a perspective matrix made for OpenGL clip space (y up, depth -1..1) into Vulkan's (y down, depth 0..1).
+    fn mat4_to_vulkan(m: *[16]flt)
+    begin
+        var i: int := 0
+        while i < 4 {
+            (*m)[4 + i] := 0.0 - (*m)[4 + i]
+            (*m)[8 + i] := ((*m)[8 + i] + (*m)[12 + i]) / 2.0
+            i := i + 1
+        }
+    end
+
+    // Writes the matrix into a raw block at byte `offset` as 16 single-precision floats in column-major order
+    // (what GLSL push constants and uniform blocks expect).
+    fn mat4_push(m: *[16]flt, block: *void, offset: int)
+    begin
+        var column: int := 0
+        while column < 4 {
+            var row: int := 0
+            while row < 4 {
+                runtime.hw.write32(block + offset + (column * 4 + row) * 4, float_bits((*m)[row * 4 + column]))
+                row := row + 1
+            }
+            column := column + 1
+        }
+    end
+
+    fn float_bits(value: flt): int
+    begin
+        asm {
+            cvtsd2ss xmm0, xmm0
+            movd eax, xmm0
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn radians(degrees: flt): flt
+    begin
+        return degrees * mathx.pi() / 180.0
+    end
+
+    // ----------------------------------------------------------------- meshes
+    fn mesh_new(vertex_capacity: int, triangle_capacity: int): *gfx3d.Mesh
+    begin
+        var mesh: *gfx3d.Mesh := alloc(64)
+        mesh.vertices := alloc(vertex_capacity * 24 + 8)
+        mesh.indices := alloc(triangle_capacity * 24 + 8)
+        mesh.vertex_count := 0
+        mesh.triangle_count := 0
+        mesh.vertex_capacity := vertex_capacity
+        mesh.triangle_capacity := triangle_capacity
+        return mesh
+    end
+
+    fn mesh_free(mesh: *gfx3d.Mesh)
+    begin
+        free(mesh.vertices)
+        free(mesh.indices)
+        free(mesh)
+    end
+
+    fn mesh_add_vertex(mesh: *gfx3d.Mesh, x: flt, y: flt, z: flt): int
+    begin
+        if mesh.vertex_count >= mesh.vertex_capacity { return -1 }
+        var base: int := mesh.vertex_count * 3
+        (*mesh.vertices)[base] := x
+        (*mesh.vertices)[base + 1] := y
+        (*mesh.vertices)[base + 2] := z
+        mesh.vertex_count := mesh.vertex_count + 1
+        return mesh.vertex_count - 1
+    end
+
+    // Triangles are counter-clockwise when seen from outside.
+    fn mesh_add_triangle(mesh: *gfx3d.Mesh, a: int, b: int, c: int)
+    begin
+        if mesh.triangle_count >= mesh.triangle_capacity { return }
+        var base: int := mesh.triangle_count * 3
+        (*mesh.indices)[base] := a
+        (*mesh.indices)[base + 1] := b
+        (*mesh.indices)[base + 2] := c
+        mesh.triangle_count := mesh.triangle_count + 1
+    end
+
+    fn mesh_add_quad(mesh: *gfx3d.Mesh, a: int, b: int, c: int, d: int)
+    begin
+        mesh_add_triangle(mesh, a, b, c)
+        mesh_add_triangle(mesh, a, c, d)
+    end
+
+    fn mesh_cube(size: flt): *gfx3d.Mesh
+    begin
+        var mesh: *gfx3d.Mesh := mesh_new(24, 12)
+        var h: flt := size / 2.0
+        var n: flt := 0.0 - h
+        // each face has its own 4 vertices so flat shading stays sharp
+        var f: int := 0
+        f := mesh_add_vertex(mesh, n, n, h)
+        mesh_add_vertex(mesh, h, n, h)
+        mesh_add_vertex(mesh, h, h, h)
+        mesh_add_vertex(mesh, n, h, h)
+        mesh_add_quad(mesh, f, f + 1, f + 2, f + 3)
+        f := mesh_add_vertex(mesh, h, n, n)
+        mesh_add_vertex(mesh, n, n, n)
+        mesh_add_vertex(mesh, n, h, n)
+        mesh_add_vertex(mesh, h, h, n)
+        mesh_add_quad(mesh, f, f + 1, f + 2, f + 3)
+        f := mesh_add_vertex(mesh, h, n, h)
+        mesh_add_vertex(mesh, h, n, n)
+        mesh_add_vertex(mesh, h, h, n)
+        mesh_add_vertex(mesh, h, h, h)
+        mesh_add_quad(mesh, f, f + 1, f + 2, f + 3)
+        f := mesh_add_vertex(mesh, n, n, n)
+        mesh_add_vertex(mesh, n, n, h)
+        mesh_add_vertex(mesh, n, h, h)
+        mesh_add_vertex(mesh, n, h, n)
+        mesh_add_quad(mesh, f, f + 1, f + 2, f + 3)
+        f := mesh_add_vertex(mesh, n, h, h)
+        mesh_add_vertex(mesh, h, h, h)
+        mesh_add_vertex(mesh, h, h, n)
+        mesh_add_vertex(mesh, n, h, n)
+        mesh_add_quad(mesh, f, f + 1, f + 2, f + 3)
+        f := mesh_add_vertex(mesh, n, n, n)
+        mesh_add_vertex(mesh, h, n, n)
+        mesh_add_vertex(mesh, h, n, h)
+        mesh_add_vertex(mesh, n, n, h)
+        mesh_add_quad(mesh, f, f + 1, f + 2, f + 3)
+        return mesh
+    end
+
+    // A flat grid in the XZ plane, facing up, size x size with `divisions` cells per side.
+    fn mesh_plane(size: flt, divisions: int): *gfx3d.Mesh
+    begin
+        var side: int := divisions + 1
+        var mesh: *gfx3d.Mesh := mesh_new(side * side, divisions * divisions * 2)
+        var z: int := 0
+        while z < side {
+            var x: int := 0
+            while x < side {
+                mesh_add_vertex(mesh, (x * 1.0 / divisions - 0.5) * size, 0.0, (z * 1.0 / divisions - 0.5) * size)
+                x := x + 1
+            }
+            z := z + 1
+        }
+        z := 0
+        while z < divisions {
+            var x: int := 0
+            while x < divisions {
+                var a: int := z * side + x
+                mesh_add_quad(mesh, a, a + side, a + side + 1, a + 1)
+                x := x + 1
+            }
+            z := z + 1
+        }
+        return mesh
+    end
+
+    fn mesh_sphere(radius: flt, rings: int, segments: int): *gfx3d.Mesh
+    begin
+        var mesh: *gfx3d.Mesh := mesh_new((rings + 1) * (segments + 1), rings * segments * 2)
+        var pi: flt := mathx.pi()
+        var r: int := 0
+        while r <= rings {
+            var v: flt := r * 1.0 / rings
+            var phi: flt := v * pi
+            var s: int := 0
+            while s <= segments {
+                var theta: flt := s * 1.0 / segments * pi * 2.0
+                mesh_add_vertex(mesh, radius * mathx.sin(phi) * mathx.cos(theta), radius * mathx.cos(phi), radius * mathx.sin(phi) * mathx.sin(theta))
+                s := s + 1
+            }
+            r := r + 1
+        }
+        r := 0
+        while r < rings {
+            var s: int := 0
+            while s < segments {
+                var a: int := r * (segments + 1) + s
+                var b: int := a + segments + 1
+                mesh_add_triangle(mesh, a, a + 1, b)
+                mesh_add_triangle(mesh, a + 1, b + 1, b)
+                s := s + 1
+            }
+            r := r + 1
+        }
+        return mesh
+    end
+
+    fn mesh_torus(major: flt, minor: flt, rings: int, segments: int): *gfx3d.Mesh
+    begin
+        var mesh: *gfx3d.Mesh := mesh_new((rings + 1) * (segments + 1), rings * segments * 2)
+        var tau: flt := mathx.pi() * 2.0
+        var r: int := 0
+        while r <= rings {
+            var u: flt := r * 1.0 / rings * tau
+            var s: int := 0
+            while s <= segments {
+                var v: flt := s * 1.0 / segments * tau
+                var ring: flt := major + minor * mathx.cos(v)
+                mesh_add_vertex(mesh, ring * mathx.cos(u), minor * mathx.sin(v), ring * mathx.sin(u))
+                s := s + 1
+            }
+            r := r + 1
+        }
+        r := 0
+        while r < rings {
+            var s: int := 0
+            while s < segments {
+                var a: int := r * (segments + 1) + s
+                var b: int := a + segments + 1
+                mesh_add_triangle(mesh, a, b, a + 1)
+                mesh_add_triangle(mesh, a + 1, b, b + 1)
+                s := s + 1
+            }
+            r := r + 1
+        }
+        return mesh
+    end
+
+    fn number_at(text: string, start: int): flt
+    begin
+        var i: int := start
+        var sign: flt := 1.0
+        if i < str.length(text) && str.char(text, i) = 45 {
+            sign := -1.0
+            i := i + 1
+        }
+        var value: flt := 0.0
+        while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+            value := value * 10.0 + (str.char(text, i) - 48)
+            i := i + 1
+        }
+        if i < str.length(text) && str.char(text, i) = 46 {
+            i := i + 1
+            var scale: flt := 0.1
+            while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+                value := value + (str.char(text, i) - 48) * scale
+                scale := scale / 10.0
+                i := i + 1
+            }
+        }
+        return value * sign
+    end
+
+    fn skip_number(text: string, start: int): int
+    begin
+        var i: int := start
+        while i < str.length(text) && str.char(text, i) != 32 && str.char(text, i) != 10 && str.char(text, i) != 13 { i := i + 1 }
+        while i < str.length(text) && str.char(text, i) = 32 { i := i + 1 }
+        return i
+    end
+
+    // Index of the first slash-separated field of a face entry such as "12/4/7" (OBJ is 1-based).
+    fn face_index(text: string, start: int): int
+    begin
+        var i: int := start
+        var value: int := 0
+        while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+            value := value * 10 + str.char(text, i) - 48
+            i := i + 1
+        }
+        return value - 1
+    end
+
+    // Loads the "v" and "f" lines of a Wavefront .obj file (faces with 3 or more corners are triangulated).
+    fn mesh_load_obj(path: string): *gfx3d.Mesh
+    begin
+        var text: string := file.read(path)
+        var mesh: *gfx3d.Mesh := mesh_new(200000, 400000)
+        var i: int := 0
+        var n: int := str.length(text)
+        while i < n {
+            var line_end: int := i
+            while line_end < n && str.char(text, line_end) != 10 { line_end := line_end + 1 }
+            if line_end - i > 2 && str.char(text, i) = 118 && str.char(text, i + 1) = 32 {
+                var p: int := i + 2
+                var x: flt := number_at(text, p)
+                p := skip_number(text, p)
+                var y: flt := number_at(text, p)
+                p := skip_number(text, p)
+                var z: flt := number_at(text, p)
+                mesh_add_vertex(mesh, x, y, z)
+            }
+            if line_end - i > 2 && str.char(text, i) = 102 && str.char(text, i + 1) = 32 {
+                var p: int := i + 2
+                var first: int := face_index(text, p)
+                p := skip_number(text, p)
+                var previous: int := face_index(text, p)
+                p := skip_number(text, p)
+                while p < line_end {
+                    var current: int := face_index(text, p)
+                    mesh_add_triangle(mesh, first, previous, current)
+                    previous := current
+                    p := skip_number(text, p)
+                }
+            }
+            i := line_end + 1
+        }
+        return mesh
+    end
+
+    // --------------------------------------------------------------- renderer
+    fn new(target: *canvas.Canvas): *gfx3d.Renderer
+    begin
+        var r: *gfx3d.Renderer := alloc(256)
+        r.target := target
+        r.depth := alloc(target.width * target.height * 8 + 8)
+        r.view_proj := mat4_identity()
+        r.eye := vec3(0.0, 0.0, 5.0)
+        r.light := normalize(vec3(0.4, 0.8, 0.5))
+        r.ambient := 0.25
+        r.fov := radians(60.0)
+        r.near := 0.1
+        r.far := 100.0
+        r.triangles_drawn := 0
+        return r
+    end
+
+    fn release(r: *gfx3d.Renderer)
+    begin
+        free(r.depth)
+        mat4_free(r.view_proj)
+        free(r)
+    end
+
+    // Call again after the canvas was resized (window.fit_canvas).
+    fn retarget(r: *gfx3d.Renderer, target: *canvas.Canvas)
+    begin
+        free(r.depth)
+        r.target := target
+        r.depth := alloc(target.width * target.height * 8 + 8)
+    end
+
+    fn clear(r: *gfx3d.Renderer, color: int)
+    begin
+        canvas.clear(r.target, color)
+        var count: int := r.target.width * r.target.height
+        var i: int := 0
+        while i < count {
+            (*r.depth)[i] := 1000000.0
+            i := i + 1
+        }
+        r.triangles_drawn := 0
+    end
+
+    fn set_light(r: *gfx3d.Renderer, x: flt, y: flt, z: flt)
+    begin
+        r.light := normalize(vec3(x, y, z))
+    end
+
+    fn set_camera(r: *gfx3d.Renderer, ex: flt, ey: flt, ez: flt, tx: flt, ty: flt, tz: flt, fov_degrees: flt)
+    begin
+        r.eye := vec3(ex, ey, ez)
+        r.fov := radians(fov_degrees)
+        var aspect: flt := r.target.width * 1.0 / r.target.height
+        var view: *[16]flt := mat4_look_at(r.eye, vec3(tx, ty, tz), vec3(0.0, 1.0, 0.0))
+        var projection: *[16]flt := mat4_perspective(r.fov, aspect, r.near, r.far)
+        mat4_mul_into(r.view_proj, projection, view)
+        mat4_free(view)
+        mat4_free(projection)
+    end
+
+    // First-person camera: yaw turns left/right, pitch looks up/down (radians).
+    fn set_camera_angles(r: *gfx3d.Renderer, ex: flt, ey: flt, ez: flt, yaw: flt, pitch: flt, fov_degrees: flt)
+    begin
+        var cp: flt := mathx.cos(pitch)
+        set_camera(r, ex, ey, ez, ex + mathx.sin(yaw) * cp, ey + mathx.sin(pitch), ez - mathx.cos(yaw) * cp, fov_degrees)
+    end
+
+    // Projects a world point to the canvas. Returns 1 and sets r.screen_x / r.screen_y when it is in front of the camera.
+    fn project(r: *gfx3d.Renderer, x: flt, y: flt, z: flt): int
+    begin
+        var m: *[16]flt := r.view_proj
+        var w: flt := (*m)[12] * x + (*m)[13] * y + (*m)[14] * z + (*m)[15]
+        if w < r.near { return 0 }
+        var cx: flt := ((*m)[0] * x + (*m)[1] * y + (*m)[2] * z + (*m)[3]) / w
+        var cy: flt := ((*m)[4] * x + (*m)[5] * y + (*m)[6] * z + (*m)[7]) / w
+        r.screen_x := (cx * 0.5 + 0.5) * r.target.width
+        r.screen_y := (0.5 - cy * 0.5) * r.target.height
+        return 1
+    end
+
+    fn draw_line_3d(r: *gfx3d.Renderer, ax: flt, ay: flt, az: flt, bx: flt, by: flt, bz: flt, color: int)
+    begin
+        if project(r, ax, ay, az) = 0 { return }
+        var sx: int := flt.toint(r.screen_x)
+        var sy: int := flt.toint(r.screen_y)
+        if project(r, bx, by, bz) = 0 { return }
+        canvas.line(r.target, sx, sy, flt.toint(r.screen_x), flt.toint(r.screen_y), color)
+    end
+
+    fn shade(color: int, light: flt): int
+    begin
+        if light > 1.0 { light := 1.0 }
+        if light < 0.0 { light := 0.0 }
+        var r: int := flt.toint(canvas.red(color) * light)
+        var g: int := flt.toint(canvas.green(color) * light)
+        var b: int := flt.toint(canvas.blue(color) * light)
+        return canvas.rgb(r, g, b)
+    end
+
+    // Fill one screen-space triangle with depth testing. Corners are (x, y, depth).
+    fn fill(r: *gfx3d.Renderer, x0: flt, y0: flt, z0: flt, x1: flt, y1: flt, z1: flt, x2: flt, y2: flt, z2: flt, color: int)
+    begin
+        var width: int := r.target.width
+        var height: int := r.target.height
+        var minx: flt := x0
+        var maxx: flt := x0
+        var miny: flt := y0
+        var maxy: flt := y0
+        if x1 < minx { minx := x1 }
+        if x2 < minx { minx := x2 }
+        if x1 > maxx { maxx := x1 }
+        if x2 > maxx { maxx := x2 }
+        if y1 < miny { miny := y1 }
+        if y2 < miny { miny := y2 }
+        if y1 > maxy { maxy := y1 }
+        if y2 > maxy { maxy := y2 }
+        var ix0: int := flt.toint(minx)
+        var ix1: int := flt.toint(maxx) + 1
+        var iy0: int := flt.toint(miny)
+        var iy1: int := flt.toint(maxy) + 1
+        if ix0 < 0 { ix0 := 0 }
+        if iy0 < 0 { iy0 := 0 }
+        if ix1 > width { ix1 := width }
+        if iy1 > height { iy1 := height }
+        var area: flt := (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+        if area > -0.0001 && area < 0.0001 { return }
+        var inverse: flt := 1.0 / area
+        var y: int := iy0
+        while y < iy1 {
+            var py: flt := y + 0.5
+            var x: int := ix0
+            while x < ix1 {
+                var px: flt := x + 0.5
+                var w0: flt := ((x1 - px) * (y2 - py) - (x2 - px) * (y1 - py)) * inverse
+                var w1: flt := ((x2 - px) * (y0 - py) - (x0 - px) * (y2 - py)) * inverse
+                if w0 >= 0.0 && w1 >= 0.0 && w0 + w1 <= 1.0 {
+                    var w2: flt := 1.0 - w0 - w1
+                    var depth: flt := w0 * z0 + w1 * z1 + w2 * z2
+                    var index: int := y * width + x
+                    if depth < (*r.depth)[index] {
+                        (*r.depth)[index] := depth
+                        (*r.target.pixels)[index] := color
+                    }
+                }
+                x := x + 1
+            }
+            y := y + 1
+        }
+    end
+
+    // Draw a mesh transformed by `model` (a mat4) with flat shading, back-face culling and depth testing.
+    fn draw_mesh(r: *gfx3d.Renderer, mesh: *gfx3d.Mesh, model: *[16]flt, color: int)
+    begin
+        var m: *[16]flt := r.view_proj
+        var width: flt := r.target.width * 1.0
+        var height: flt := r.target.height * 1.0
+        var near: flt := r.near
+        var t: int := 0
+        while t < mesh.triangle_count {
+            var ia: int := (*mesh.indices)[t * 3] * 3
+            var ib: int := (*mesh.indices)[t * 3 + 1] * 3
+            var ic: int := (*mesh.indices)[t * 3 + 2] * 3
+            var pa: gfx3d.Vec3 := transform_point(model, vec3((*mesh.vertices)[ia], (*mesh.vertices)[ia + 1], (*mesh.vertices)[ia + 2]))
+            var pb: gfx3d.Vec3 := transform_point(model, vec3((*mesh.vertices)[ib], (*mesh.vertices)[ib + 1], (*mesh.vertices)[ib + 2]))
+            var pc: gfx3d.Vec3 := transform_point(model, vec3((*mesh.vertices)[ic], (*mesh.vertices)[ic + 1], (*mesh.vertices)[ic + 2]))
+            var wa: flt := (*m)[12] * pa.x + (*m)[13] * pa.y + (*m)[14] * pa.z + (*m)[15]
+            var wb: flt := (*m)[12] * pb.x + (*m)[13] * pb.y + (*m)[14] * pb.z + (*m)[15]
+            var wc: flt := (*m)[12] * pc.x + (*m)[13] * pc.y + (*m)[14] * pc.z + (*m)[15]
+            if wa > near && wb > near && wc > near {
+                var ax: flt := (((*m)[0] * pa.x + (*m)[1] * pa.y + (*m)[2] * pa.z + (*m)[3]) / wa * 0.5 + 0.5) * width
+                var ay: flt := (0.5 - ((*m)[4] * pa.x + (*m)[5] * pa.y + (*m)[6] * pa.z + (*m)[7]) / wa * 0.5) * height
+                var az: flt := ((*m)[8] * pa.x + (*m)[9] * pa.y + (*m)[10] * pa.z + (*m)[11]) / wa
+                var bx: flt := (((*m)[0] * pb.x + (*m)[1] * pb.y + (*m)[2] * pb.z + (*m)[3]) / wb * 0.5 + 0.5) * width
+                var by: flt := (0.5 - ((*m)[4] * pb.x + (*m)[5] * pb.y + (*m)[6] * pb.z + (*m)[7]) / wb * 0.5) * height
+                var bz: flt := ((*m)[8] * pb.x + (*m)[9] * pb.y + (*m)[10] * pb.z + (*m)[11]) / wb
+                var cx: flt := (((*m)[0] * pc.x + (*m)[1] * pc.y + (*m)[2] * pc.z + (*m)[3]) / wc * 0.5 + 0.5) * width
+                var cy: flt := (0.5 - ((*m)[4] * pc.x + (*m)[5] * pc.y + (*m)[6] * pc.z + (*m)[7]) / wc * 0.5) * height
+                var cz: flt := ((*m)[8] * pc.x + (*m)[9] * pc.y + (*m)[10] * pc.z + (*m)[11]) / wc
+                var area: flt := (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+                if area < 0.0 {
+                    var normal: gfx3d.Vec3 := normalize(cross(vsub(pb, pa), vsub(pc, pa)))
+                    var diffuse: flt := dot(normal, r.light)
+                    if diffuse < 0.0 { diffuse := 0.0 }
+                    fill(r, ax, ay, az, bx, by, bz, cx, cy, cz, shade(color, r.ambient + (1.0 - r.ambient) * diffuse))
+                    r.triangles_drawn := r.triangles_drawn + 1
+                }
+            }
+            t := t + 1
+        }
+    end
+
+    fn draw_wireframe(r: *gfx3d.Renderer, mesh: *gfx3d.Mesh, model: *[16]flt, color: int)
+    begin
+        var t: int := 0
+        while t < mesh.triangle_count {
+            var ia: int := (*mesh.indices)[t * 3] * 3
+            var ib: int := (*mesh.indices)[t * 3 + 1] * 3
+            var ic: int := (*mesh.indices)[t * 3 + 2] * 3
+            var pa: gfx3d.Vec3 := transform_point(model, vec3((*mesh.vertices)[ia], (*mesh.vertices)[ia + 1], (*mesh.vertices)[ia + 2]))
+            var pb: gfx3d.Vec3 := transform_point(model, vec3((*mesh.vertices)[ib], (*mesh.vertices)[ib + 1], (*mesh.vertices)[ib + 2]))
+            var pc: gfx3d.Vec3 := transform_point(model, vec3((*mesh.vertices)[ic], (*mesh.vertices)[ic + 1], (*mesh.vertices)[ic + 2]))
+            draw_line_3d(r, pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, color)
+            draw_line_3d(r, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z, color)
+            draw_line_3d(r, pc.x, pc.y, pc.z, pa.x, pa.y, pa.z, color)
+            t := t + 1
+        }
+    end
+end

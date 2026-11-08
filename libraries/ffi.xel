@@ -1,0 +1,221 @@
+// ffi: call C functions from shared libraries (Vulkan, libc, ...) and build C structs in raw memory.
+//
+// A library that needs a shared object states it with a line comment at the start of a line:
+//     xe-link: libvulkan.so.1        (written as an ordinary "//" comment; see vulkan.xel)
+// The compiler then links the program dynamically against it. Function addresses are obtained by the
+// library's own small asm thunks (see vulkan.xel) or from a loader function such as vkGetInstanceProcAddr.
+//
+// call0..call8 pass up to 8 integer/pointer arguments by the System V ABI and return rax.
+module ffi
+begin
+    fn call0(target: int): int
+    begin
+        asm {
+            mov rax, rdi
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call1(target: int, a: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call2(target: int, a: int, b: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call3(target: int, a: int, b: int, c: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call4(target: int, a: int, b: int, c: int, d: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call5(target: int, a: int, b: int, c: int, d: int, e: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call6(target: int, a: int, b: int, c: int, d: int, e: int, f: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            mov r9, qword ptr [rbp+16]
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call8(target: int, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            mov r9, qword ptr [rbp+16]
+            push qword ptr [rbp+32]
+            push qword ptr [rbp+24]
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    // A C function returning `int` leaves garbage in the upper half of rax; this sign-extends the low 32 bits.
+    fn int32(value: int): int
+    begin
+        var low: int := value & 4294967295
+        if low >= 2147483648 { return low - 4294967296 }
+        return low
+    end
+
+    fn put8(base: *void, offset: int, value: int)
+    begin
+        runtime.hw.write8(base + offset, value & 255)
+    end
+
+    fn put32(base: *void, offset: int, value: int)
+    begin
+        runtime.hw.write32(base + offset, value & 4294967295)
+    end
+
+    fn put64(base: *void, offset: int, value: int)
+    begin
+        runtime.hw.write32(base + offset, value & 4294967295)
+        runtime.hw.write32(base + offset + 4, (value >> 32) & 4294967295)
+    end
+
+    fn get8(base: *void, offset: int): int
+    begin
+        return runtime.hw.read8(base + offset)
+    end
+
+    fn get32(base: *void, offset: int): int
+    begin
+        return runtime.hw.read32(base + offset) & 4294967295
+    end
+
+    fn get64(base: *void, offset: int): int
+    begin
+        return get32(base, offset) | (get32(base, offset + 4) << 32)
+    end
+
+    // The IEEE-754 single-precision bit pattern of a flt (what C `float` fields and Vulkan push constants hold).
+    fn float32_bits(value: flt): int
+    begin
+        asm {
+            cvtsd2ss xmm0, xmm0
+            movd eax, xmm0
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn put_float32(base: *void, offset: int, value: flt)
+    begin
+        put32(base, offset, float32_bits(value))
+    end
+
+    // Zero-filled block of raw memory for a C struct.
+    fn block(size: int): *void
+    begin
+        var p: *void := alloc(size + 16)
+        runtime.mem.set(p, 0, size + 16)
+        return p
+    end
+
+    // Address of the first byte of a string (Xe strings are NUL terminated, so they are valid C strings).
+    fn cstr(text: string): int
+    begin
+        var holder: *[1]string := alloc(16)
+        (*holder)[0] := text
+        var raw: *void := holder
+        var address: int := get64(raw, 0)
+        free(holder)
+        return address
+    end
+
+    // Reads a pointer stored in memory (for example one a C function wrote through a `void **`).
+    fn pointer_at(base: *void, offset: int): *void
+    begin
+        var holder: *[1]*void := base + offset
+        return (*holder)[0]
+    end
+
+    // Copies a C string at base into an Xe string.
+    fn string_at(base: *void, offset: int, limit: int): string
+    begin
+        var result: string := str.builder("")
+        var i: int := 0
+        while i < limit && get8(base, offset + i) != 0 {
+            result := str.append(result, str.fromchar(get8(base, offset + i)))
+            i := i + 1
+        }
+        return result
+    end
+end
