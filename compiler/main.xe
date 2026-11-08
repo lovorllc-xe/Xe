@@ -319,7 +319,7 @@ begin
         var mode: string := arg.get(0)
         if mode = "--version" || mode = "-V" || mode = "-v" {
             write(logo.art())
-            writeln("Xe " + version() + "  (Linux x86-64, self-hosted)")
+            writeln("Xe " + version() + "  (Linux x86-64)")
             return 0
         }
         if mode = "--help" || mode = "-h" { return help() }
