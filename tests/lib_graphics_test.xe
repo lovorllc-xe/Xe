@@ -96,9 +96,10 @@ begin
         window.present(win)
         window.poll(win)
         failed := failed + expect("window backend", window.backend(win) = 1 || window.backend(win) = 2)
-        // reading pixels back is only possible through X11; a Wayland compositor does not allow it
-        if window.backend(win) = 2 {
-            failed := failed + expect("window pixels", x11.get_pixel(win.display, 15, 15) = canvas.rgb(250, 100, 20) && x11.get_pixel(win.display, 100, 70) = canvas.rgb(10, 20, 30))
+        // reading pixels back works where the platform allows it (X11, not Wayland); -1 means "cannot"
+        var probe: int := window.read_pixel(win, 15, 15)
+        if probe >= 0 {
+            failed := failed + expect("window pixels", probe = canvas.rgb(250, 100, 20) && window.read_pixel(win, 100, 70) = canvas.rgb(10, 20, 30))
         }
         window.destroy(win)
         writeln("window ok")

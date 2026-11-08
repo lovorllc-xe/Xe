@@ -33,7 +33,7 @@ begin
         writeln()
         writeln("Usage:")
         writeln("  xe <file.xe> [file.xe ...]              build ./<file> (same as --build)")
-        writeln("  xe --build <file.xe> [...] [-o <out>]    build a native Linux x86-64 executable")
+        writeln("  xe --build <file.xe> [...] [-o <out>] [-p <platform>]   build a native executable")
         writeln("  xe --run <file.xe> [...] [-- args...]    build into a temporary file and run it")
         writeln("  xe --check <file.xe> [...]               check the program without building it")
         writeln()
@@ -51,6 +51,8 @@ begin
         writeln("  -o <file>              output path (default: the first source name without .xe)")
         writeln("  --library-path <dir>   also search this directory for .xel libraries")
         writeln("  --no-std               do not add the standard io and mem modules")
+        writeln("  -p <platform>          target platform: linux (default), win, macos. The same source builds for each;")
+        writeln("                         win needs llvm-mc, llvm-dlltool and lld-link, macos needs llvm-mc and ld64.lld")
         writeln("  -q, --quiet            do not print the build summary")
         writeln("  --keep-asm             keep the generated .s and .o files")
         writeln("  -h, --help             show this help")
@@ -320,6 +322,21 @@ begin
         return " -dynamic-linker /lib64/ld-linux-x86-64.so.2 -L/usr/lib -L/usr/lib64 -L/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu " + found
     end
 
+    // The build commands for the other platforms. The generated assembly is the same for every platform; a small
+    // sed script adapts section names, and platform/<name>/shim.s (appended to it) provides the entry point and
+    // the system-call layer on top of that operating system.
+    fn crossCommand(output: string, assembly: string, object: string, platform: string, xeHome: string): string
+    begin
+        var directory: string := xeHome + "/platform/" + platform
+        var adapted: string := output + ".p.s"
+        var prepare: string := "sed -f " + quote(directory + "/fixup.sed") + " " + quote(assembly) + " > " + quote(adapted) + " && cat " + quote(directory + "/shim.s") + " >> " + quote(adapted)
+        if platform = "win" {
+            var library: string := output + ".k32.lib"
+            return prepare + " && llvm-mc -triple=x86_64-pc-windows-msvc -filetype=obj -o " + quote(object) + " " + quote(adapted) + " && llvm-dlltool -m i386:x86-64 -d " + quote(directory + "/kernel32.def") + " -l " + quote(library) + " && lld-link /subsystem:console /entry:xe.win.entry /nodefaultlib /machine:x64 /stack:268435456 /out:" + quote(output) + " " + quote(object) + " " + quote(library) + " && rm -f " + quote(library) + " " + quote(adapted)
+        }
+        return prepare + " && llvm-mc -triple=x86_64-apple-macosx11.0.0 -filetype=obj -o " + quote(object) + " " + quote(adapted) + " && ld64.lld -arch x86_64 -platform_version macos 11.0.0 11.0.0 -e xe.mac.entry -o " + quote(output) + " " + quote(object) + " " + quote(directory + "/libSystem.tbd") + " && rm -f " + quote(adapted)
+    end
+
     fn linkCommand(output: string, assembly: string, object: string, target: int, keep: int, shared: string): string
     begin
         var command: string := "as -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object) + shared
@@ -388,6 +405,7 @@ begin
         var quiet: int := 0
         var keep: int := 0
         var programArguments: string := ""
+        var platform: string := "linux"
         var index: int := first
         while index < count {
             var option: string := arg.get(index)
@@ -408,6 +426,14 @@ begin
             if handled = 0 && option = "--library-path" && index + 1 < count {
                 if str.length(userLibraries) > 0 { userLibraries := userLibraries + ":" }
                 userLibraries := userLibraries + arg.get(index + 1)
+                index := index + 2
+                handled := 1
+            }
+            if handled = 0 && (option = "-p" || option = "--platform") && index + 1 < count {
+                platform := arg.get(index + 1)
+                if platform = "windows" || platform = "win32" || platform = "win64" { platform := "win" }
+                if platform = "mac" || platform = "macosx" || platform = "darwin" || platform = "osx" { platform := "macos" }
+                if platform != "linux" && platform != "win" && platform != "macos" { return err("error: unknown platform '" + platform + "' (use linux, win or macos)") }
                 index := index + 2
                 handled := 1
             }
@@ -438,12 +464,28 @@ begin
             }
         }
         if sourceCount = 0 { return usage() }
+        // every library directory also has a per-platform subdirectory (libraries/win/native.xel, ...), searched first
+        var withPlatform: string := ""
+        var entryStart: int := 0
+        var entryIndex: int := 0
+        while entryIndex <= str.length(userLibraries) {
+            if entryIndex = str.length(userLibraries) || str.char(userLibraries, entryIndex) = 58 {
+                if entryIndex > entryStart {
+                    var entry: string := str.slice(userLibraries, entryStart, entryIndex)
+                    if str.length(withPlatform) > 0 { withPlatform := withPlatform + ":" }
+                    withPlatform := withPlatform + entry + "/" + platform + ":" + entry
+                }
+                entryStart := entryIndex + 1
+            }
+            entryIndex := entryIndex + 1
+        }
+        userLibraries := withPlatform
         var started: int := nanoseconds()
         var xeHome: string := home()
         var libraries: string := userLibraries
         if str.length(xeHome) > 0 {
             if str.length(libraries) > 0 { libraries := libraries + ":" }
-            libraries := libraries + xeHome + "/libraries"
+            libraries := libraries + xeHome + "/libraries/" + platform + ":" + xeHome + "/libraries"
         }
         var userCount: int := sourceCount
         if withStd = 1 && target <= 1 {
@@ -474,8 +516,12 @@ begin
         }
         if str.length(output) = 0 {
             if runAfter = 1 { output := "/tmp/xe-run-" + str.number(nanoseconds()) + ".xee" }
-            else { output := defaultOutput((*sources)[0]) }
+            else {
+                output := defaultOutput((*sources)[0])
+                if platform = "win" { output := output + ".exe" }
+            }
         }
+        if runAfter = 1 && platform != "linux" { return err("error: --run only works for the platform you are on (linux); build with -p " + platform + " and run the result there") }
         var assembly: string := output + ".s"
         var object: string := output + ".o"
         if target = 2 {
@@ -484,7 +530,13 @@ begin
         }
         var result: int := compile(source, assembly, target)
         if result != 0 { return result }
-        result := process.run(linkCommand(output, assembly, object, target, keep, sharedLibraries(source)))
+        var command: string := linkCommand(output, assembly, object, target, keep, sharedLibraries(source))
+        if platform != "linux" {
+            if target != 0 { return err("error: -p " + platform + " works with --build only") }
+            command := crossCommand(output, assembly, object, platform, xeHome)
+            if keep = 0 { command := "(" + command + "); status=$?; rm -f " + quote(assembly) + " " + quote(object) + "; exit $status" }
+        }
+        result := process.run(command)
         var elapsed: int := nanoseconds() - started
         if result != 0 { return err("error: assembling or linking failed (exit status " + str.number(result) + ")") }
         if runAfter = 1 {

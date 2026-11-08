@@ -3,6 +3,7 @@
 // Most programs should use `window` (which wraps this) instead.
 uses syscall
 uses clock
+uses wevent
 
 module x11
 begin
@@ -31,56 +32,6 @@ begin
         in_len: int
         out: *void
         out_capacity: int
-    end
-
-    type Event: record
-    begin
-        kind: int
-        a: int
-        b: int
-        c: int
-        d: int
-        state: int
-    end
-
-    fn kind_key_down(): int
-    begin
-        return 1
-    end
-
-    fn kind_key_up(): int
-    begin
-        return 2
-    end
-
-    fn kind_mouse_down(): int
-    begin
-        return 3
-    end
-
-    fn kind_mouse_up(): int
-    begin
-        return 4
-    end
-
-    fn kind_motion(): int
-    begin
-        return 5
-    end
-
-    fn kind_expose(): int
-    begin
-        return 6
-    end
-
-    fn kind_resize(): int
-    begin
-        return 7
-    end
-
-    fn kind_close(): int
-    begin
-        return 8
     end
 
     fn put8(buffer: *void, offset: int, value: int)
@@ -528,14 +479,14 @@ begin
         return (*d.keysyms)[index]
     end
 
-    fn decode(d: *x11.Display, raw: *void, ev: *x11.Event): int
+    fn decode(d: *x11.Display, raw: *void, ev: *wevent.Event): int
     begin
         var code: int := get8(raw, 0) & 127
         ev.kind := 0
         if code = 2 || code = 3 {
             var shifted: int := get16(raw, 28) & 1
-            ev.kind := kind_key_down()
-            if code = 3 { ev.kind := kind_key_up() }
+            ev.kind := wevent.kind_key_down()
+            if code = 3 { ev.kind := wevent.kind_key_up() }
             ev.a := keysym_of(d, get8(raw, 1), shifted)
             ev.b := get8(raw, 1)
             ev.c := get16s(raw, 24)
@@ -543,26 +494,26 @@ begin
             ev.state := get16(raw, 28)
         }
         if code = 4 || code = 5 {
-            ev.kind := kind_mouse_down()
-            if code = 5 { ev.kind := kind_mouse_up() }
+            ev.kind := wevent.kind_mouse_down()
+            if code = 5 { ev.kind := wevent.kind_mouse_up() }
             ev.a := get8(raw, 1)
             ev.b := get16s(raw, 24)
             ev.c := get16s(raw, 26)
             ev.state := get16(raw, 28)
         }
         if code = 6 {
-            ev.kind := kind_motion()
+            ev.kind := wevent.kind_motion()
             ev.b := get16s(raw, 24)
             ev.c := get16s(raw, 26)
             ev.state := get16(raw, 28)
         }
-        if code = 12 { ev.kind := kind_expose() }
+        if code = 12 { ev.kind := wevent.kind_expose() }
         if code = 22 {
-            ev.kind := kind_resize()
+            ev.kind := wevent.kind_resize()
             ev.b := get16(raw, 20)
             ev.c := get16(raw, 22)
         }
-        if code = 33 && get32(raw, 12) = d.wm_delete { ev.kind := kind_close() }
+        if code = 33 && get32(raw, 12) = d.wm_delete { ev.kind := wevent.kind_close() }
         return ev.kind
     end
 
@@ -603,7 +554,7 @@ begin
 
     // Waits up to timeout_ms (0 = do not wait, -1 = forever) for the next event.
     // Returns its kind, or 0 when there was none. Unknown events are skipped.
-    fn next_event(d: *x11.Display, ev: *x11.Event, timeout_ms: int): int
+    fn next_event(d: *x11.Display, ev: *wevent.Event, timeout_ms: int): int
     begin
         var waited: int := 0
         var result: int := 0
@@ -631,8 +582,8 @@ begin
                 else {
                     var n: int := syscall.io.read(d.fd, d.inbuf + d.in_len, 65536 - d.in_len)
                     if n <= 0 {
-                        ev.kind := kind_close()
-                        result := kind_close()
+                        ev.kind := wevent.kind_close()
+                        result := wevent.kind_close()
                         searching := 0
                     }
                     else { d.in_len := d.in_len + n }

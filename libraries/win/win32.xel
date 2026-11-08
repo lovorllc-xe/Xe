@@ -1,0 +1,96 @@
+// win32: call Windows API functions from Xe (Windows only; selected by `-p win`).
+// Windows uses a different calling convention than the one Xe uses, so every call goes through call(),
+// which loads the arguments from an array. Functions are found by name at run time (proc), so no import
+// libraries are needed besides kernel32.
+module win32
+begin
+    // Calls target(args[0], ..., args[count-1]) with the Windows x64 calling convention; returns rax.
+    fn call(target: int, args: *[16]int, count: int): int
+    begin
+        asm {
+            push rbx
+            mov rbx, rsp
+            mov r10, rdi
+            mov r11, rsi
+            mov rax, rdx
+            sub rax, 4
+            jg .LwcMany
+            xor eax, eax
+        .LwcMany:
+            lea rax, [rax*8+47]
+            and rax, -16
+            sub rsp, rax
+            and rsp, -16
+            mov rcx, 4
+        .LwcCopy:
+            cmp rcx, rdx
+            jge .LwcLoad
+            mov rax, qword ptr [r11+rcx*8]
+            mov qword ptr [rsp+rcx*8], rax
+            inc rcx
+            jmp .LwcCopy
+        .LwcLoad:
+            mov rcx, qword ptr [r11]
+            mov rdx, qword ptr [r11+8]
+            mov r8, qword ptr [r11+16]
+            mov r9, qword ptr [r11+24]
+            call r10
+            mov rsp, rbx
+            pop rbx
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn imp_loadlibrary(): int
+    begin
+        asm {
+            mov rax, qword ptr [rip+__imp_LoadLibraryA]
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn imp_getprocaddress(): int
+    begin
+        asm {
+            mov rax, qword ptr [rip+__imp_GetProcAddress]
+            leave
+            ret
+        }
+        return 0
+    end
+
+    // A NUL-terminated copy of a string in raw memory (what Windows functions expect for text).
+    fn cstr(text: string): *void
+    begin
+        var buffer: *void := alloc(str.length(text) + 1)
+        var i: int := 0
+        while i < str.length(text) {
+            runtime.hw.write8(buffer + i, str.char(text, i))
+            i := i + 1
+        }
+        runtime.hw.write8(buffer + i, 0)
+        return buffer
+    end
+
+    // The address of a function in a DLL ("user32.dll", "CreateWindowExA"), or 0.
+    fn proc(dll: string, name: string): int
+    begin
+        var args: *[16]int := alloc(128)
+        var dll_text: *void := cstr(dll)
+        var name_text: *void := cstr(name)
+        (*args)[0] := @dll_text
+        var library: int := call(imp_loadlibrary(), args, 1)
+        if library = 0 { return 0 }
+        (*args)[0] := library
+        (*args)[1] := @name_text
+        var address: int := call(imp_getprocaddress(), args, 2)
+        free(args)
+        free(dll_text)
+        free(name_text)
+        return address
+    end
+end

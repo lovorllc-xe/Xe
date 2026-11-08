@@ -20,6 +20,27 @@ begin
 end
 ```
 
+## Platforms
+
+One source builds for every platform; only the `-p` flag changes:
+
+```
+xe --build app.xe -o app            # Linux (default)
+xe --build app.xe -o app.exe -p win   # Windows x86-64
+xe --build app.xe -o app -p macos     # macOS x86-64 (see below)
+```
+
+Programs and libraries (including `window`, `canvas`, `gui`, `game`) are identical on every platform; the compiler picks the
+platform's `native` layer from `libraries/<platform>/`, and a small runtime layer (`platform/<platform>/`) provides the entry
+point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-dlltool`, `lld-link`; macOS `llvm-mc`, `ld64.lld`.
+
+| | Linux | Windows | macOS |
+|---|---|---|---|
+| Console programs, files, memory, GC | yes | yes (tested under Wine: `tests/run_windows_tests.sh`) | builds; **not run on real hardware** |
+| Threads, sync, processes | yes | yes | no |
+| Windows/GUI (`window`) | X11 (default) or Wayland | Win32 | **no native backend yet** (`window.open` returns null) |
+| Sockets, epoll, inotify, file mmap, directory walking, Vulkan | yes | not yet | no |
+
 ## What is new in 2.x
 
 - **Self-hosted bootstrap.** `scripts/bootstrap.sh` assembles
@@ -47,7 +68,7 @@ end
   meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
   `vulkan` (instance/device/buffers/compute/graphics pipelines/depth/render targets), `vkscene` (GPU-lit 3D
   scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **168 libraries** covering containers, math, text, encodings, hashing and
+- **169 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -140,7 +161,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-168 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+169 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -191,7 +212,7 @@ end
   gives ready-made lit 3D rendering on the GPU. Compile shaders with `glslc`. Frames are read back into a
   `canvas` and shown through `window`; **swapchain presentation directly to a window surface and textures /
   descriptor sets for graphics pipelines are not implemented yet.**
-- Windows use native Wayland when `WAYLAND_DISPLAY` is set, otherwise X11; `XE_BACKEND=x11` or `XE_BACKEND=wayland` forces one. Wayland keyboard input assumes a US layout, and on compositors without server-side decorations (GNOME) the window has no title bar. There is no audio library yet.
+- Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Wayland keyboard input assumes a US layout, and GNOME gives Wayland windows no title bar. There is no audio library yet.
 
 ## Benchmarks
 

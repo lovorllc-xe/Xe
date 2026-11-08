@@ -1,0 +1,54 @@
+// native (macOS): the platform layer under `window`, selected by `-p macos`.
+// There is no native macOS window backend yet: open() reports "no window" (returns null), exactly like a
+// Linux machine without a display, so programs that check the result of window.open keep working.
+uses wevent
+
+module native
+begin
+    type Window: record
+    begin
+        unused: int
+    end
+
+    fn platform_name(): string
+    begin
+        return "macos"
+    end
+
+    fn open(title: string, width: int, height: int, prefer_wayland: int): *native.Window
+    begin
+        var none: *native.Window
+        return none
+    end
+
+    fn backend(n: *native.Window): int
+    begin
+        return 4
+    end
+
+    fn next_event(n: *native.Window, ev: *wevent.Event, timeout_ms: int): int
+    begin
+        return 0
+    end
+
+    fn present(n: *native.Window, pixels: *[268435456]int, stride: int, w: int, h: int)
+    begin
+    end
+
+    fn fix_size(n: *native.Window, w: int, h: int)
+    begin
+    end
+
+    fn set_title(n: *native.Window, title: string)
+    begin
+    end
+
+    fn read_pixel(n: *native.Window, x: int, y: int): int
+    begin
+        return -1
+    end
+
+    fn close(n: *native.Window)
+    begin
+    end
+end

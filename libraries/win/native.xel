@@ -1,0 +1,537 @@
+// native (Windows): the platform layer under `window`, built on Win32 (user32/gdi32), selected by `-p win`.
+// Programs never use it directly; they use `window`, which is identical on every platform.
+uses win32
+uses wevent
+
+module native
+begin
+    type Window: record
+    begin
+        hwnd: int
+        hdc: int
+        width: int
+        height: int
+        queue: *[1024]int
+        head: int
+        tail: int
+        bits: *void
+        bits_size: int
+        mouse_x: int
+        mouse_y: int
+        open: int
+        shown: int
+        f_peek: int
+        f_translate: int
+        f_dispatch: int
+        f_defproc: int
+        f_stretch: int
+        f_wait: int
+        f_validate: int
+        f_capture: int
+        f_release: int
+        f_keystate: int
+        f_setlong: int
+        f_setpos: int
+        f_getlong: int
+        f_destroy: int
+        f_settext: int
+        f_postquit: int
+        args: *[16]int
+        msg: *void
+    end
+
+    fn platform_name(): string
+    begin
+        return "windows"
+    end
+
+    // ---- the window procedure: Windows calls the thunk, the thunk calls on_message ----
+
+    fn slot_set(value: int)
+    begin
+        asm {
+            mov qword ptr [rip+.LnativeSlot], rdi
+            leave
+            ret
+            .data
+            .balign 8
+        .LnativeSlot:
+            .quad 0
+            .text
+        }
+    end
+
+    fn slot_get(): int
+    begin
+        asm {
+            mov rax, qword ptr [rip+.LnativeSlot]
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn thunk_address(): int
+    begin
+        asm {
+            lea rax, [rip+.LnativeThunk]
+            leave
+            ret
+        .LnativeThunk:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            push rbx
+            push r12
+            push r13
+            push r14
+            push r15
+            sub rsp, 40
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            call xenative.on_message
+            add rsp, 40
+            pop r15
+            pop r14
+            pop r13
+            pop r12
+            pop rbx
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+        }
+        return 0
+    end
+
+    fn to_pointer(address: int): *void
+    begin
+        var cell: *int := alloc(8)
+        *cell := address
+        var raw: *void := cell
+        var result: *void := runtime.pointer.read(raw)
+        free(cell)
+        return result
+    end
+
+    fn state(): *native.Window
+    begin
+        return to_pointer(slot_get())
+    end
+
+    fn put32(buffer: *void, offset: int, value: int)
+    begin
+        runtime.hw.write32(buffer + offset, value & 4294967295)
+    end
+
+    fn put64(buffer: *void, offset: int, value: int)
+    begin
+        put32(buffer, offset, value)
+        put32(buffer, offset + 4, value >> 32)
+    end
+
+    fn get32(buffer: *void, offset: int): int
+    begin
+        return runtime.hw.read32(buffer + offset) & 4294967295
+    end
+
+    fn signed16(value: int): int
+    begin
+        var v: int := value & 65535
+        if v >= 32768 { return v - 65536 }
+        return v
+    end
+
+    // calls with up to 4 arguments
+    fn call4(n: *native.Window, target: int, a: int, b: int, c: int, d: int): int
+    begin
+        (*n.args)[0] := a
+        (*n.args)[1] := b
+        (*n.args)[2] := c
+        (*n.args)[3] := d
+        return win32.call(target, n.args, 4)
+    end
+
+    fn push(n: *native.Window, kind: int, a: int, b: int, c: int, flags: int)
+    begin
+        var next: int := (n.head + 1) % 170
+        if next = n.tail { return }
+        var base: int := n.head * 6
+        (*n.queue)[base] := kind
+        (*n.queue)[base + 1] := a
+        (*n.queue)[base + 2] := b
+        (*n.queue)[base + 3] := c
+        (*n.queue)[base + 4] := flags
+        n.head := next
+    end
+
+    // US-layout X11 keysym of a Windows virtual key (what `window` expects), or 0.
+    fn symbol_of(vk: int): int
+    begin
+        if vk = 8 { return 65288 }
+        if vk = 9 { return 65289 }
+        if vk = 13 { return 65293 }
+        if vk = 16 { return 65505 }
+        if vk = 17 { return 65507 }
+        if vk = 18 { return 65513 }
+        if vk = 20 { return 65509 }
+        if vk = 27 { return 65307 }
+        if vk = 32 { return 32 }
+        if vk = 33 { return 65365 }
+        if vk = 34 { return 65366 }
+        if vk = 35 { return 65367 }
+        if vk = 36 { return 65360 }
+        if vk = 37 { return 65361 }
+        if vk = 38 { return 65362 }
+        if vk = 39 { return 65363 }
+        if vk = 40 { return 65364 }
+        if vk = 45 { return 65379 }
+        if vk = 46 { return 65535 }
+        if vk >= 48 && vk <= 57 { return vk }
+        if vk >= 65 && vk <= 90 { return vk + 32 }
+        if vk >= 112 && vk <= 123 { return 65470 + vk - 112 }
+        if vk = 186 { return 59 }
+        if vk = 187 { return 61 }
+        if vk = 188 { return 44 }
+        if vk = 189 { return 45 }
+        if vk = 190 { return 46 }
+        if vk = 191 { return 47 }
+        if vk = 192 { return 96 }
+        if vk = 219 { return 91 }
+        if vk = 220 { return 92 }
+        if vk = 221 { return 93 }
+        if vk = 222 { return 39 }
+        return 0
+    end
+
+    fn button_down(n: *native.Window, hwnd: int, number: int, lparam: int)
+    begin
+        n.mouse_x := signed16(lparam)
+        n.mouse_y := signed16(lparam >> 16)
+        call4(n, n.f_capture, hwnd, 0, 0, 0)
+        push(n, wevent.kind_mouse_down(), number, n.mouse_x, n.mouse_y, 0)
+    end
+
+    fn button_up(n: *native.Window, number: int, lparam: int)
+    begin
+        n.mouse_x := signed16(lparam)
+        n.mouse_y := signed16(lparam >> 16)
+        call4(n, n.f_release, 0, 0, 0, 0)
+        push(n, wevent.kind_mouse_up(), number, n.mouse_x, n.mouse_y, 0)
+    end
+
+    // Called by Windows (through the thunk) for every message sent to the window.
+    fn on_message(hwnd: int, msg: int, wparam: int, lparam: int): int
+    begin
+        var n: *native.Window := state()
+        if @n = 0 { return 0 }
+        if msg = 16 {
+            push(n, wevent.kind_close(), 0, 0, 0, 0)
+            return 0
+        }
+        if msg = 5 {
+            if wparam != 1 {
+                n.width := lparam & 65535
+                n.height := (lparam >> 16) & 65535
+                push(n, wevent.kind_resize(), 0, n.width, n.height, 0)
+            }
+            return 0
+        }
+        if msg = 15 {
+            call4(n, n.f_validate, hwnd, 0, 0, 0)
+            push(n, wevent.kind_expose(), 0, 0, 0, 0)
+            return 0
+        }
+        if msg = 20 { return 1 }
+        if msg = 512 {
+            n.mouse_x := signed16(lparam)
+            n.mouse_y := signed16(lparam >> 16)
+            push(n, wevent.kind_motion(), 0, n.mouse_x, n.mouse_y, 0)
+            return 0
+        }
+        if msg = 513 {
+            button_down(n, hwnd, 1, lparam)
+            return 0
+        }
+        if msg = 514 {
+            button_up(n, 1, lparam)
+            return 0
+        }
+        if msg = 519 {
+            button_down(n, hwnd, 2, lparam)
+            return 0
+        }
+        if msg = 520 {
+            button_up(n, 2, lparam)
+            return 0
+        }
+        if msg = 516 {
+            button_down(n, hwnd, 3, lparam)
+            return 0
+        }
+        if msg = 517 {
+            button_up(n, 3, lparam)
+            return 0
+        }
+        if msg = 522 {
+            var delta: int := signed16(wparam >> 16)
+            if delta > 0 { push(n, wevent.kind_mouse_down(), 4, n.mouse_x, n.mouse_y, 0) }
+            if delta < 0 { push(n, wevent.kind_mouse_down(), 5, n.mouse_x, n.mouse_y, 0) }
+            return 0
+        }
+        if msg = 256 || msg = 260 {
+            var symbol: int := symbol_of(wparam & 255)
+            if symbol != 0 { push(n, wevent.kind_key_down(), symbol, wparam & 255, 0, 1) }
+            if msg = 260 && symbol = 0 { return call4(n, n.f_defproc, hwnd, msg, wparam, lparam) }
+            return 0
+        }
+        if msg = 257 || msg = 261 {
+            var symbol: int := symbol_of(wparam & 255)
+            if symbol != 0 { push(n, wevent.kind_key_up(), symbol, wparam & 255, 0, 1) }
+            if msg = 261 && symbol = 0 { return call4(n, n.f_defproc, hwnd, msg, wparam, lparam) }
+            return 0
+        }
+        if msg = 258 {
+            var code: int := wparam & 65535
+            if code = 13 { code := 10 }
+            if code >= 32 || code = 8 || code = 9 || code = 10 { push(n, wevent.kind_char(), code, 0, 0, 0) }
+            return 0
+        }
+        return call4(n, n.f_defproc, hwnd, msg, wparam, lparam)
+    end
+
+    // ---- the platform interface used by window ----
+
+    fn open(title: string, width: int, height: int, prefer_wayland: int): *native.Window
+    begin
+        var none: *native.Window
+        var user: string := "user32.dll"
+        var n: *native.Window := alloc(512)
+        runtime.mem.set(n, 0, 512)
+        n.args := alloc(128)
+        n.queue := alloc(8192)
+        n.msg := alloc(64)
+        n.width := width
+        n.height := height
+        n.open := 1
+        n.f_peek := win32.proc(user, "PeekMessageA")
+        n.f_translate := win32.proc(user, "TranslateMessage")
+        n.f_dispatch := win32.proc(user, "DispatchMessageA")
+        n.f_defproc := win32.proc(user, "DefWindowProcA")
+        n.f_wait := win32.proc(user, "MsgWaitForMultipleObjects")
+        n.f_validate := win32.proc(user, "ValidateRect")
+        n.f_capture := win32.proc(user, "SetCapture")
+        n.f_release := win32.proc(user, "ReleaseCapture")
+        n.f_setlong := win32.proc(user, "SetWindowLongPtrA")
+        n.f_getlong := win32.proc(user, "GetWindowLongPtrA")
+        n.f_setpos := win32.proc(user, "SetWindowPos")
+        n.f_destroy := win32.proc(user, "DestroyWindow")
+        n.f_settext := win32.proc(user, "SetWindowTextA")
+        n.f_stretch := win32.proc("gdi32.dll", "StretchDIBits")
+        var register: int := win32.proc(user, "RegisterClassA")
+        var create: int := win32.proc(user, "CreateWindowExA")
+        var adjust: int := win32.proc(user, "AdjustWindowRect")
+        var get_dc: int := win32.proc(user, "GetDC")
+        var load_cursor: int := win32.proc(user, "LoadCursorA")
+        var module: int := win32.proc("kernel32.dll", "GetModuleHandleA")
+        var set_dpi: int := win32.proc(user, "SetProcessDPIAware")
+        if n.f_peek = 0 || register = 0 || create = 0 || n.f_stretch = 0 {
+            free(n)
+            return none
+        }
+        slot_set(@n)
+        if set_dpi != 0 { win32.call(set_dpi, n.args, 0) }
+        (*n.args)[0] := 0
+        var instance: int := win32.call(module, n.args, 1)
+        (*n.args)[0] := 0
+        (*n.args)[1] := 32512
+        var cursor: int := win32.call(load_cursor, n.args, 2)
+        var class_name: *void := win32.cstr("XeWindow")
+        var class_def: *void := alloc(80)
+        runtime.mem.set(class_def, 0, 80)
+        put32(class_def, 0, 32)
+        put64(class_def, 8, thunk_address())
+        put64(class_def, 24, instance)
+        put64(class_def, 40, cursor)
+        put64(class_def, 64, @class_name)
+        (*n.args)[0] := @class_def
+        win32.call(register, n.args, 1)
+        // the window frame is larger than the area we draw into
+        var rect: *void := alloc(16)
+        put32(rect, 0, 0)
+        put32(rect, 4, 0)
+        put32(rect, 8, width)
+        put32(rect, 12, height)
+        (*n.args)[0] := @rect
+        (*n.args)[1] := 13565952
+        (*n.args)[2] := 0
+        win32.call(adjust, n.args, 3)
+        var frame_w: int := signed16(get32(rect, 8) - get32(rect, 0))
+        var frame_h: int := signed16(get32(rect, 12) - get32(rect, 4))
+        var title_text: *void := win32.cstr(title)
+        (*n.args)[0] := 0
+        (*n.args)[1] := @class_name
+        (*n.args)[2] := @title_text
+        (*n.args)[3] := 13565952 | 268435456
+        (*n.args)[4] := 2147483648
+        (*n.args)[5] := 2147483648
+        (*n.args)[6] := frame_w
+        (*n.args)[7] := frame_h
+        (*n.args)[8] := 0
+        (*n.args)[9] := 0
+        (*n.args)[10] := instance
+        (*n.args)[11] := 0
+        n.hwnd := win32.call(create, n.args, 12)
+        free(rect)
+        free(class_def)
+        if n.hwnd = 0 {
+            free(n)
+            return none
+        }
+        (*n.args)[0] := n.hwnd
+        n.hdc := win32.call(get_dc, n.args, 1)
+        return n
+    end
+
+    fn backend(n: *native.Window): int
+    begin
+        return 3
+    end
+
+    fn pump(n: *native.Window)
+    begin
+        var more: int := 1
+        while more = 1 {
+            (*n.args)[0] := @n.msg
+            (*n.args)[1] := 0
+            (*n.args)[2] := 0
+            (*n.args)[3] := 0
+            (*n.args)[4] := 1
+            var got: int := win32.call(n.f_peek, n.args, 5) & 255
+            if got = 0 { more := 0 }
+            else {
+                (*n.args)[0] := @n.msg
+                win32.call(n.f_translate, n.args, 1)
+                (*n.args)[0] := @n.msg
+                win32.call(n.f_dispatch, n.args, 1)
+            }
+        }
+    end
+
+    fn next_event(n: *native.Window, ev: *wevent.Event, timeout_ms: int): int
+    begin
+        slot_set(@n)
+        if n.head = n.tail { pump(n) }
+        if n.head = n.tail && timeout_ms != 0 {
+            var wait: int := timeout_ms
+            if wait < 0 { wait := 4294967295 }
+            (*n.args)[0] := 0
+            (*n.args)[1] := 0
+            (*n.args)[2] := 0
+            (*n.args)[3] := wait
+            (*n.args)[4] := 1279
+            win32.call(n.f_wait, n.args, 5)
+            pump(n)
+        }
+        if n.head = n.tail { return 0 }
+        var base: int := n.tail * 6
+        ev.kind := (*n.queue)[base]
+        ev.a := (*n.queue)[base + 1]
+        ev.b := (*n.queue)[base + 2]
+        ev.c := (*n.queue)[base + 3]
+        ev.flags := (*n.queue)[base + 4]
+        n.tail := (n.tail + 1) % 170
+        return ev.kind
+    end
+
+    fn present(n: *native.Window, pixels: *[268435456]int, stride: int, w: int, h: int)
+    begin
+        var need: int := w * h * 4
+        if n.bits_size < need {
+            if n.bits_size > 0 { free(n.bits) }
+            n.bits := alloc(need)
+            n.bits_size := need
+        }
+        var row: int := 0
+        while row < h {
+            var line: *void := n.bits + row * w * 4
+            var base: int := row * stride
+            var col: int := 0
+            while col < w {
+                runtime.hw.write32(line + col * 4, (*pixels)[base + col])
+                col := col + 1
+            }
+            row := row + 1
+        }
+        var info: *void := alloc(48)
+        runtime.mem.set(info, 0, 48)
+        put32(info, 0, 40)
+        put32(info, 4, w)
+        put32(info, 8, 0 - h)
+        put32(info, 12, 65537)
+        put32(info, 14, 32)
+        (*n.args)[0] := n.hdc
+        (*n.args)[1] := 0
+        (*n.args)[2] := 0
+        (*n.args)[3] := w
+        (*n.args)[4] := h
+        (*n.args)[5] := 0
+        (*n.args)[6] := 0
+        (*n.args)[7] := w
+        (*n.args)[8] := h
+        (*n.args)[9] := @n.bits
+        (*n.args)[10] := @info
+        (*n.args)[11] := 0
+        (*n.args)[12] := 13369376
+        win32.call(n.f_stretch, n.args, 13)
+        free(info)
+    end
+
+    fn fix_size(n: *native.Window, w: int, h: int)
+    begin
+        (*n.args)[0] := n.hwnd
+        (*n.args)[1] := 0 - 16
+        var style: int := win32.call(n.f_getlong, n.args, 2)
+        (*n.args)[0] := n.hwnd
+        (*n.args)[1] := 0 - 16
+        (*n.args)[2] := style & ~(262144 | 65536)
+        win32.call(n.f_setlong, n.args, 3)
+        (*n.args)[0] := n.hwnd
+        (*n.args)[1] := 0
+        (*n.args)[2] := 0
+        (*n.args)[3] := 0
+        (*n.args)[4] := 0
+        (*n.args)[5] := 0
+        (*n.args)[6] := 39
+        win32.call(n.f_setpos, n.args, 7)
+    end
+
+    fn set_title(n: *native.Window, title: string)
+    begin
+        var text: *void := win32.cstr(title)
+        (*n.args)[0] := n.hwnd
+        (*n.args)[1] := @text
+        win32.call(n.f_settext, n.args, 2)
+        free(text)
+    end
+
+    // Windows can read a window's pixels, but this layer does not (yet): -1 means "cannot".
+    fn read_pixel(n: *native.Window, x: int, y: int): int
+    begin
+        return -1
+    end
+
+    fn close(n: *native.Window)
+    begin
+        (*n.args)[0] := n.hwnd
+        win32.call(n.f_destroy, n.args, 1)
+        slot_set(0)
+        free(n.queue)
+        free(n.args)
+        free(n.msg)
+        free(n)
+    end
+end

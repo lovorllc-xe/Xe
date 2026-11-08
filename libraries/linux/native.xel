@@ -1,0 +1,102 @@
+// native (Linux): the platform layer under `window`. The compiler picks the `native` of the platform
+// you build for (`xe --build prog.xe -p linux`); programs never use it directly.
+// X11 is the default (it also works on Wayland sessions through XWayland). Set XE_BACKEND=wayland, or call
+// native.prefer_wayland() before window.open, to use native Wayland; if X11 is unavailable and a Wayland
+// compositor is, Wayland is used automatically.
+uses x11
+uses wayland
+uses wevent
+
+module native
+begin
+    type Window: record
+    begin
+        x: *x11.Display
+        w: *wayland.Display
+        backend: int
+    end
+
+    // backend ids: 1 = Wayland, 2 = X11, 3 = Win32, 4 = Cocoa
+    fn platform_name(): string
+    begin
+        return "linux"
+    end
+
+    fn open(title: string, width: int, height: int, prefer_wayland: int): *native.Window
+    begin
+        var none: *native.Window
+        var choice: string := env.get("XE_BACKEND")
+        var want_wayland: int := prefer_wayland
+        if choice = "wayland" { want_wayland := 1 }
+        if choice = "x11" { want_wayland := 0 }
+        var d: *x11.Display
+        var w: *wayland.Display
+        var backend: int := 0
+        if want_wayland = 1 && choice != "x11" {
+            w := wayland.open_display()
+            if @w != 0 { backend := 1 }
+        }
+        if backend = 0 && choice != "wayland" {
+            d := x11.open_display()
+            if @d != 0 { backend := 2 }
+        }
+        if backend = 0 && choice != "x11" && want_wayland = 0 {
+            w := wayland.open_display()
+            if @w != 0 { backend := 1 }
+        }
+        if backend = 0 { return none }
+        var n: *native.Window := alloc(32)
+        n.backend := backend
+        if backend = 1 {
+            n.w := w
+            wayland.create_window(w, title, width, height)
+        }
+        else {
+            n.x := d
+            x11.create_window(d, title, 100, 100, width, height)
+        }
+        return n
+    end
+
+    fn backend(n: *native.Window): int
+    begin
+        return n.backend
+    end
+
+    fn next_event(n: *native.Window, ev: *wevent.Event, timeout_ms: int): int
+    begin
+        if n.backend = 1 { return wayland.next_event(n.w, ev, timeout_ms) }
+        return x11.next_event(n.x, ev, timeout_ms)
+    end
+
+    fn present(n: *native.Window, pixels: *[268435456]int, stride: int, w: int, h: int)
+    begin
+        if n.backend = 1 { wayland.put_pixels(n.w, pixels, stride, w, h) }
+        else { x11.put_pixels(n.x, pixels, stride, 0, 0, w, h) }
+    end
+
+    fn fix_size(n: *native.Window, w: int, h: int)
+    begin
+        if n.backend = 1 { wayland.fix_size(n.w, w, h) }
+        else { x11.fix_size(n.x, w, h) }
+    end
+
+    fn set_title(n: *native.Window, title: string)
+    begin
+        if n.backend = 2 { x11.set_title(n.x, title) }
+    end
+
+    // The color of one window pixel as 0xRRGGBB, or -1 when the platform cannot read it back.
+    fn read_pixel(n: *native.Window, x: int, y: int): int
+    begin
+        if n.backend = 2 { return x11.get_pixel(n.x, x, y) }
+        return -1
+    end
+
+    fn close(n: *native.Window)
+    begin
+        if n.backend = 1 { wayland.close_display(n.w) }
+        else { x11.close_display(n.x) }
+        free(n)
+    end
+end

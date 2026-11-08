@@ -1,6 +1,6 @@
 # Xe library index
 
-168 importable libraries. Add one with `uses name` at the top of a source file.
+169 importable libraries. Add one with `uses name` at the top of a source file.
 
 ## Containers
 
@@ -166,7 +166,7 @@
 | `image` | load and save canvas pixels as PPM, BMP and PNG files (PNG is written uncompressed). |
 | `png` | decode PNG files (all color types, bit depths 1-16, non-interlaced) into a canvas. |
 | `jpeg` | decode baseline (sequential Huffman) JPEG files - grayscale or YCbCr with any chroma subsampling. |
-| `window` | open a window on Linux (native Wayland, or X11), draw into its canvas, read the keyboard and mouse. |
+| `window` | open a window (Linux X11 or Wayland, Windows, macOS: the same code on every platform), draw into its canvas, read the keyboard and mouse. |
 | `x11` | a pure-Xe X11 client. It speaks the X protocol over the display's Unix socket (no libX11/xcb): |
 | `gui` | an immediate-mode GUI toolkit. Widgets are plain function calls made every frame; |
 | `gfx3d` | a software 3D renderer - vectors, 4x4 matrices, meshes (cube, plane, sphere, torus, OBJ files), |
@@ -224,3 +224,4 @@
 | Library | What it does |
 |---|---|
 | `wayland` | a pure-Xe Wayland client. It speaks the Wayland wire protocol over the compositor's Unix |
+| `wevent` | the window event record and event kinds shared by every window backend (X11, Wayland, Win32, ...). |

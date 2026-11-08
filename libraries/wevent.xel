@@ -1,0 +1,61 @@
+// wevent: the window event record and event kinds shared by every window backend (X11, Wayland, Win32, ...).
+module wevent
+begin
+    type Event: record
+    begin
+        kind: int
+        a: int
+        b: int
+        c: int
+        d: int
+        state: int
+        flags: int
+    end
+
+    fn kind_key_down(): int
+    begin
+        return 1
+    end
+
+    fn kind_key_up(): int
+    begin
+        return 2
+    end
+
+    fn kind_mouse_down(): int
+    begin
+        return 3
+    end
+
+    fn kind_mouse_up(): int
+    begin
+        return 4
+    end
+
+    fn kind_motion(): int
+    begin
+        return 5
+    end
+
+    fn kind_expose(): int
+    begin
+        return 6
+    end
+
+    fn kind_resize(): int
+    begin
+        return 7
+    end
+
+    fn kind_close(): int
+    begin
+        return 8
+    end
+
+    // A typed character (a = code point). Backends that know the real character (Win32) send this
+    // after the key press; for them key_down has flags = 1 so the window does not guess the character.
+    fn kind_char(): int
+    begin
+        return 9
+    end
+end

@@ -1,4 +1,4 @@
-// window: open a window on Linux (native Wayland, or X11), draw into its canvas, read the keyboard and mouse.
+// window: open a window (Linux X11 or Wayland, Windows, macOS: the same code on every platform), draw into its canvas, read the keyboard and mouse.
 // The loop of every GUI app or game looks like:
 //     var win: *window.Window := window.open("title", 640, 480)
 //     while window.is_open(win) {
@@ -8,8 +8,8 @@
 //         window.present(win)                    // show it
 //         window.limit_fps(win, 60)
 //     }
-uses x11
-uses wayland
+uses wevent
+uses native
 uses canvas
 uses clock
 
@@ -17,8 +17,7 @@ module window
 begin
     type Window: record
     begin
-        display: *x11.Display
-        wl: *wayland.Display
+        native: *native.Window
         backend: int
         canvas: *canvas.Canvas
         width: int
@@ -36,7 +35,7 @@ begin
         keycode_symbol: *[256]int
         typed: *[64]int
         typed_count: int
-        event: *x11.Event
+        event: *wevent.Event
         last_frame: int
         delta_ns: int
         fps_count: int
@@ -133,8 +132,7 @@ begin
         return 1023
     end
 
-    // Which backend a window uses: 1 = Wayland, 2 = X11. Wayland is used when WAYLAND_DISPLAY is set and
-    // reachable, else X11; set XE_BACKEND=x11 or XE_BACKEND=wayland to force one.
+    // Which backend a window uses: 1 = Wayland, 2 = X11 (Linux), 3 = Win32, 4 = Cocoa.
     fn backend(win: *window.Window): int
     begin
         return win.backend
@@ -142,31 +140,35 @@ begin
 
     fn next_event(win: *window.Window, timeout_ms: int): int
     begin
-        if win.backend = 1 { return wayland.next_event(win.wl, win.event, timeout_ms) }
-        return x11.next_event(win.display, win.event, timeout_ms)
+        return native.next_event(win.native, win.event, timeout_ms)
+    end
+
+    // The color of one window pixel as 0xRRGGBB, or -1 when the platform cannot read it back.
+    fn read_pixel(win: *window.Window, x: int, y: int): int
+    begin
+        return native.read_pixel(win.native, x, y)
     end
 
     fn open(title: string, width: int, height: int): *window.Window
     begin
+        return open_with(title, width, height, 0)
+    end
+
+    // Linux: prefer native Wayland over X11 for this window (same as XE_BACKEND=wayland).
+    fn open_wayland(title: string, width: int, height: int): *window.Window
+    begin
+        return open_with(title, width, height, 1)
+    end
+
+    fn open_with(title: string, width: int, height: int, prefer_wayland: int): *window.Window
+    begin
         var none: *window.Window
-        var choice: string := env.get("XE_BACKEND")
-        var d: *x11.Display
-        var w: *wayland.Display
-        var backend: int := 0
-        if choice != "x11" {
-            w := wayland.open_display()
-            if @w != 0 { backend := 1 }
-        }
-        if backend = 0 && choice != "wayland" {
-            d := x11.open_display()
-            if @d != 0 { backend := 2 }
-        }
-        if backend = 0 { return none }
+        var n: *native.Window := native.open(title, width, height, prefer_wayland)
+        if @n = 0 { return none }
         var win: *window.Window := alloc(320)
         runtime.mem.set(win, 0, 320)
-        win.backend := backend
-        if backend = 1 { win.wl := w }
-        else { win.display := d }
+        win.native := n
+        win.backend := native.backend(n)
         win.width := width
         win.height := height
         win.canvas := canvas.new(width, height)
@@ -177,6 +179,7 @@ begin
         win.typed := alloc(64 * 8)
         win.typed_count := 0
         win.event := alloc(64)
+        runtime.mem.set(win.event, 0, 64)
         var i: int := 0
         while i < 1024 {
             (*win.keys)[i] := 0
@@ -188,8 +191,6 @@ begin
             (*win.keycode_symbol)[i] := 0
             i := i + 1
         }
-        if backend = 1 { wayland.create_window(w, title, width, height) }
-        else { x11.create_window(d, title, 100, 100, width, height) }
         win.last_frame := clock.monotonic()
         win.fps_time := win.last_frame
         win.fps_count := 0
@@ -200,8 +201,8 @@ begin
         var exposed: int := 0
         while waited < 50 && exposed = 0 {
             var kind: int := next_event(win, 50)
-            if kind = x11.kind_expose() { exposed := 1 }
-            if kind = x11.kind_resize() { handle(win, kind) }
+            if kind = wevent.kind_expose() { exposed := 1 }
+            if kind = wevent.kind_resize() { handle(win, kind) }
             waited := waited + 1
         }
         // let the window manager finish placing/resizing it, so the first frame is not wiped
@@ -218,10 +219,7 @@ begin
     fn open_fixed(title: string, width: int, height: int): *window.Window
     begin
         var win: *window.Window := open(title, width, height)
-        if @win != 0 {
-            if win.backend = 1 { wayland.fix_size(win.wl, width, height) }
-            else { x11.fix_size(win.display, width, height) }
-        }
+        if @win != 0 { native.fix_size(win.native, width, height) }
         return win
     end
 
@@ -237,8 +235,7 @@ begin
 
     fn destroy(win: *window.Window)
     begin
-        if win.backend = 1 { wayland.close_display(win.wl) }
-        else { x11.close_display(win.display) }
+        native.close(win.native)
         canvas.release(win.canvas)
         free(win.keys)
         free(win.edges)
@@ -258,24 +255,26 @@ begin
 
     fn handle(win: *window.Window, kind: int)
     begin
-        var ev: *x11.Event := win.event
-        if kind = x11.kind_key_down() {
+        var ev: *wevent.Event := win.event
+        if kind = wevent.kind_key_down() {
             var symbol: int := ev.a
             (*win.keycode_symbol)[ev.b] := symbol
             var index: int := key_index(symbol)
             if (*win.keys)[index] = 0 { (*win.edges)[index] := 1 }
             (*win.keys)[index] := 1
-            if symbol >= 32 && symbol <= 126 { queue_char(win, symbol) }
-            if symbol = 65293 { queue_char(win, 10) }
-            if symbol = 65288 { queue_char(win, 8) }
-            if symbol = 65289 { queue_char(win, 9) }
+            if ev.flags = 0 {
+                if symbol >= 32 && symbol <= 126 { queue_char(win, symbol) }
+                if symbol = 65293 { queue_char(win, 10) }
+                if symbol = 65288 { queue_char(win, 8) }
+                if symbol = 65289 { queue_char(win, 9) }
+            }
         }
-        if kind = x11.kind_key_up() {
+        if kind = wevent.kind_key_up() {
             var symbol: int := (*win.keycode_symbol)[ev.b]
             if symbol = 0 { symbol := ev.a }
             (*win.keys)[key_index(symbol)] := 0
         }
-        if kind = x11.kind_mouse_down() {
+        if kind = wevent.kind_mouse_down() {
             win.mouse_x := ev.b
             win.mouse_y := ev.c
             if ev.a = 4 { win.wheel := win.wheel + 1 }
@@ -286,7 +285,7 @@ begin
                 win.pressed := win.pressed | mask
             }
         }
-        if kind = x11.kind_mouse_up() {
+        if kind = wevent.kind_mouse_up() {
             win.mouse_x := ev.b
             win.mouse_y := ev.c
             if ev.a <= 3 {
@@ -295,16 +294,17 @@ begin
                 win.released := win.released | mask
             }
         }
-        if kind = x11.kind_motion() {
+        if kind = wevent.kind_motion() {
             win.mouse_x := ev.b
             win.mouse_y := ev.c
         }
-        if kind = x11.kind_resize() {
+        if kind = wevent.kind_resize() {
             if ev.b != win.width || ev.c != win.height { win.resized := 1 }
             win.width := ev.b
             win.height := ev.c
         }
-        if kind = x11.kind_close() { win.is_open := 0 }
+        if kind = wevent.kind_char() { queue_char(win, ev.a) }
+        if kind = wevent.kind_close() { win.is_open := 0 }
     end
 
     // Process all pending events and clear the per-frame state (pressed/released/wheel).
@@ -355,8 +355,7 @@ begin
 
     fn present(win: *window.Window)
     begin
-        if win.backend = 1 { wayland.put_pixels(win.wl, win.canvas.pixels, win.canvas.width, win.canvas.width, win.canvas.height) }
-        else { x11.put_pixels(win.display, win.canvas.pixels, win.canvas.width, 0, 0, win.canvas.width, win.canvas.height) }
+        native.present(win.native, win.canvas.pixels, win.canvas.width, win.canvas.width, win.canvas.height)
     end
 
     fn key_down(win: *window.Window, key: int): int

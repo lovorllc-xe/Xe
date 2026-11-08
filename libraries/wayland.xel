@@ -6,6 +6,7 @@
 uses syscall
 uses clock
 uses x11
+uses wevent
 
 module wayland
 begin
@@ -16,7 +17,7 @@ begin
         out_len: int
         inbuf: *void
         in_len: int
-        scratch: *x11.Event
+        scratch: *wevent.Event
         next_id: int
         registry: int
         compositor: int
@@ -351,25 +352,25 @@ begin
         if matches(p, 16, length, "zxdg_decoration_manager_v1") = 1 { d.deco_mgr := bind(d, name, "zxdg_decoration_manager_v1", 1) }
     end
 
-    fn on_pointer(d: *wayland.Display, op: int, p: *void, ev: *x11.Event): int
+    fn on_pointer(d: *wayland.Display, op: int, p: *void, ev: *wevent.Event): int
     begin
         if op = 0 {
             d.pointer_serial := x11.get32(p, 8)
             d.mouse_x := signed32(x11.get32(p, 16)) / 256
             d.mouse_y := signed32(x11.get32(p, 20)) / 256
             if d.cursor_surface != 0 { request(d, d.pointer, 0, 4, d.pointer_serial, d.cursor_surface, 0, 0, 0) }
-            ev.kind := x11.kind_motion()
+            ev.kind := wevent.kind_motion()
             ev.b := d.mouse_x
             ev.c := d.mouse_y
-            return x11.kind_motion()
+            return wevent.kind_motion()
         }
         if op = 2 {
             d.mouse_x := signed32(x11.get32(p, 12)) / 256
             d.mouse_y := signed32(x11.get32(p, 16)) / 256
-            ev.kind := x11.kind_motion()
+            ev.kind := wevent.kind_motion()
             ev.b := d.mouse_x
             ev.c := d.mouse_y
-            return x11.kind_motion()
+            return wevent.kind_motion()
         }
         if op = 3 {
             var button: int := x11.get32(p, 16)
@@ -382,27 +383,27 @@ begin
             ev.b := d.mouse_x
             ev.c := d.mouse_y
             if x11.get32(p, 20) = 1 {
-                ev.kind := x11.kind_mouse_down()
-                return x11.kind_mouse_down()
+                ev.kind := wevent.kind_mouse_down()
+                return wevent.kind_mouse_down()
             }
-            ev.kind := x11.kind_mouse_up()
-            return x11.kind_mouse_up()
+            ev.kind := wevent.kind_mouse_up()
+            return wevent.kind_mouse_up()
         }
         if op = 4 {
             if x11.get32(p, 12) != 0 { return 0 }
             var amount: int := signed32(x11.get32(p, 16))
             ev.b := d.mouse_x
             ev.c := d.mouse_y
-            ev.kind := x11.kind_mouse_down()
+            ev.kind := wevent.kind_mouse_down()
             if amount > 0 { ev.a := 5 }
             else { ev.a := 4 }
             if amount = 0 { return 0 }
-            return x11.kind_mouse_down()
+            return wevent.kind_mouse_down()
         }
         return 0
     end
 
-    fn on_keyboard(d: *wayland.Display, op: int, p: *void, ev: *x11.Event): int
+    fn on_keyboard(d: *wayland.Display, op: int, p: *void, ev: *wevent.Event): int
     begin
         if op = 4 {
             var mods: int := x11.get32(p, 12)
@@ -426,16 +427,16 @@ begin
             ev.b := code
             if x11.get32(p, 20) = 0 {
                 if d.repeat_code = code { d.repeat_code := 0 }
-                ev.kind := x11.kind_key_up()
-                return x11.kind_key_up()
+                ev.kind := wevent.kind_key_up()
+                return wevent.kind_key_up()
             }
             if (symbol < 65505 || symbol > 65518) && d.repeat_rate > 0 {
                 d.repeat_code := code
                 d.repeat_sym := symbol
                 d.repeat_next := clock.monotonic() + d.repeat_delay * 1000000
             }
-            ev.kind := x11.kind_key_down()
-            return x11.kind_key_down()
+            ev.kind := wevent.kind_key_down()
+            return wevent.kind_key_down()
         }
         if op = 2 {
             d.repeat_code := 0
@@ -445,13 +446,13 @@ begin
         return 0
     end
 
-    fn handle_message(d: *wayland.Display, obj: int, op: int, p: *void, ev: *x11.Event): int
+    fn handle_message(d: *wayland.Display, obj: int, op: int, p: *void, ev: *wevent.Event): int
     begin
         if obj = 1 {
             if op = 0 {
                 d.failed := 1
-                ev.kind := x11.kind_close()
-                return x11.kind_close()
+                ev.kind := wevent.kind_close()
+                return wevent.kind_close()
             }
             return 0
         }
@@ -474,13 +475,13 @@ begin
             if d.pend_w > 0 && d.pend_h > 0 && (d.pend_w != d.width || d.pend_h != d.height) {
                 d.width := d.pend_w
                 d.height := d.pend_h
-                ev.kind := x11.kind_resize()
+                ev.kind := wevent.kind_resize()
                 ev.b := d.width
                 ev.c := d.height
-                if first = 0 { d.pending_kind := x11.kind_expose() }
-                return x11.kind_resize()
+                if first = 0 { d.pending_kind := wevent.kind_expose() }
+                return wevent.kind_resize()
             }
-            if first = 0 { return x11.kind_expose() }
+            if first = 0 { return wevent.kind_expose() }
             return 0
         }
         if obj = d.toplevel {
@@ -489,8 +490,8 @@ begin
                 d.pend_h := signed32(x11.get32(p, 12))
             }
             if op = 1 {
-                ev.kind := x11.kind_close()
-                return x11.kind_close()
+                ev.kind := wevent.kind_close()
+                return wevent.kind_close()
             }
             return 0
         }
@@ -524,13 +525,13 @@ begin
         return 0
     end
 
-    fn dispatch_one(d: *wayland.Display, ev: *x11.Event): int
+    fn dispatch_one(d: *wayland.Display, ev: *wevent.Event): int
     begin
         var size: int := x11.get32(d.inbuf, 4) >> 16
         if size < 8 || size > 65536 {
             d.in_len := 0
-            ev.kind := x11.kind_close()
-            return x11.kind_close()
+            ev.kind := wevent.kind_close()
+            return wevent.kind_close()
         }
         var obj: int := x11.get32(d.inbuf, 0)
         var op: int := x11.get32(d.inbuf, 4) & 65535
@@ -672,7 +673,7 @@ begin
 
     // Waits up to timeout_ms (0 = do not wait, -1 = forever) for the next event.
     // Returns its kind (the x11 kinds), or 0 when there was none.
-    fn next_event(d: *wayland.Display, ev: *x11.Event, timeout_ms: int): int
+    fn next_event(d: *wayland.Display, ev: *wevent.Event, timeout_ms: int): int
     begin
         if d.pending_kind != 0 {
             var kind: int := d.pending_kind
@@ -695,10 +696,10 @@ begin
                 var now: int := clock.monotonic()
                 if d.repeat_code != 0 && now >= d.repeat_next {
                     d.repeat_next := now + 1000000000 / d.repeat_rate
-                    ev.kind := x11.kind_key_down()
+                    ev.kind := wevent.kind_key_down()
                     ev.a := d.repeat_sym
                     ev.b := d.repeat_code
-                    result := x11.kind_key_down()
+                    result := wevent.kind_key_down()
                     searching := 0
                 }
                 else {
@@ -710,8 +711,8 @@ begin
                     }
                     var status: int := fill(d, limit)
                     if status < 0 {
-                        ev.kind := x11.kind_close()
-                        result := x11.kind_close()
+                        ev.kind := wevent.kind_close()
+                        result := wevent.kind_close()
                         searching := 0
                     }
                     if status = 0 {
