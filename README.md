@@ -42,12 +42,12 @@ end
 - **More intuitive pointers.** Record fields auto-dereference through pointers
   (`node.next`, not `(*node).next`); pointer locals live in registers;
   `*p`, `&x`, `@p` (address as an int, e.g. `@p = 0` for a null check).
-- **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG, baseline JPEG, BMP, PPM), `window` + `x11`
-  (windows, keyboard, mouse over the X11 protocol, no libX11), `gui` (immediate-mode widgets), `gfx3d` (software 3D:
+- **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG, baseline JPEG, BMP, PPM), `window` + `wayland` + `x11`
+  (windows, keyboard, mouse over native Wayland or X11, no libwayland or libX11), `gui` (immediate-mode widgets), `gfx3d` (software 3D:
   meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
   `vulkan` (instance/device/buffers/compute/graphics pipelines/depth/render targets), `vkscene` (GPU-lit 3D
   scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **167 libraries** covering containers, math, text, encodings, hashing and
+- **168 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -140,7 +140,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-167 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+168 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -191,7 +191,7 @@ end
   gives ready-made lit 3D rendering on the GPU. Compile shaders with `glslc`. Frames are read back into a
   `canvas` and shown through `window`; **swapchain presentation directly to a window surface and textures /
   descriptor sets for graphics pipelines are not implemented yet.**
-- Windows use X11 (also works on Wayland through XWayland). There is no audio library yet.
+- Windows use native Wayland when `WAYLAND_DISPLAY` is set, otherwise X11; `XE_BACKEND=x11` or `XE_BACKEND=wayland` forces one. Wayland keyboard input assumes a US layout, and on compositors without server-side decorations (GNOME) the window has no title bar. There is no audio library yet.
 
 ## Benchmarks
 

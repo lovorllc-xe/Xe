@@ -1,0 +1,736 @@
+// wayland: a pure-Xe Wayland client. It speaks the Wayland wire protocol over the compositor's Unix
+// socket (no libwayland): wl_shm pixel buffers, xdg-shell windows, pointer and keyboard input,
+// server-side decorations when the compositor offers them. Most programs should use `window`,
+// which picks Wayland or X11 automatically; this module is the Wayland half of it.
+// Keyboard input assumes a US layout (the keymap sent by the compositor is not parsed).
+uses syscall
+uses clock
+uses x11
+
+module wayland
+begin
+    type Display: record
+    begin
+        fd: int
+        out: *void
+        out_len: int
+        inbuf: *void
+        in_len: int
+        scratch: *x11.Event
+        next_id: int
+        registry: int
+        compositor: int
+        shm: int
+        wm_base: int
+        seat: int
+        deco_mgr: int
+        surface: int
+        xdg_surface: int
+        toplevel: int
+        pointer: int
+        keyboard: int
+        cursor_surface: int
+        sync_id: int
+        sync_done: int
+        width: int
+        height: int
+        pend_w: int
+        pend_h: int
+        configured: int
+        pending_kind: int
+        buf0: int
+        buf1: int
+        busy: *[2]int
+        current: int
+        mem: *void
+        mem_size: int
+        buf_w: int
+        buf_h: int
+        pool_mem: *void
+        mouse_x: int
+        mouse_y: int
+        pointer_serial: int
+        shift: int
+        ctrl: int
+        lock: int
+        repeat_code: int
+        repeat_sym: int
+        repeat_next: int
+        repeat_rate: int
+        repeat_delay: int
+        failed: int
+    end
+
+    fn put64(buffer: *void, offset: int, value: int)
+    begin
+        x11.put32(buffer, offset, value)
+        x11.put32(buffer, offset + 4, value >> 32)
+    end
+
+    fn to_pointer(address: int): *void
+    begin
+        var cell: *int := alloc(8)
+        *cell := address
+        var raw: *void := cell
+        var result: *void := runtime.pointer.read(raw)
+        free(cell)
+        return result
+    end
+
+    fn signed32(value: int): int
+    begin
+        if value >= 2147483648 { return value - 4294967296 }
+        return value
+    end
+
+    fn string_size(s: string): int
+    begin
+        return 4 + x11.pad4(str.length(s) + 1)
+    end
+
+    // ---- output ----
+
+    fn flush(d: *wayland.Display)
+    begin
+        if d.out_len > 0 {
+            x11.write_all(d.fd, d.out, d.out_len)
+            d.out_len := 0
+        }
+    end
+
+    // Reserves a request of `size` bytes; returns its offset in the output buffer (arguments start at +8).
+    fn start(d: *wayland.Display, id: int, opcode: int, size: int): int
+    begin
+        if d.out_len + size > 32768 { flush(d) }
+        var base: int := d.out_len
+        runtime.mem.set(d.out + base, 0, size)
+        x11.put32(d.out, base, id)
+        x11.put32(d.out, base + 4, (size << 16) | opcode)
+        d.out_len := base + size
+        return base
+    end
+
+    fn put_string(d: *wayland.Display, offset: int, s: string)
+    begin
+        x11.put32(d.out, offset, str.length(s) + 1)
+        var i: int := 0
+        while i < str.length(s) {
+            x11.put8(d.out, offset + 4 + i, str.char(s, i))
+            i := i + 1
+        }
+    end
+
+    fn new_id(d: *wayland.Display): int
+    begin
+        var id: int := d.next_id
+        d.next_id := id + 1
+        return id
+    end
+
+    // A request that takes only integer arguments (up to 5).
+    fn request(d: *wayland.Display, id: int, opcode: int, count: int, a: int, b: int, c: int, e: int, f: int)
+    begin
+        var base: int := start(d, id, opcode, 8 + count * 4)
+        if count > 0 { x11.put32(d.out, base + 8, a) }
+        if count > 1 { x11.put32(d.out, base + 12, b) }
+        if count > 2 { x11.put32(d.out, base + 16, c) }
+        if count > 3 { x11.put32(d.out, base + 20, e) }
+        if count > 4 { x11.put32(d.out, base + 24, f) }
+    end
+
+    fn bind(d: *wayland.Display, name: int, interface: string, version: int): int
+    begin
+        var id: int := new_id(d)
+        var size: int := 8 + 4 + string_size(interface) + 8
+        var base: int := start(d, d.registry, 0, size)
+        x11.put32(d.out, base + 8, name)
+        put_string(d, base + 12, interface)
+        var off: int := base + 12 + string_size(interface)
+        x11.put32(d.out, off, version)
+        x11.put32(d.out, off + 4, id)
+        return id
+    end
+
+    // Creates a wl_shm pool of `size` bytes backed by a memfd; the mapped address is left in d.pool_mem.
+    // Returns the pool id (0 on failure).
+    fn create_pool(d: *wayland.Display, size: int): int
+    begin
+        var name: *void := alloc(8)
+        x11.put8(name, 0, 120)
+        x11.put8(name, 1, 101)
+        x11.put8(name, 2, 0)
+        var fd: int := syscall.raw.invoke3(319, @name, 0, 0)
+        free(name)
+        if fd < 0 { return 0 }
+        if syscall.raw.invoke3(77, fd, size, 0) < 0 {
+            syscall.io.close(fd)
+            return 0
+        }
+        var mem: int := syscall.raw.invoke6(9, 0, size, 3, 1, fd, 0)
+        if mem < 0 && mem > -4096 {
+            syscall.io.close(fd)
+            return 0
+        }
+        var pool: int := new_id(d)
+        flush(d)
+        var tmp: *void := alloc(160)
+        runtime.mem.set(tmp, 0, 160)
+        x11.put32(tmp, 0, d.shm)
+        x11.put32(tmp, 4, (16 << 16) | 0)
+        x11.put32(tmp, 8, pool)
+        x11.put32(tmp, 12, size)
+        put64(tmp, 16, @tmp)
+        put64(tmp, 24, 16)
+        put64(tmp, 32, 20)
+        x11.put32(tmp, 40, 1)
+        x11.put32(tmp, 44, 1)
+        x11.put32(tmp, 48, fd)
+        var iov: *void := tmp + 16
+        var control: *void := tmp + 32
+        put64(tmp, 80, @iov)
+        put64(tmp, 88, 1)
+        put64(tmp, 96, @control)
+        put64(tmp, 104, 24)
+        var header: *void := tmp + 64
+        var sent: int := syscall.raw.invoke3(46, d.fd, @header, 16384)
+        free(tmp)
+        syscall.io.close(fd)
+        if sent < 0 { return 0 }
+        d.pool_mem := to_pointer(mem)
+        return pool
+    end
+
+    fn make_buffer(d: *wayland.Display, pool: int, offset: int, w: int, h: int, format: int): int
+    begin
+        var id: int := new_id(d)
+        var base: int := start(d, pool, 0, 32)
+        x11.put32(d.out, base + 8, id)
+        x11.put32(d.out, base + 12, offset)
+        x11.put32(d.out, base + 16, w)
+        x11.put32(d.out, base + 20, h)
+        x11.put32(d.out, base + 24, w * 4)
+        x11.put32(d.out, base + 28, format)
+        return id
+    end
+
+    fn free_buffers(d: *wayland.Display)
+    begin
+        if d.buf0 != 0 {
+            request(d, d.buf0, 0, 0, 0, 0, 0, 0, 0)
+            request(d, d.buf1, 0, 0, 0, 0, 0, 0, 0)
+            var old: *void := d.mem
+            syscall.raw.invoke3(11, @old, d.mem_size, 0)
+            d.buf0 := 0
+            d.buf1 := 0
+            d.buf_w := 0
+            d.buf_h := 0
+        }
+    end
+
+    fn ensure_buffers(d: *wayland.Display, w: int, h: int): int
+    begin
+        if d.buf0 != 0 && d.buf_w = w && d.buf_h = h { return 1 }
+        free_buffers(d)
+        var one: int := w * 4 * h
+        var pool: int := create_pool(d, one * 2)
+        if pool = 0 { return 0 }
+        d.mem := d.pool_mem
+        d.mem_size := one * 2
+        d.buf0 := make_buffer(d, pool, 0, w, h, 1)
+        d.buf1 := make_buffer(d, pool, one, w, h, 1)
+        request(d, pool, 1, 0, 0, 0, 0, 0, 0)
+        (*d.busy)[0] := 0
+        (*d.busy)[1] := 0
+        d.current := 0
+        d.buf_w := w
+        d.buf_h := h
+        return 1
+    end
+
+    // ---- keyboard (US layout, evdev codes) ----
+
+    fn symbol_for(d: *wayland.Display, code: int): int
+    begin
+        if code = 1 { return 65307 }
+        if code = 14 { return 65288 }
+        if code = 15 { return 65289 }
+        if code = 28 { return 65293 }
+        if code = 29 || code = 97 { return 65507 }
+        if code = 42 || code = 54 { return 65505 }
+        if code = 56 || code = 100 { return 65513 }
+        if code = 57 { return 32 }
+        if code = 58 { return 65509 }
+        if code >= 59 && code <= 68 { return 65470 + code - 59 }
+        if code = 87 { return 65480 }
+        if code = 88 { return 65481 }
+        if code = 102 { return 65360 }
+        if code = 103 { return 65362 }
+        if code = 104 { return 65365 }
+        if code = 105 { return 65361 }
+        if code = 106 { return 65363 }
+        if code = 107 { return 65367 }
+        if code = 108 { return 65364 }
+        if code = 109 { return 65366 }
+        if code = 110 { return 65379 }
+        if code = 111 { return 65535 }
+        if code < 2 || code > 53 { return 0 }
+        var plain: string := "  1234567890-=  qwertyuiop[]  asdfghjkl;    zxcvbnm,./"
+        var upper: string := "  !@#$%^&*()_+  QWERTYUIOP{}  ASDFGHJKL:    ZXCVBNM<>?"
+        var low: int := str.char(plain, code)
+        var high: int := str.char(upper, code)
+        if code = 40 { low := 39 }
+        if code = 41 { low := 96 }
+        if code = 43 { low := 92 }
+        if code = 40 { high := 34 }
+        if code = 41 { high := 126 }
+        if code = 43 { high := 124 }
+        if low >= 97 && low <= 122 {
+            if (d.shift != 0) != (d.lock != 0) { return high }
+            return low
+        }
+        if d.shift != 0 { return high }
+        return low
+    end
+
+    // ---- cursor ----
+
+    fn make_cursor(d: *wayland.Display)
+    begin
+        var shape: string := "#          ##         #.#        #..#       #...#      #....#     #.....#    #......#   #.......#  #........# #.....######..#..#    #.# #..#   ##  #..#   #    #..#       ####  "
+        var pool: int := create_pool(d, 4096)
+        if pool = 0 { return }
+        var buffer: int := make_buffer(d, pool, 0, 11, 16, 0)
+        request(d, pool, 1, 0, 0, 0, 0, 0, 0)
+        var y: int := 0
+        while y < 16 {
+            var x: int := 0
+            while x < 11 {
+                var ch: int := str.char(shape, y * 11 + x)
+                var argb: int := 0
+                if ch = 35 { argb := 4278190080 }
+                if ch = 46 { argb := 4294967295 }
+                runtime.hw.write32(d.pool_mem + (y * 11 + x) * 4, argb)
+                x := x + 1
+            }
+            y := y + 1
+        }
+        d.cursor_surface := new_id(d)
+        request(d, d.compositor, 0, 1, d.cursor_surface, 0, 0, 0, 0)
+        request(d, d.cursor_surface, 1, 3, buffer, 0, 0, 0, 0)
+        request(d, d.cursor_surface, 6, 0, 0, 0, 0, 0, 0)
+    end
+
+    // ---- connection ----
+
+    fn matches(p: *void, offset: int, length: int, name: string): int
+    begin
+        if length != str.length(name) + 1 { return 0 }
+        var i: int := 0
+        while i < str.length(name) {
+            if x11.get8(p, offset + i) != str.char(name, i) { return 0 }
+            i := i + 1
+        }
+        return 1
+    end
+
+    fn lower(a: int, b: int): int
+    begin
+        if a < b { return a }
+        return b
+    end
+
+    fn on_global(d: *wayland.Display, p: *void)
+    begin
+        var name: int := x11.get32(p, 8)
+        var length: int := x11.get32(p, 12)
+        var version: int := x11.get32(p, 16 + x11.pad4(length))
+        if matches(p, 16, length, "wl_compositor") = 1 { d.compositor := bind(d, name, "wl_compositor", lower(version, 4)) }
+        if matches(p, 16, length, "wl_shm") = 1 { d.shm := bind(d, name, "wl_shm", 1) }
+        if matches(p, 16, length, "xdg_wm_base") = 1 { d.wm_base := bind(d, name, "xdg_wm_base", 1) }
+        if matches(p, 16, length, "wl_seat") = 1 { d.seat := bind(d, name, "wl_seat", lower(version, 5)) }
+        if matches(p, 16, length, "zxdg_decoration_manager_v1") = 1 { d.deco_mgr := bind(d, name, "zxdg_decoration_manager_v1", 1) }
+    end
+
+    fn on_pointer(d: *wayland.Display, op: int, p: *void, ev: *x11.Event): int
+    begin
+        if op = 0 {
+            d.pointer_serial := x11.get32(p, 8)
+            d.mouse_x := signed32(x11.get32(p, 16)) / 256
+            d.mouse_y := signed32(x11.get32(p, 20)) / 256
+            if d.cursor_surface != 0 { request(d, d.pointer, 0, 4, d.pointer_serial, d.cursor_surface, 0, 0, 0) }
+            ev.kind := x11.kind_motion()
+            ev.b := d.mouse_x
+            ev.c := d.mouse_y
+            return x11.kind_motion()
+        }
+        if op = 2 {
+            d.mouse_x := signed32(x11.get32(p, 12)) / 256
+            d.mouse_y := signed32(x11.get32(p, 16)) / 256
+            ev.kind := x11.kind_motion()
+            ev.b := d.mouse_x
+            ev.c := d.mouse_y
+            return x11.kind_motion()
+        }
+        if op = 3 {
+            var button: int := x11.get32(p, 16)
+            var number: int := 0
+            if button = 272 { number := 1 }
+            if button = 274 { number := 2 }
+            if button = 273 { number := 3 }
+            if number = 0 { return 0 }
+            ev.a := number
+            ev.b := d.mouse_x
+            ev.c := d.mouse_y
+            if x11.get32(p, 20) = 1 {
+                ev.kind := x11.kind_mouse_down()
+                return x11.kind_mouse_down()
+            }
+            ev.kind := x11.kind_mouse_up()
+            return x11.kind_mouse_up()
+        }
+        if op = 4 {
+            if x11.get32(p, 12) != 0 { return 0 }
+            var amount: int := signed32(x11.get32(p, 16))
+            ev.b := d.mouse_x
+            ev.c := d.mouse_y
+            ev.kind := x11.kind_mouse_down()
+            if amount > 0 { ev.a := 5 }
+            else { ev.a := 4 }
+            if amount = 0 { return 0 }
+            return x11.kind_mouse_down()
+        }
+        return 0
+    end
+
+    fn on_keyboard(d: *wayland.Display, op: int, p: *void, ev: *x11.Event): int
+    begin
+        if op = 4 {
+            var mods: int := x11.get32(p, 12)
+            var locked: int := x11.get32(p, 20)
+            d.shift := mods & 1
+            d.ctrl := (mods >> 2) & 1
+            d.lock := (locked >> 1) & 1
+            return 0
+        }
+        if op = 5 {
+            d.repeat_rate := signed32(x11.get32(p, 8))
+            d.repeat_delay := signed32(x11.get32(p, 12))
+            return 0
+        }
+        if op = 3 {
+            var code: int := x11.get32(p, 16)
+            if code >= 256 { return 0 }
+            var symbol: int := symbol_for(d, code)
+            if symbol = 0 { return 0 }
+            ev.a := symbol
+            ev.b := code
+            if x11.get32(p, 20) = 0 {
+                if d.repeat_code = code { d.repeat_code := 0 }
+                ev.kind := x11.kind_key_up()
+                return x11.kind_key_up()
+            }
+            if (symbol < 65505 || symbol > 65518) && d.repeat_rate > 0 {
+                d.repeat_code := code
+                d.repeat_sym := symbol
+                d.repeat_next := clock.monotonic() + d.repeat_delay * 1000000
+            }
+            ev.kind := x11.kind_key_down()
+            return x11.kind_key_down()
+        }
+        if op = 2 {
+            d.repeat_code := 0
+            d.shift := 0
+            d.lock := 0
+        }
+        return 0
+    end
+
+    fn handle_message(d: *wayland.Display, obj: int, op: int, p: *void, ev: *x11.Event): int
+    begin
+        if obj = 1 {
+            if op = 0 {
+                d.failed := 1
+                ev.kind := x11.kind_close()
+                return x11.kind_close()
+            }
+            return 0
+        }
+        if obj = d.registry {
+            if op = 0 { on_global(d, p) }
+            return 0
+        }
+        if obj = d.sync_id {
+            d.sync_done := 1
+            return 0
+        }
+        if obj = d.wm_base {
+            if op = 0 { request(d, d.wm_base, 3, 1, x11.get32(p, 8), 0, 0, 0, 0) }
+            return 0
+        }
+        if obj = d.xdg_surface {
+            request(d, d.xdg_surface, 4, 1, x11.get32(p, 8), 0, 0, 0, 0)
+            var first: int := d.configured
+            d.configured := 1
+            if d.pend_w > 0 && d.pend_h > 0 && (d.pend_w != d.width || d.pend_h != d.height) {
+                d.width := d.pend_w
+                d.height := d.pend_h
+                ev.kind := x11.kind_resize()
+                ev.b := d.width
+                ev.c := d.height
+                if first = 0 { d.pending_kind := x11.kind_expose() }
+                return x11.kind_resize()
+            }
+            if first = 0 { return x11.kind_expose() }
+            return 0
+        }
+        if obj = d.toplevel {
+            if op = 0 {
+                d.pend_w := signed32(x11.get32(p, 8))
+                d.pend_h := signed32(x11.get32(p, 12))
+            }
+            if op = 1 {
+                ev.kind := x11.kind_close()
+                return x11.kind_close()
+            }
+            return 0
+        }
+        if obj = d.seat {
+            if op = 0 {
+                var caps: int := x11.get32(p, 8)
+                if (caps & 1) != 0 && d.pointer = 0 {
+                    d.pointer := new_id(d)
+                    request(d, d.seat, 0, 1, d.pointer, 0, 0, 0, 0)
+                }
+                if (caps & 2) != 0 && d.keyboard = 0 {
+                    d.keyboard := new_id(d)
+                    request(d, d.seat, 1, 1, d.keyboard, 0, 0, 0, 0)
+                }
+            }
+            return 0
+        }
+        if obj = d.pointer { return on_pointer(d, op, p, ev) }
+        if obj = d.keyboard { return on_keyboard(d, op, p, ev) }
+        if obj = d.buf0 && op = 0 { (*d.busy)[0] := 0 }
+        if obj = d.buf1 && op = 0 { (*d.busy)[1] := 0 }
+        return 0
+    end
+
+    fn have_message(d: *wayland.Display): int
+    begin
+        if d.in_len < 8 { return 0 }
+        var size: int := x11.get32(d.inbuf, 4) >> 16
+        if size < 8 { return 1 }
+        if d.in_len >= size { return 1 }
+        return 0
+    end
+
+    fn dispatch_one(d: *wayland.Display, ev: *x11.Event): int
+    begin
+        var size: int := x11.get32(d.inbuf, 4) >> 16
+        if size < 8 || size > 65536 {
+            d.in_len := 0
+            ev.kind := x11.kind_close()
+            return x11.kind_close()
+        }
+        var obj: int := x11.get32(d.inbuf, 0)
+        var op: int := x11.get32(d.inbuf, 4) & 65535
+        var p: *void := d.inbuf
+        var kind: int := handle_message(d, obj, op, p, ev)
+        runtime.mem.copy(d.inbuf, d.inbuf + size, d.in_len - size)
+        d.in_len := d.in_len - size
+        return kind
+    end
+
+    // Waits up to timeout_ms for data and appends it to the input buffer: 1 = got data, 0 = timeout, -1 = closed.
+    fn fill(d: *wayland.Display, timeout_ms: int): int
+    begin
+        flush(d)
+        var fds: *void := alloc(16)
+        x11.put32(fds, 0, d.fd)
+        x11.put16(fds, 4, 1)
+        x11.put16(fds, 6, 0)
+        var ready: int := syscall.raw.invoke3(7, @fds, 1, timeout_ms)
+        free(fds)
+        if ready <= 0 { return 0 }
+        var n: int := syscall.io.read(d.fd, d.inbuf + d.in_len, 65536 - d.in_len)
+        if n <= 0 { return -1 }
+        d.in_len := d.in_len + n
+        return 1
+    end
+
+    fn roundtrip(d: *wayland.Display)
+    begin
+        d.sync_id := new_id(d)
+        d.sync_done := 0
+        request(d, 1, 0, 1, d.sync_id, 0, 0, 0, 0)
+        flush(d)
+        var alive: int := 1
+        while d.sync_done = 0 && alive = 1 {
+            if have_message(d) = 1 { dispatch_one(d, d.scratch) }
+            else {
+                if fill(d, 2000) <= 0 { alive := 0 }
+            }
+        }
+    end
+
+    fn open_display(): *wayland.Display
+    begin
+        var none: *wayland.Display
+        var name: string := env.get("WAYLAND_DISPLAY")
+        if str.length(name) = 0 { return none }
+        var path: string := name
+        if str.char(name, 0) != 47 {
+            var runtime_dir: string := env.get("XDG_RUNTIME_DIR")
+            if str.length(runtime_dir) = 0 { return none }
+            path := runtime_dir + "/" + name
+        }
+        var fd: int := x11.connect_socket(path)
+        if fd < 0 { return none }
+        var d: *wayland.Display := alloc(512)
+        runtime.mem.set(d, 0, 512)
+        d.fd := fd
+        d.out := alloc(32768 + 64)
+        d.inbuf := alloc(65536 + 64)
+        d.scratch := alloc(64)
+        d.busy := alloc(16)
+        d.next_id := 2
+        d.repeat_rate := 25
+        d.repeat_delay := 600
+        d.registry := new_id(d)
+        request(d, 1, 1, 1, d.registry, 0, 0, 0, 0)
+        roundtrip(d)
+        if d.compositor = 0 || d.shm = 0 || d.wm_base = 0 {
+            close_display(d)
+            return none
+        }
+        roundtrip(d)
+        make_cursor(d)
+        return d
+    end
+
+    fn create_window(d: *wayland.Display, title: string, w: int, h: int)
+    begin
+        d.width := w
+        d.height := h
+        d.surface := new_id(d)
+        request(d, d.compositor, 0, 1, d.surface, 0, 0, 0, 0)
+        d.xdg_surface := new_id(d)
+        request(d, d.wm_base, 2, 2, d.xdg_surface, d.surface, 0, 0, 0)
+        d.toplevel := new_id(d)
+        request(d, d.xdg_surface, 1, 1, d.toplevel, 0, 0, 0, 0)
+        var base: int := start(d, d.toplevel, 2, 8 + string_size(title))
+        put_string(d, base + 8, title)
+        base := start(d, d.toplevel, 3, 8 + string_size("xe"))
+        put_string(d, base + 8, "xe")
+        if d.deco_mgr != 0 {
+            var deco: int := new_id(d)
+            request(d, d.deco_mgr, 1, 2, deco, d.toplevel, 0, 0, 0)
+            request(d, deco, 1, 1, 2, 0, 0, 0, 0)
+        }
+        request(d, d.surface, 6, 0, 0, 0, 0, 0, 0)
+        flush(d)
+    end
+
+    fn fix_size(d: *wayland.Display, w: int, h: int)
+    begin
+        request(d, d.toplevel, 8, 2, w, h, 0, 0, 0)
+        request(d, d.toplevel, 7, 2, w, h, 0, 0, 0)
+        request(d, d.surface, 6, 0, 0, 0, 0, 0, 0)
+        flush(d)
+    end
+
+    // Shows w*h pixels (one int 0xRRGGBB per pixel, rows `stride` ints apart).
+    fn put_pixels(d: *wayland.Display, pixels: *[268435456]int, stride: int, w: int, h: int)
+    begin
+        if ensure_buffers(d, w, h) = 0 { return }
+        var index: int := 1 - d.current
+        if (*d.busy)[index] != 0 {
+            if (*d.busy)[d.current] = 0 { index := d.current }
+        }
+        var one: int := w * 4 * h
+        var target: *void := d.mem + index * one
+        var row: int := 0
+        while row < h {
+            var line: *void := target + row * w * 4
+            var base: int := row * stride
+            var col: int := 0
+            while col < w {
+                runtime.hw.write32(line + col * 4, (*pixels)[base + col])
+                col := col + 1
+            }
+            row := row + 1
+        }
+        (*d.busy)[index] := 1
+        d.current := index
+        var id: int := d.buf0
+        if index = 1 { id := d.buf1 }
+        request(d, d.surface, 1, 3, id, 0, 0, 0, 0)
+        request(d, d.surface, 2, 4, 0, 0, w, h, 0)
+        request(d, d.surface, 6, 0, 0, 0, 0, 0, 0)
+        flush(d)
+    end
+
+    // Waits up to timeout_ms (0 = do not wait, -1 = forever) for the next event.
+    // Returns its kind (the x11 kinds), or 0 when there was none.
+    fn next_event(d: *wayland.Display, ev: *x11.Event, timeout_ms: int): int
+    begin
+        if d.pending_kind != 0 {
+            var kind: int := d.pending_kind
+            d.pending_kind := 0
+            ev.kind := kind
+            return kind
+        }
+        var result: int := 0
+        var searching: int := 1
+        var waited: int := 0
+        while searching = 1 {
+            if have_message(d) = 1 {
+                var got: int := dispatch_one(d, ev)
+                if got != 0 {
+                    result := got
+                    searching := 0
+                }
+            }
+            else {
+                var now: int := clock.monotonic()
+                if d.repeat_code != 0 && now >= d.repeat_next {
+                    d.repeat_next := now + 1000000000 / d.repeat_rate
+                    ev.kind := x11.kind_key_down()
+                    ev.a := d.repeat_sym
+                    ev.b := d.repeat_code
+                    result := x11.kind_key_down()
+                    searching := 0
+                }
+                else {
+                    var limit: int := timeout_ms
+                    if waited = 1 { limit := 0 }
+                    if d.repeat_code != 0 && limit != 0 {
+                        var until: int := (d.repeat_next - now) / 1000000 + 1
+                        if limit < 0 || until < limit { limit := until }
+                    }
+                    var status: int := fill(d, limit)
+                    if status < 0 {
+                        ev.kind := x11.kind_close()
+                        result := x11.kind_close()
+                        searching := 0
+                    }
+                    if status = 0 {
+                        if d.repeat_code = 0 || clock.monotonic() < d.repeat_next { searching := 0 }
+                    }
+                    if status > 0 { waited := 1 }
+                }
+            }
+        }
+        return result
+    end
+
+    fn close_display(d: *wayland.Display)
+    begin
+        syscall.io.close(d.fd)
+        free(d.out)
+        free(d.inbuf)
+        free(d.scratch)
+        free(d.busy)
+        free(d)
+    end
+end
