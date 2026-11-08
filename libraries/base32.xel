@@ -1,0 +1,53 @@
+// base32: RFC 4648 Base32 encoding and decoding.
+module base32
+begin
+    fn encode(text: string): string
+    begin
+        var alphabet: string := "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        var out: string := str.builder("")
+        var accumulator: int := 0
+        var bits: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            accumulator := ((accumulator << 8) | str.char(text, index)) & 1099511627775
+            bits := bits + 8
+            while bits >= 5 {
+                bits := bits - 5
+                var v: int := (accumulator >> bits) & 31
+                out := str.append(out, str.slice(alphabet, v, v + 1))
+            }
+            index := index + 1
+        }
+        if bits > 0 {
+            var last: int := (accumulator << (5 - bits)) & 31
+            out := str.append(out, str.slice(alphabet, last, last + 1))
+        }
+        while str.length(out) % 8 != 0 { out := str.append(out, "=") }
+        return out
+    end
+
+    fn decode(text: string): string
+    begin
+        var out: string := str.builder("")
+        var accumulator: int := 0
+        var bits: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            var v: int := -1
+            if c >= 65 && c <= 90 { v := c - 65 }
+            if c >= 97 && c <= 122 { v := c - 97 }
+            if c >= 50 && c <= 55 { v := c - 24 }
+            if v >= 0 {
+                accumulator := ((accumulator << 5) | v) & 1099511627775
+                bits := bits + 5
+                if bits >= 8 {
+                    bits := bits - 8
+                    out := str.append(out, str.fromchar((accumulator >> bits) & 255))
+                }
+            }
+            index := index + 1
+        }
+        return out
+    end
+end

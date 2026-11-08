@@ -1,0 +1,107 @@
+// clock: monotonic and wall-clock time in nanoseconds, stopwatches and sleeping.
+module clock
+begin
+    type Stopwatch: record
+    begin
+        started: int
+        accumulated: int
+        running: int
+    end
+
+    fn now_ns(which: int): int
+    begin
+        var buffer: *int := alloc(16)
+        syscall.invoke3(228, which, buffer, 0)
+        var value: int := *buffer * 1000000000 + *(buffer + 1)
+        free(buffer)
+        return value
+    end
+
+    fn monotonic(): int
+    begin
+        return now_ns(1)
+    end
+
+    fn realtime(): int
+    begin
+        return now_ns(0)
+    end
+
+    fn unix(): int
+    begin
+        return now_ns(0) / 1000000000
+    end
+
+    fn unix_millis(): int
+    begin
+        return now_ns(0) / 1000000
+    end
+
+    fn cpu_time(): int
+    begin
+        return now_ns(2)
+    end
+
+    fn sleep_ns(nanoseconds: int)
+    begin
+        if nanoseconds <= 0 { return }
+        var request: *int := alloc(16)
+        *request := nanoseconds / 1000000000
+        *(request + 1) := nanoseconds % 1000000000
+        syscall.invoke3(35, request, 0, 0)
+        free(request)
+    end
+
+    fn sleep_ms(milliseconds: int)
+    begin
+        sleep_ns(milliseconds * 1000000)
+    end
+
+    fn stopwatch(): *clock.Stopwatch
+    begin
+        var watch: *clock.Stopwatch := alloc(24)
+        watch.started := monotonic()
+        watch.accumulated := 0
+        watch.running := 1
+        return watch
+    end
+
+    fn stop(watch: *clock.Stopwatch): int
+    begin
+        if watch.running = 1 {
+            watch.accumulated := watch.accumulated + monotonic() - watch.started
+            watch.running := 0
+        }
+        return watch.accumulated
+    end
+
+    fn resume(watch: *clock.Stopwatch)
+    begin
+        if watch.running = 0 {
+            watch.started := monotonic()
+            watch.running := 1
+        }
+    end
+
+    fn elapsed(watch: *clock.Stopwatch): int
+    begin
+        if watch.running = 1 { return watch.accumulated + monotonic() - watch.started }
+        return watch.accumulated
+    end
+
+    fn reset(watch: *clock.Stopwatch)
+    begin
+        watch.started := monotonic()
+        watch.accumulated := 0
+        watch.running := 1
+    end
+
+    // Human-readable duration with ns, us, ms or s units.
+    fn format(nanoseconds: int): string
+    begin
+        if nanoseconds < 1000 { return str.number(nanoseconds) + " ns" }
+        if nanoseconds < 1000000 { return flt.format(nanoseconds / 1000.0, 2) + " " + str.fromchar(194) + str.fromchar(181) + "s" }
+        if nanoseconds < 1000000000 { return flt.format(nanoseconds / 1000000.0, 2) + " ms" }
+        return flt.format(nanoseconds / 1000000000.0, 3) + " s"
+    end
+end

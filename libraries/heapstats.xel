@@ -1,0 +1,56 @@
+// heapstats: control and observe Xe's garbage collector and heap.
+//   heapstats.collect()        run a full collection now; returns bytes reclaimed
+//   heapstats.disable() / enable()
+uses fmt
+
+module heapstats
+begin
+    fn collect(): int
+    begin
+        return runtime.gc.collect()
+    end
+
+    fn disable()
+    begin
+        runtime.gc.enable(0)
+    end
+
+    fn enable()
+    begin
+        runtime.gc.enable(1)
+    end
+
+    fn collections(): int
+    begin
+        return runtime.gc.stats(0)
+    end
+
+    // Bytes in blocks that survived the last collection.
+    fn live_bytes(): int
+    begin
+        return runtime.gc.stats(1)
+    end
+
+    // Bytes allocated since the last collection.
+    fn allocated_since_gc(): int
+    begin
+        return runtime.gc.stats(2)
+    end
+
+    // Allocation volume that triggers the next collection.
+    fn threshold(): int
+    begin
+        return runtime.gc.stats(3)
+    end
+
+    // Address-space bytes the heap has handed out so far.
+    fn heap_size(): int
+    begin
+        return runtime.gc.stats(4)
+    end
+
+    fn report(): string
+    begin
+        return "gc: " + str.number(collections()) + " collections, live " + fmt.int(live_bytes() / 1024, 0) + " KiB, heap " + fmt.int(heap_size() / 1048576, 0) + " MiB, next at " + fmt.int(threshold() / 1048576, 0) + " MiB"
+    end
+end

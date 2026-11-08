@@ -1,0 +1,106 @@
+// tty: terminal size, raw/cooked mode, cursor control and key reading.
+module tty
+begin
+    fn is_terminal(fd: int): int
+    begin
+        var buffer: *void := alloc(64)
+        var result: int := syscall.invoke3(16, fd, 21505, buffer)
+        free(buffer)
+        return result = 0
+    end
+
+    fn size(): [2]int
+    begin
+        var result: [2]int
+        result[0] := 24
+        result[1] := 80
+        var buffer: *void := alloc(16)
+        if syscall.invoke3(16, 1, 21523, buffer) = 0 {
+            var rows: int := runtime.hw.read8(buffer) | (runtime.hw.read8(buffer + 1) << 8)
+            var cols: int := runtime.hw.read8(buffer + 2) | (runtime.hw.read8(buffer + 3) << 8)
+            if rows > 0 { result[0] := rows }
+            if cols > 0 { result[1] := cols }
+        }
+        free(buffer)
+        return result
+    end
+
+    fn rows(): int
+    begin
+        return size()[0]
+    end
+
+    fn columns(): int
+    begin
+        return size()[1]
+    end
+
+    // Turns off canonical mode and echo on stdin; returns a saved settings handle for restore().
+    fn raw(): *void
+    begin
+        var saved: *void := alloc(64)
+        syscall.invoke3(16, 0, 21505, saved)
+        var changed: *void := alloc(64)
+        runtime.mem.copy(changed, saved, 64)
+        var lflag: int := runtime.hw.read32(changed + 12)
+        lflag := lflag & ~10
+        runtime.hw.write32(changed + 12, lflag)
+        runtime.hw.write8(changed + 17 + 6, 1)
+        runtime.hw.write8(changed + 17 + 5, 0)
+        syscall.invoke3(16, 0, 21506, changed)
+        free(changed)
+        return saved
+    end
+
+    fn restore(saved: *void)
+    begin
+        syscall.invoke3(16, 0, 21506, saved)
+        free(saved)
+    end
+
+    fn read_key(): int
+    begin
+        var buffer: *void := alloc(8)
+        var got: int := syscall.invoke3(0, 0, buffer, 1)
+        var value: int := -1
+        if got = 1 { value := runtime.hw.read8(buffer) }
+        free(buffer)
+        return value
+    end
+
+    fn escape(code: string): string
+    begin
+        return str.fromchar(27) + "[" + code
+    end
+
+    fn clear(): string
+    begin
+        return escape("2J") + escape("H")
+    end
+
+    fn move(row: int, col: int): string
+    begin
+        return escape(str.number(row) + ";" + str.number(col) + "H")
+    end
+
+    fn hide_cursor(): string
+    begin
+        return escape("?25l")
+    end
+
+    fn show_cursor(): string
+    begin
+        return escape("?25h")
+    end
+
+    fn clear_line(): string
+    begin
+        return escape("2K") + str.fromchar(13)
+    end
+
+    fn alternate_screen(on: int): string
+    begin
+        if on = 1 { return escape("?1049h") }
+        return escape("?1049l")
+    end
+end

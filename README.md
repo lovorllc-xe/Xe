@@ -1,144 +1,189 @@
 # Xe
 
-**Xe 1.7.0** is a statically checked systems and application language with a
-self-hosted compiler. Its primary native executable target is Linux x86-64.
-Xe source files use `.xe`; importable source libraries use `.xel`.
+**Xe 2.0.0** is a statically checked systems and application language that
+compiles straight to native Linux x86-64 executables. The compiler is written
+in Xe and **builds itself**: a checked-in assembly seed plus GNU `as` and `ld`
+are all you need — no C or C++ compiler.
 
-The compiler supports functions, modules, records, fixed-size arrays and
-slices, pointers, explicit allocation, scoped allocation regions, and native
-code generation. Its libraries include collections, JSON, math, file and
-process helpers, terminal output, and basic threading. See the current limits
-below before choosing Xe for a platform-dependent project.
+Source files use `.xe`; importable libraries use `.xel`. Xe has two block
+styles on purpose: `begin … end` for big blocks (functions, modules, types)
+and `{ … }` for small ones (`if`, `while`).
+
+```xe
+uses strings
+
+fn main(): int
+begin
+    var words: string := "xe is small and fast"
+    writeln(strings.to_upper(words))
+    return 0
+end
+```
+
+## What is new in 2.0
+
+- **Self-hosted bootstrap.** `scripts/bootstrap.sh` assembles
+  `bootstrap/xe-seed.s.gz`, rebuilds the compiler twice and checks that both
+  generations emit byte-identical assembly. The old C++ bootstrap in `src/` is
+  legacy (kept for the macOS and Windows installer bundles).
+- **Real error messages.** Every diagnostic carries `file:line:col`, the source
+  line and a caret, and says what was expected:
+
+  ```
+  app.xe:4:13: error: undefined name 'totl'
+   4 |     writeln(totl + 1)
+     |             ^
+  ```
+- **A new memory manager and garbage collector.** Size-class arena allocator,
+  a conservative mark-and-sweep collector (`runtime.gc.collect()`,
+  `runtime.gc.enable()`, `runtime.gc.stats(which)`), scoped regions
+  (`gc.begin { … } gc.end`), thread-safe allocation, double-free protection and
+  `free(0)` as a no-op. See the `heapstats` library.
+- **More intuitive pointers.** Record fields auto-dereference through pointers
+  (`node.next`, not `(*node).next`); pointer locals live in registers;
+  `*p`, `&x`, `@p` (address as an int, e.g. `@p = 0` for a null check).
+- **155 libraries** covering containers, math, text, encodings, hashing and
+  crypto, compression, files and OS, concurrency, networking and HTTP. See
+  [docs/libraries.md](docs/libraries.md).
+- **Faster compiler and faster programs.** Compile results are memoized, the
+  register allocator is cached per declaration, constant `/` and `%` are
+  strength-reduced (including power-of-two moduli above 2³¹), and string and
+  allocator fast paths were rewritten.
+- **Benchmarks.** `benchmarks/` has 239 cases and a tkinter GUI comparing Xe
+  with C++, Go, Rust and Python. See [Benchmarks](#benchmarks) for the honest
+  numbers.
+- **`xe --version` / `xe -v`** prints the colored logo. The ASCII art lives in
+  `logo/ascii/xe.ans`.
 
 ## Install
 
-On Linux x86-64, install from the repository:
+### From the release tarball (no compiler needed)
 
 ```sh
-./install/install.sh
+tar xzf xe-2.0.0-linux-x86_64.tar.gz
+cd xe-2.0.0-linux-x86_64
+./install.sh                 # ~/.local     (or: sudo ./install.sh → /usr/local)
 xe --version
 ```
 
-The installer needs CMake, a C++20 compiler, GNU `as`, and `ld`. It builds a
-small bootstrap compiler, builds the self-hosted Xe compiler, and installs the
-`xe` command and libraries. It uses `$HOME/.local` for a user installation or
-`/usr/local` when run as root. To select a prefix explicitly:
+`PREFIX=/opt/xe ./install.sh` installs elsewhere; `./uninstall.sh` removes it.
+Build the tarball yourself with `scripts/make-release.sh` (it lands in `dist/`).
+
+### From the repository
 
 ```sh
-PREFIX="$HOME/.local" ./install/install.sh
+./install/install.sh
 ```
 
-See [Linux installation](README-INSTALL-LINUX.txt), [macOS installation](README-INSTALL-MACOS.txt),
-and [Windows installation](README-INSTALL-WINDOWS.txt) for platform-specific
-requirements and limitations.
+This needs only `as`, `ld` and `gzip`. It bootstraps from the seed, verifies the
+fixpoint, installs `xe` and the libraries, and runs the test suite.
 
-## Build and run a program
+## Build and run
 
-Create `hello.xe`:
+```sh
+xe hello.xe              # builds ./hello
+xe --build hello.xe -o hello
+xe --check app.xe        # type-check only
+xe --emit-asm app.xe     # inspect the generated assembly
+xe --help
+```
+
+`xe --help` also lists the freestanding PE and bare-metal modes.
+
+## The language in one screen
 
 ```xe
+uses intlist
+
+type Point: record
+begin
+    x: int
+    y: int
+end
+
+fn length2(p: *Point): int
+begin
+    return p.x * p.x + p.y * p.y        // fields auto-dereference
+end
+
 fn main(): int
 begin
-    var name: string := "Xe"
-    writeln("Hello, ", name, "!")
+    var p: *Point := alloc(16)
+    defer free(p)
+    p.x := 3
+    p.y := 4
+    var scores: *intlist.List := intlist.new()
+    var i: int := 0
+    while i < 5 {
+        intlist.push(scores, i * length2(p))
+        i := i + 1
+    }
+    if intlist.len(scores) = 5 { writeln("ok") } else { writeln("bad") }
     return 0
 end
 ```
 
-Build a native executable and run it:
+- `:=` assigns, `=` compares; there is no `==`, `for`, `break` or `continue`.
+- `if … { } else { }` and `while … { }` for small blocks, `begin … end` for big ones.
+- Types: `int`, `flt`, `string`, `*T`, `[N]T`, records, aliases.
+- `alloc`/`free`, `defer`, `gc.begin { } gc.end` regions, `thread.start`/`thread.join`.
+- Module functions named `new`, `delete`, `read`, `write` or `free` are shadowed
+  by builtins; call them qualified (`intlist.new()`), and the checker warns
+  when you declare one.
+
+The full reference is in [docs/documentation.txt](docs/documentation.txt).
+
+## Libraries
+
+155 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+`lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
+text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
+(`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
+`lzss`, `huffman`), OS (`path`, `dir`, `subprocess`, `epoll`, `inotify`,
+`mmapfile`), concurrency (`mutex`, `channel`, `waitgroup`, `parallel`),
+networking (`tcp`, `udp`, `dns`, `http`, `httpserver`) and more. Import with
+`uses name`. The index is [docs/libraries.md](docs/libraries.md).
+
+## Benchmarks
 
 ```sh
-xe --build hello.xe -o hello.xee
-./hello.xee
+python3 benchmarks/gui.py            # GUI: run, filter, inspect
+python3 benchmarks/runner.py --runs 30 --compile-runs 3   # headless
 ```
 
-`write` and `writeln` accept multiple values. `writeln` adds one newline.
-Use `:=` for assignment and `=` for equality. Conditional expressions use
-parentheses:
+239 cases: 22 kernels at about 11 sizes each (from 1-element "nanosecond"
+cases to ones that run for milliseconds), 4 monolithic multi-kernel programs and
+3 multithreaded families. Each program prints a checksum that must match across
+Xe, C++ (`g++ -O3`), Go, Rust (`rustc -C opt-level=3`) and Python. Compile time
+is the mean of several builds; execution time is the mean of 30 process runs
+(fork, exec, run, exit). Times are shown in ns, µs, ms and s.
 
-```xe
-if (score >= 10) {
-    writeln("passed")
-} else {
-    writeln("try again")
-}
-```
+Results of the last full run are in `benchmarks/results/latest.json` and are
+summarized in [benchmarks/README.md](benchmarks/README.md), including where Xe
+does **not** reach the fastest language.
 
-Import a `.xel` library with `uses` at the top of a source file:
-
-```xe
-uses math
-
-fn main(): int
-begin
-    writeln(math.sqrt(81.0))
-    return 0
-end
-```
-
-Xe loads `.xel` source libraries into the current build. The `io` and `mem`
-modules are included automatically. To use a library directory outside the
-default search location, pass `--library-path`:
+## Tests
 
 ```sh
-xe --build app.xe --library-path ./libraries -o app.xee
-```
-
-See `xe --help` for assembly, NASM, PE, and bare-metal output modes.
-
-## Build the compiler from source
-
-```sh
-cmake -S . -B build
-cmake --build build
-./build/xe --version
-```
-
-This CMake build produces the bootstrap compiler. The install script also
-builds the self-hosted compiler from the Xe sources.
-
-## Tests and release bundles
-
-Run the integration suite with an installed compiler on `PATH`:
-
-```sh
-./tests/run_tests.sh
-```
-
-Create a Linux x86-64 source release bundle:
-
-```sh
-./scripts/build_release.sh
-```
-
-Create the macOS and Windows source installer bundles with Python 3:
-
-```sh
-python3 scripts/build_platform_installers.py
+XE=build/xe tests/run_tests.sh       # 15 programs, all must print "ok" / exit 0
 ```
 
 ## Repository layout
 
-- `compiler/` — self-hosted lexer, parser, checker, optimizer, code generator,
-  runtime, and command-line driver.
-- `src/` — C++20 bootstrap compiler and host runtime.
-- `std/` — automatically included `io` and `mem` modules.
-- `libraries/` — importable `.xel` libraries.
-- `tests/` — Xe integration examples and test runner.
-- `install/` — Linux, macOS, and Windows installer scripts.
-- `vscode-xe/` — syntax highlighting, language configuration, and snippets.
-- `dist/` — generated release bundles.
+- `compiler/` — the self-hosted compiler (`SOURCES` lists the build order).
+- `bootstrap/xe-seed.s.gz` — assembly seed; refresh with `scripts/update-seed.sh`.
+- `std/`, `libraries/` — the automatic `io`/`mem` modules and 155 `.xel` libraries.
+- `tests/` — integration programs and the runner.
+- `benchmarks/` — kernels, generator, runner and GUI.
+- `logo/` — `png/` source logo and `ascii/xe.ans` colored ASCII art.
+- `install/`, `scripts/` — installers, bootstrap, seed and release tooling.
+- `src/` — legacy C++ bootstrap (macOS/Windows bundles).
+- `vscode-xe/`, `zed-xe/` — editor support.
 
-## Current platform and library limits
+## Limits
 
-Linux x86-64 is the complete general-purpose executable target. The macOS
-bundle installs the compiler CLI, but Xe does not yet generate native macOS
-applications. Windows PE output currently supports only a freestanding subset
-and requires NASM and LLVM linker tools.
-
-Several libraries wrap Linux syscalls. The JSON module supports JSON values
-but does not decode Unicode escapes into Unicode text. The collections map is
-limited to 128 entries, and the integer vector and stack have fixed capacity.
-CRC-32 is an error-detection checksum, not secure cryptography. The current
-libraries do not include a database driver, HTTP framework, TLS, GUI, or async
-runtime.
+Linux x86-64 is the only complete executable target. macOS installs the compiler
+CLI but cannot produce native macOS programs yet; Windows PE output is a
+freestanding subset. HTTP is plain `http://` only (no TLS). The garbage
+collector is conservative and does not run while threads are active; free
+memory explicitly or use regions in threaded code.

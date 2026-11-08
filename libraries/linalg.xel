@@ -1,0 +1,86 @@
+// linalg: vector algebra on fltlist values.
+uses fltlist
+uses mathx
+
+module linalg
+begin
+    fn dot(a: *fltlist.List, b: *fltlist.List): flt
+    begin
+        return fltlist.dot(a, b)
+    end
+
+    fn norm(a: *fltlist.List): flt
+    begin
+        return mathx.sqrt(fltlist.dot(a, a))
+    end
+
+    fn add(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var index: int := 0
+        while index < fltlist.len(a) {
+            fltlist.push(out, fltlist.get(a, index) + fltlist.get(b, index))
+            index := index + 1
+        }
+        return out
+    end
+
+    fn sub(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var index: int := 0
+        while index < fltlist.len(a) {
+            fltlist.push(out, fltlist.get(a, index) - fltlist.get(b, index))
+            index := index + 1
+        }
+        return out
+    end
+
+    fn scaled(a: *fltlist.List, factor: flt): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var index: int := 0
+        while index < fltlist.len(a) {
+            fltlist.push(out, fltlist.get(a, index) * factor)
+            index := index + 1
+        }
+        return out
+    end
+
+    fn normalized(a: *fltlist.List): *fltlist.List
+    begin
+        var size: flt := norm(a)
+        if size = 0.0 { return scaled(a, 1.0) }
+        return scaled(a, 1.0 / size)
+    end
+
+    fn distance(a: *fltlist.List, b: *fltlist.List): flt
+    begin
+        return norm(sub(a, b))
+    end
+
+    fn cosine(a: *fltlist.List, b: *fltlist.List): flt
+    begin
+        var scale: flt := norm(a) * norm(b)
+        if scale = 0.0 { return 0.0 }
+        return fltlist.dot(a, b) / scale
+    end
+
+    fn cross3(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        fltlist.push(out, fltlist.get(a, 1) * fltlist.get(b, 2) - fltlist.get(a, 2) * fltlist.get(b, 1))
+        fltlist.push(out, fltlist.get(a, 2) * fltlist.get(b, 0) - fltlist.get(a, 0) * fltlist.get(b, 2))
+        fltlist.push(out, fltlist.get(a, 0) * fltlist.get(b, 1) - fltlist.get(a, 1) * fltlist.get(b, 0))
+        return out
+    end
+
+    fn vector(a: flt, b: flt, c: flt): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        fltlist.push(out, a)
+        fltlist.push(out, b)
+        fltlist.push(out, c)
+        return out
+    end
+end

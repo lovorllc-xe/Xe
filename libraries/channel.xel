@@ -1,0 +1,101 @@
+// channel: bounded, blocking, thread-safe FIFO channels of ints (Go-style send/recv/close).
+uses mutex
+uses condvar
+
+module channel
+begin
+    type Channel: record
+    begin
+        data: *int
+        capacity: int
+        head: int
+        size: int
+        closed: int
+        lock: *void
+        notEmpty: *void
+        notFull: *void
+    end
+
+    fn new(capacity: int): *channel.Channel
+    begin
+        var ch: *channel.Channel := alloc(64)
+        var room: int := capacity
+        if room < 1 { room := 1 }
+        ch.data := alloc(room * 8)
+        ch.capacity := room
+        ch.head := 0
+        ch.size := 0
+        ch.closed := 0
+        ch.lock := mutex.new()
+        ch.notEmpty := condvar.new()
+        ch.notFull := condvar.new()
+        return ch
+    end
+
+    // Blocks while the channel is full. Returns 0 if the channel is closed.
+    fn send(ch: *channel.Channel, value: int): int
+    begin
+        mutex.lock(ch.lock)
+        while ch.size = ch.capacity && ch.closed = 0 { condvar.wait(ch.notFull, ch.lock) }
+        if ch.closed = 1 {
+            mutex.unlock(ch.lock)
+            return 0
+        }
+        *(ch.data + (ch.head + ch.size) % ch.capacity) := value
+        ch.size := ch.size + 1
+        condvar.signal(ch.notEmpty)
+        mutex.unlock(ch.lock)
+        return 1
+    end
+
+    // Blocks while empty. Returns [value, ok]; ok is 0 once the channel is closed and drained.
+    fn recv(ch: *channel.Channel): [2]int
+    begin
+        var result: [2]int
+        mutex.lock(ch.lock)
+        while ch.size = 0 && ch.closed = 0 { condvar.wait(ch.notEmpty, ch.lock) }
+        if ch.size = 0 {
+            mutex.unlock(ch.lock)
+            return result
+        }
+        result[0] := *(ch.data + ch.head)
+        result[1] := 1
+        ch.head := (ch.head + 1) % ch.capacity
+        ch.size := ch.size - 1
+        condvar.signal(ch.notFull)
+        mutex.unlock(ch.lock)
+        return result
+    end
+
+    fn try_recv(ch: *channel.Channel): [2]int
+    begin
+        var result: [2]int
+        mutex.lock(ch.lock)
+        if ch.size > 0 {
+            result[0] := *(ch.data + ch.head)
+            result[1] := 1
+            ch.head := (ch.head + 1) % ch.capacity
+            ch.size := ch.size - 1
+            condvar.signal(ch.notFull)
+        }
+        mutex.unlock(ch.lock)
+        return result
+    end
+
+    fn close(ch: *channel.Channel)
+    begin
+        mutex.lock(ch.lock)
+        ch.closed := 1
+        condvar.broadcast(ch.notEmpty)
+        condvar.broadcast(ch.notFull)
+        mutex.unlock(ch.lock)
+    end
+
+    fn len(ch: *channel.Channel): int
+    begin
+        mutex.lock(ch.lock)
+        var size: int := ch.size
+        mutex.unlock(ch.lock)
+        return size
+    end
+end

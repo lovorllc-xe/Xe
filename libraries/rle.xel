@@ -1,0 +1,75 @@
+// rle: run-length encoding for bytes (binary) and text ("3a2b" style).
+uses bytes
+
+module rle
+begin
+    // Binary format: pairs of (count 1..255, byte).
+    fn encode(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        var i: int := 0
+        while i < input.size {
+            var value: int := bytes.get(input, i)
+            var run: int := 1
+            while i + run < input.size && run < 255 && bytes.get(input, i + run) = value { run := run + 1 }
+            bytes.push(out, run)
+            bytes.push(out, value)
+            i := i + run
+        }
+        return out
+    end
+
+    fn decode(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        var i: int := 0
+        while i + 1 < input.size {
+            var run: int := bytes.get(input, i)
+            var value: int := bytes.get(input, i + 1)
+            var k: int := 0
+            while k < run {
+                bytes.push(out, value)
+                k := k + 1
+            }
+            i := i + 2
+        }
+        return out
+    end
+
+    // Text form: "aaabcc" -> "3a1b2c". Digits in the input are not supported.
+    fn encode_text(text: string): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            var run: int := 1
+            while i + run < str.length(text) && str.char(text, i + run) = c { run := run + 1 }
+            out := str.append(out, str.number(run) + str.fromchar(c))
+            i := i + run
+        }
+        return out
+    end
+
+    fn decode_text(text: string): string
+    begin
+        var out: string := str.builder("")
+        var count: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c >= 48 && c <= 57 { count := count * 10 + c - 48 }
+            else {
+                if count = 0 { count := 1 }
+                var k: int := 0
+                while k < count {
+                    out := str.append(out, str.fromchar(c))
+                    k := k + 1
+                }
+                count := 0
+            }
+            i := i + 1
+        }
+        return out
+    end
+end

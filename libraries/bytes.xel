@@ -1,0 +1,199 @@
+// bytes: growable byte buffers with little/big-endian integer access.
+module bytes
+begin
+    type Buffer: record
+    begin
+        data: *void
+        size: int
+        capacity: int
+        cursor: int
+    end
+
+    fn new(): *bytes.Buffer
+    begin
+        var buffer: *bytes.Buffer := alloc(32)
+        buffer.data := alloc(64)
+        buffer.size := 0
+        buffer.capacity := 64
+        buffer.cursor := 0
+        return buffer
+    end
+
+    fn reserve(buffer: *bytes.Buffer, wanted: int)
+    begin
+        if wanted + 1 <= buffer.capacity { return }
+        var room: int := buffer.capacity * 2
+        while room < wanted + 1 { room := room * 2 }
+        var bigger: *void := alloc(room)
+        runtime.mem.copy(bigger, buffer.data, buffer.size)
+        free(buffer.data)
+        buffer.data := bigger
+        buffer.capacity := room
+    end
+
+    fn push(buffer: *bytes.Buffer, value: int)
+    begin
+        reserve(buffer, buffer.size + 1)
+        runtime.hw.write8(buffer.data + buffer.size, value & 255)
+        buffer.size := buffer.size + 1
+    end
+
+    fn get(buffer: *bytes.Buffer, index: int): int
+    begin
+        if index < 0 || index >= buffer.size { return 0 }
+        return runtime.hw.read8(buffer.data + index)
+    end
+
+    fn set(buffer: *bytes.Buffer, index: int, value: int)
+    begin
+        if index < 0 || index >= buffer.size { return }
+        runtime.hw.write8(buffer.data + index, value & 255)
+    end
+
+    fn len(buffer: *bytes.Buffer): int
+    begin
+        return buffer.size
+    end
+
+    fn clear(buffer: *bytes.Buffer)
+    begin
+        buffer.size := 0
+        buffer.cursor := 0
+    end
+
+    fn append_string(buffer: *bytes.Buffer, text: string)
+    begin
+        var size: int := str.length(text)
+        reserve(buffer, buffer.size + size)
+        var index: int := 0
+        while index < size {
+            runtime.hw.write8(buffer.data + buffer.size + index, str.char(text, index))
+            index := index + 1
+        }
+        buffer.size := buffer.size + size
+    end
+
+    fn from_string(text: string): *bytes.Buffer
+    begin
+        var buffer: *bytes.Buffer := bytes.new()
+        append_string(buffer, text)
+        return buffer
+    end
+
+    fn write_le(buffer: *bytes.Buffer, value: int, width: int)
+    begin
+        var index: int := 0
+        while index < width {
+            push(buffer, (value >> (index * 8)) & 255)
+            index := index + 1
+        }
+    end
+
+    fn write_be(buffer: *bytes.Buffer, value: int, width: int)
+    begin
+        var index: int := width - 1
+        while index >= 0 {
+            push(buffer, (value >> (index * 8)) & 255)
+            index := index - 1
+        }
+    end
+
+    fn read_le_at(buffer: *bytes.Buffer, offset: int, width: int): int
+    begin
+        var value: int := 0
+        var index: int := width - 1
+        while index >= 0 {
+            value := (value << 8) | get(buffer, offset + index)
+            index := index - 1
+        }
+        return value
+    end
+
+    fn read_be_at(buffer: *bytes.Buffer, offset: int, width: int): int
+    begin
+        var value: int := 0
+        var index: int := 0
+        while index < width {
+            value := (value << 8) | get(buffer, offset + index)
+            index := index + 1
+        }
+        return value
+    end
+
+    // Sequential reading from the cursor.
+    fn read_byte(buffer: *bytes.Buffer): int
+    begin
+        var value: int := get(buffer, buffer.cursor)
+        buffer.cursor := buffer.cursor + 1
+        return value
+    end
+
+    fn read_le(buffer: *bytes.Buffer, width: int): int
+    begin
+        var value: int := read_le_at(buffer, buffer.cursor, width)
+        buffer.cursor := buffer.cursor + width
+        return value
+    end
+
+    fn read_be(buffer: *bytes.Buffer, width: int): int
+    begin
+        var value: int := read_be_at(buffer, buffer.cursor, width)
+        buffer.cursor := buffer.cursor + width
+        return value
+    end
+
+    fn remaining(buffer: *bytes.Buffer): int
+    begin
+        return buffer.size - buffer.cursor
+    end
+
+    // Copies the contents into a new string (bytes after a zero byte are cut off).
+    fn to_string(buffer: *bytes.Buffer): string
+    begin
+        return slice_string(buffer, 0, buffer.size)
+    end
+
+    fn slice_string(buffer: *bytes.Buffer, start: int, finish: int): string
+    begin
+        var first: int := start
+        var last: int := finish
+        if first < 0 { first := 0 }
+        if last > buffer.size { last := buffer.size }
+        if last < first { last := first }
+        var copy: *void := alloc(last - first + 1)
+        if last > first { runtime.mem.copy(copy, buffer.data + first, last - first) }
+        runtime.hw.write8(copy + (last - first), 0)
+        var cell: *void := alloc(8)
+        runtime.pointer.write(cell, copy)
+        var view: *string := cell
+        var text: string := *view
+        free(cell)
+        return text
+    end
+
+    fn hex(buffer: *bytes.Buffer): string
+    begin
+        var digits: string := "0123456789abcdef"
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < buffer.size {
+            var value: int := get(buffer, index)
+            text := str.append(text, str.slice(digits, value / 16, value / 16 + 1) + str.slice(digits, value % 16, value % 16 + 1))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn equal(a: *bytes.Buffer, b: *bytes.Buffer): int
+    begin
+        if a.size != b.size { return 0 }
+        if a.size = 0 { return 1 }
+        return runtime.mem.compare(a.data, b.data, a.size) = 0
+    end
+
+    fn release(buffer: *bytes.Buffer)
+    begin
+        free(buffer.data)
+        free(buffer)
+    end
+end

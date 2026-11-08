@@ -1,0 +1,166 @@
+// sha256: SHA-256 digests (FIPS 180-4) for strings and byte buffers.
+uses bytes
+
+module sha256
+begin
+    fn mask(v: int): int
+    begin
+        return v & 4294967295
+    end
+
+    fn rotr(v: int, n: int): int
+    begin
+        return ((v >> n) | (v << (32 - n))) & 4294967295
+    end
+
+    fn constants(): *int
+    begin
+        var table: string := "428a2f9871374491b5c0fbcfe9b5dba53956c25b59f111f1923f82a4ab1c5ed5d807aa9812835b01243185be550c7dc372be5d7480deb1fe9bdc06a7c19bf174e49b69c1efbe47860fc19dc6240ca1cc2de92c6f4a7484aa5cb0a9dc76f988da983e5152a831c66db00327c8bf597fc7c6e00bf3d5a7914706ca63511429296727b70a852e1b21384d2c6dfc53380d13650a7354766a0abb81c2c92e92722c85a2bfe8a1a81a664bc24b8b70c76c51a3d192e819d6990624f40e3585106aa07019a4c1161e376c082748774c34b0bcb5391c0cb34ed8aa4a5b9cca4f682e6ff3748f82ee78a5636f84c878148cc7020890befffaa4506cebbef9a3f7c67178f2"
+        var k: *int := alloc(64 * 8)
+        var index: int := 0
+        while index < 64 {
+            var value: int := 0
+            var d: int := 0
+            while d < 8 {
+                var c: int := str.char(table, index * 8 + d)
+                var v: int := c - 48
+                if c >= 97 { v := c - 87 }
+                value := value * 16 + v
+                d := d + 1
+            }
+            *(k + index) := value
+            index := index + 1
+        }
+        return k
+    end
+
+    // Hashes size bytes at data and writes 32 digest bytes to out.
+    fn core(data: *void, size: int, out: *void)
+    begin
+        var k: *int := constants()
+        var total: int := ((size + 9 + 63) / 64) * 64
+        var message: *void := alloc(total + 8)
+        runtime.mem.set(message, 0, total)
+        if size > 0 { runtime.mem.copy(message, data, size) }
+        runtime.hw.write8(message + size, 128)
+        var bits: int := size * 8
+        var b: int := 0
+        while b < 8 {
+            runtime.hw.write8(message + total - 1 - b, (bits >> (b * 8)) & 255)
+            b := b + 1
+        }
+        var h: *int := alloc(64)
+        *h := 1779033703
+        *(h + 1) := 3144134277
+        *(h + 2) := 1013904242
+        *(h + 3) := 2773480762
+        *(h + 4) := 1359893119
+        *(h + 5) := 2600822924
+        *(h + 6) := 528734635
+        *(h + 7) := 1541459225
+        var w: *int := alloc(64 * 8)
+        var chunk: int := 0
+        while chunk < total {
+            var t: int := 0
+            while t < 16 {
+                var p: *void := message + chunk + t * 4
+                *(w + t) := (runtime.hw.read8(p) << 24) | (runtime.hw.read8(p + 1) << 16) | (runtime.hw.read8(p + 2) << 8) | runtime.hw.read8(p + 3)
+                t := t + 1
+            }
+            while t < 64 {
+                var w15: int := *(w + t - 15)
+                var w2: int := *(w + t - 2)
+                var s0: int := rotr(w15, 7) ^ rotr(w15, 18) ^ (w15 >> 3)
+                var s1: int := rotr(w2, 17) ^ rotr(w2, 19) ^ (w2 >> 10)
+                *(w + t) := mask(*(w + t - 16) + s0 + *(w + t - 7) + s1)
+                t := t + 1
+            }
+            var a: int := *h
+            var bb: int := *(h + 1)
+            var c: int := *(h + 2)
+            var d: int := *(h + 3)
+            var e: int := *(h + 4)
+            var f: int := *(h + 5)
+            var g: int := *(h + 6)
+            var hh: int := *(h + 7)
+            t := 0
+            while t < 64 {
+                var S1: int := rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+                var ch: int := (e & f) ^ ((~e & 4294967295) & g)
+                var temp1: int := mask(hh + S1 + ch + *(k + t) + *(w + t))
+                var S0: int := rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+                var maj: int := (a & bb) ^ (a & c) ^ (bb & c)
+                var temp2: int := mask(S0 + maj)
+                hh := g
+                g := f
+                f := e
+                e := mask(d + temp1)
+                d := c
+                c := bb
+                bb := a
+                a := mask(temp1 + temp2)
+                t := t + 1
+            }
+            *h := mask(*h + a)
+            *(h + 1) := mask(*(h + 1) + bb)
+            *(h + 2) := mask(*(h + 2) + c)
+            *(h + 3) := mask(*(h + 3) + d)
+            *(h + 4) := mask(*(h + 4) + e)
+            *(h + 5) := mask(*(h + 5) + f)
+            *(h + 6) := mask(*(h + 6) + g)
+            *(h + 7) := mask(*(h + 7) + hh)
+            chunk := chunk + 64
+        }
+        var index: int := 0
+        while index < 8 {
+            var word: int := *(h + index)
+            runtime.hw.write8(out + index * 4, (word >> 24) & 255)
+            runtime.hw.write8(out + index * 4 + 1, (word >> 16) & 255)
+            runtime.hw.write8(out + index * 4 + 2, (word >> 8) & 255)
+            runtime.hw.write8(out + index * 4 + 3, word & 255)
+            index := index + 1
+        }
+        free(message)
+        free(h)
+        free(w)
+        free(k)
+    end
+
+    fn hex_of(digest: *void, size: int): string
+    begin
+        var digits: string := "0123456789abcdef"
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < size {
+            var v: int := runtime.hw.read8(digest + index)
+            text := str.append(text, str.slice(digits, v / 16, v / 16 + 1) + str.slice(digits, v % 16, v % 16 + 1))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn buffer_digest(data: *bytes.Buffer): *bytes.Buffer
+    begin
+        var out: *void := alloc(32)
+        core(data.data, data.size, out)
+        var result: *bytes.Buffer := bytes.new()
+        var index: int := 0
+        while index < 32 {
+            bytes.push(result, runtime.hw.read8(out + index))
+            index := index + 1
+        }
+        free(out)
+        return result
+    end
+
+    fn hex(text: string): string
+    begin
+        var data: *bytes.Buffer := bytes.from_string(text)
+        var out: *void := alloc(32)
+        core(data.data, data.size, out)
+        var result: string := hex_of(out, 32)
+        free(out)
+        bytes.release(data)
+        return result
+    end
+end

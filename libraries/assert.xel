@@ -1,0 +1,42 @@
+// assert: fail-fast assertions for scripts and tests; a failure prints the message and exits with status 1.
+module assert
+begin
+    fn fail(message: string)
+    begin
+        var line: string := "assertion failed: " + message + "\n"
+        syscall.invoke3(1, 2, line, str.length(line))
+        syscall.invoke3(231, 1, 0, 0)
+    end
+
+    fn that(condition: int, message: string)
+    begin
+        if condition = 0 { fail(message) }
+    end
+
+    fn eq(name: string, actual: int, expected: int)
+    begin
+        if actual != expected { fail(name + ": expected " + str.number(expected) + ", got " + str.number(actual)) }
+    end
+
+    fn eq_string(name: string, actual: string, expected: string)
+    begin
+        if actual != expected { fail(name + ": expected \"" + expected + "\", got \"" + actual + "\"") }
+    end
+
+    fn near(name: string, actual: flt, expected: flt, tolerance: flt)
+    begin
+        var delta: flt := actual - expected
+        if delta < 0.0 { delta := -delta }
+        if delta > tolerance { fail(name + ": expected " + flt.format(expected, 9) + ", got " + flt.format(actual, 9)) }
+    end
+
+    fn ne(name: string, actual: int, unexpected: int)
+    begin
+        if actual = unexpected { fail(name + ": did not expect " + str.number(actual)) }
+    end
+
+    fn in_range(name: string, value: int, low: int, high: int)
+    begin
+        if value < low || value > high { fail(name + ": " + str.number(value) + " is outside " + str.number(low) + ".." + str.number(high)) }
+    end
+end

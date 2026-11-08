@@ -1,0 +1,434 @@
+fn sumsq(n: int): int
+begin
+    var s: int := 0
+    var i: int := 0
+    while i < n {
+        s := s + (i * i) % 7
+        i := i + 1
+    }
+    return s
+end
+
+fn collatz(n: int): int
+begin
+    var total: int := 0
+    var i: int := 1
+    while i < n {
+        var x: int := i
+        while x != 1 {
+            if x % 2 = 0 {
+                x := x / 2
+            } else {
+                x := 3 * x + 1
+            }
+            total := total + 1
+        }
+        i := i + 1
+    }
+    return total
+end
+
+fn sieve(n: int): int
+begin
+    var s: *[268435456]int := alloc((n + 1) * 8)
+    defer free(s)
+    var zero_s: int := 0
+    while zero_s < n + 1 {
+        (*s)[zero_s] := 0
+        zero_s := zero_s + 1
+    }
+    var i: int := 2
+    while i * i <= n {
+        if (*s)[i] = 0 {
+            var j: int := i * i
+            while j <= n {
+                (*s)[j] := 1
+                j := j + i
+            }
+        }
+        i := i + 1
+    }
+    var c: int := 0
+    i := 2
+    while i <= n {
+        if (*s)[i] = 0 {
+            c := c + 1
+        }
+        i := i + 1
+    }
+    return c
+end
+
+fn matmul(n: int): int
+begin
+    var a: *[268435456]int := alloc((n * n) * 8)
+    defer free(a)
+    var zero_a: int := 0
+    while zero_a < n * n {
+        (*a)[zero_a] := 0
+        zero_a := zero_a + 1
+    }
+    var b: *[268435456]int := alloc((n * n) * 8)
+    defer free(b)
+    var zero_b: int := 0
+    while zero_b < n * n {
+        (*b)[zero_b] := 0
+        zero_b := zero_b + 1
+    }
+    var c: *[268435456]int := alloc((n * n) * 8)
+    defer free(c)
+    var zero_c: int := 0
+    while zero_c < n * n {
+        (*c)[zero_c] := 0
+        zero_c := zero_c + 1
+    }
+    var i: int := 0
+    while i < n * n {
+        (*a)[i] := (i * 7 + 3) % 10
+        (*b)[i] := (i * 5 + 1) % 10
+        i := i + 1
+    }
+    i := 0
+    while i < n {
+        var j: int := 0
+        while j < n {
+            var s: int := 0
+            var k: int := 0
+            while k < n {
+                s := s + (*a)[i * n + k] * (*b)[k * n + j]
+                k := k + 1
+            }
+            (*c)[i * n + j] := s
+            j := j + 1
+        }
+        i := i + 1
+    }
+    var t: int := 0
+    i := 0
+    while i < n * n {
+        t := (t + (*c)[i]) % 1000003
+        i := i + 1
+    }
+    return t
+end
+
+fn sort(n: int): int
+begin
+    var a: *[268435456]int := alloc((n) * 8)
+    defer free(a)
+    var zero_a: int := 0
+    while zero_a < n {
+        (*a)[zero_a] := 0
+        zero_a := zero_a + 1
+    }
+    var x: int := 12345
+    var i: int := 0
+    while i < n {
+        x := (x * 1103515245 + 12345) % 2147483648
+        (*a)[i] := x % 100000
+        i := i + 1
+    }
+    i := 1
+    while i < n {
+        var v: int := (*a)[i]
+        var j: int := i - 1
+        while j >= 0 && (*a)[j] > v {
+            (*a)[j + 1] := (*a)[j]
+            j := j - 1
+        }
+        (*a)[j + 1] := v
+        i := i + 1
+    }
+    var h: int := 0
+    i := 0
+    while i < n {
+        h := (h * 31 + (*a)[i]) % 1000000007
+        i := i + 1
+    }
+    return h
+end
+
+fn hashtab(n: int): int
+begin
+    var cap: int := 16
+    while cap < n * 2 {
+        cap := cap * 2
+    }
+    var keys: *[268435456]int := alloc((cap) * 8)
+    defer free(keys)
+    var zero_keys: int := 0
+    while zero_keys < cap {
+        (*keys)[zero_keys] := 0
+        zero_keys := zero_keys + 1
+    }
+    var vals: *[268435456]int := alloc((cap) * 8)
+    defer free(vals)
+    var zero_vals: int := 0
+    while zero_vals < cap {
+        (*vals)[zero_vals] := 0
+        zero_vals := zero_vals + 1
+    }
+    var i: int := 1
+    while i <= n {
+        var k: int := (i * 2654435761) % 4294967296
+        var h: int := k & (cap - 1)
+        while (*keys)[h] != 0 && (*keys)[h] != k {
+            h := (h + 1) & (cap - 1)
+        }
+        (*keys)[h] := k
+        (*vals)[h] := (*vals)[h] + i
+        i := i + 1
+    }
+    var total: int := 0
+    i := 1
+    while i <= n {
+        var k: int := (i * 2654435761) % 4294967296
+        var h: int := k & (cap - 1)
+        while (*keys)[h] != k {
+            h := (h + 1) & (cap - 1)
+        }
+        total := (total + (*vals)[h]) % 1000000007
+        i := i + 1
+    }
+    return total
+end
+
+fn editdist(n: int): int
+begin
+    var a: *[268435456]int := alloc((n) * 8)
+    defer free(a)
+    var zero_a: int := 0
+    while zero_a < n {
+        (*a)[zero_a] := 0
+        zero_a := zero_a + 1
+    }
+    var b: *[268435456]int := alloc((n) * 8)
+    defer free(b)
+    var zero_b: int := 0
+    while zero_b < n {
+        (*b)[zero_b] := 0
+        zero_b := zero_b + 1
+    }
+    var x: int := 7
+    var i: int := 0
+    while i < n {
+        x := (x * 1103515245 + 12345) % 2147483648
+        (*a)[i] := (x >> 8) % 4
+        x := (x * 1103515245 + 12345) % 2147483648
+        (*b)[i] := (x >> 8) % 4
+        i := i + 1
+    }
+    var prev: *[268435456]int := alloc((n + 1) * 8)
+    defer free(prev)
+    var zero_prev: int := 0
+    while zero_prev < n + 1 {
+        (*prev)[zero_prev] := 0
+        zero_prev := zero_prev + 1
+    }
+    var cur: *[268435456]int := alloc((n + 1) * 8)
+    defer free(cur)
+    var zero_cur: int := 0
+    while zero_cur < n + 1 {
+        (*cur)[zero_cur] := 0
+        zero_cur := zero_cur + 1
+    }
+    i := 0
+    while i <= n {
+        (*prev)[i] := i
+        i := i + 1
+    }
+    i := 1
+    while i <= n {
+        (*cur)[0] := i
+        var j: int := 1
+        while j <= n {
+            var cost: int := 1
+            if (*a)[i - 1] = (*b)[j - 1] {
+                cost := 0
+            }
+            var best: int := (*prev)[j - 1] + cost
+            if (*prev)[j] + 1 < best {
+                best := (*prev)[j] + 1
+            }
+            if (*cur)[j - 1] + 1 < best {
+                best := (*cur)[j - 1] + 1
+            }
+            (*cur)[j] := best
+            j := j + 1
+        }
+        j := 0
+        while j <= n {
+            (*prev)[j] := (*cur)[j]
+            j := j + 1
+        }
+        i := i + 1
+    }
+    return (*prev)[n]
+end
+
+fn gcd(a: int, b: int): int
+begin
+    var x: int := a
+    var y: int := b
+    while y != 0 {
+        var t: int := x % y
+        x := y
+        y := t
+    }
+    return x
+end
+
+fn gcdsum(n: int): int
+begin
+    var s: int := 0
+    var i: int := 1
+    while i <= n {
+        s := s + gcd(i, n - i + 1)
+        i := i + 1
+    }
+    return s
+end
+
+fn lcg(n: int): int
+begin
+    var x: int := 1
+    var s: int := 0
+    var i: int := 0
+    while i < n {
+        x := (x * 1103515245 + 12345) % 2147483648
+        s := (s + (x >> 16)) % 1000000007
+        i := i + 1
+    }
+    return s
+end
+
+fn binsearch(n: int): int
+begin
+    var a: *[268435456]int := alloc((n) * 8)
+    defer free(a)
+    var zero_a: int := 0
+    while zero_a < n {
+        (*a)[zero_a] := 0
+        zero_a := zero_a + 1
+    }
+    var i: int := 0
+    while i < n {
+        (*a)[i] := i * 3
+        i := i + 1
+    }
+    var found: int := 0
+    i := 0
+    while i < n {
+        var key: int := (i * 7) % (n * 3)
+        var lo: int := 0
+        var hi: int := n - 1
+        while lo <= hi {
+            var mid: int := (lo + hi) / 2
+            if (*a)[mid] = key {
+                found := found + 1
+                lo := hi + 1
+            } else {
+                if (*a)[mid] < key {
+                    lo := mid + 1
+                } else {
+                    hi := mid - 1
+                }
+            }
+        }
+        i := i + 1
+    }
+    return found
+end
+
+fn prefix(n: int): int
+begin
+    var a: *[268435456]int := alloc((n + 1) * 8)
+    defer free(a)
+    var zero_a: int := 0
+    while zero_a < n + 1 {
+        (*a)[zero_a] := 0
+        zero_a := zero_a + 1
+    }
+    var i: int := 1
+    while i <= n {
+        (*a)[i] := (*a)[i - 1] + (i * i) % 13
+        i := i + 1
+    }
+    var q: int := 0
+    i := 1
+    while i <= n {
+        var lo: int := (i * 7) % n
+        var hi: int := lo + (i % 50)
+        if hi > n {
+            hi := n
+        }
+        q := (q + (*a)[hi] - (*a)[lo]) % 1000000007
+        i := i + 1
+    }
+    return q
+end
+
+fn popcnt(n: int): int
+begin
+    var t: int := 0
+    var i: int := 0
+    while i < n {
+        var x: int := i
+        while x != 0 {
+            x := x & (x - 1)
+            t := t + 1
+        }
+        i := i + 1
+    }
+    return t
+end
+
+fn fib(n: int): int
+begin
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+end
+
+fn queens_rec(n: int, row: int, cols: int, d1: int, d2: int): int
+begin
+    if row = n {
+        return 1
+    }
+    var count: int := 0
+    var c: int := 0
+    while c < n {
+        var b1: int := 1 << c
+        var b2: int := 1 << (row + c)
+        var b3: int := 1 << (row - c + n)
+        if (cols & b1) = 0 && (d1 & b2) = 0 && (d2 & b3) = 0 {
+            count := count + queens_rec(n, row + 1, cols | b1, d1 | b2, d2 | b3)
+        }
+        c := c + 1
+    }
+    return count
+end
+
+fn queens(n: int): int
+begin
+    return queens_rec(n, 0, 0, 0, 0)
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln((sumsq(n * 30000) + collatz(n * 400) + sieve(n * 15000) + matmul(n * 1) + sort(n * 40) + hashtab(n * 3000) + editdist(n * 6) + gcdsum(n * 1500) + lcg(n * 30000) + binsearch(n * 1500) + prefix(n * 30000) + popcnt(n * 3000) + fib(12) + queens(6)) % 1000000007)
+    return 0
+end

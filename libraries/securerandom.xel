@@ -1,0 +1,61 @@
+// securerandom: cryptographically secure random bytes and numbers from the kernel (getrandom).
+uses bytes
+
+module securerandom
+begin
+    fn fill(target: *void, count: int): int
+    begin
+        var done: int := 0
+        while done < count {
+            var got: int := syscall.invoke3(318, target + done, count - done, 0)
+            if got <= 0 { return 0 }
+            done := done + got
+        }
+        return 1
+    end
+
+    fn buffer(count: int): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        bytes.reserve(out, count)
+        fill(out.data, count)
+        out.size := count
+        return out
+    end
+
+    fn int(): int
+    begin
+        var cell: *int := alloc(8)
+        fill(cell, 8)
+        var value: int := *cell
+        free(cell)
+        return value
+    end
+
+    fn below(bound: int): int
+    begin
+        if bound <= 1 { return 0 }
+        var limit: int := 9223372036854775807 - (9223372036854775807 % bound)
+        var value: int := int() & 9223372036854775807
+        while value >= limit { value := int() & 9223372036854775807 }
+        return value % bound
+    end
+
+    fn token(count: int): string
+    begin
+        return bytes.hex(buffer(count))
+    end
+
+    fn password(length: int): string
+    begin
+        var alphabet: string := "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#%+-=?@"
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < length {
+            var pick: int := below(str.length(alphabet))
+            out := str.append(out, str.slice(alphabet, pick, pick + 1))
+            index := index + 1
+        }
+        return out
+    end
+end

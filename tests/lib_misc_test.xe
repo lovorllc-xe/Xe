@@ -1,0 +1,205 @@
+uses graph
+uses grid
+uses avl
+uses bloom
+uses fft
+uses polynomial
+uses units
+uses decimal
+uses diff
+uses markdown
+uses toml
+uses rle
+uses roman
+uses expr
+uses fsm
+uses ratelimit
+uses retry
+uses arena
+uses heapstats
+uses bench
+uses intervals
+uses geohash
+uses epoll
+uses inotify
+uses kvstore
+uses ascii85
+uses ngram
+uses cron
+uses calendar
+uses tar
+uses intlist
+uses fltlist
+uses strlist
+uses strmap
+uses bytes
+uses datetime
+uses mathx
+uses strings
+uses tempfile
+uses dir
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var g: *graph.Graph := graph.new(6)
+    graph.add_edge(g, 0, 1, 7)
+    graph.add_edge(g, 0, 2, 9)
+    graph.add_edge(g, 0, 5, 14)
+    graph.add_edge(g, 1, 2, 10)
+    graph.add_edge(g, 1, 3, 15)
+    graph.add_edge(g, 2, 3, 11)
+    graph.add_edge(g, 2, 5, 2)
+    graph.add_edge(g, 3, 4, 6)
+    graph.add_edge(g, 5, 4, 9)
+    var dist: *intlist.List := graph.dijkstra(g, 0)
+    failed := failed + expect("dijkstra", intlist.join(dist, ",") = "0,7,9,20,20,11")
+    failed := failed + expect("bfs", intlist.join(graph.bfs(g, 0), ",") = "0,1,1,2,2,1")
+    failed := failed + expect("topological", intlist.len(graph.topological(g)) = 6 && graph.has_cycle(g) = 0)
+    graph.add_edge(g, 4, 0, 1)
+    failed := failed + expect("cycle", graph.has_cycle(g) = 1 && graph.components(g) = 1)
+    var maze: *grid.Grid := grid.new(5, 5)
+    grid.set(maze, 1, 0, 1)
+    grid.set(maze, 1, 1, 1)
+    grid.set(maze, 1, 2, 1)
+    grid.set(maze, 1, 3, 1)
+    failed := failed + expect("shortest path", grid.shortest_path(maze, 0, 0, 2, 0) = 10)
+    failed := failed + expect("flood", grid.flood_fill(maze, 3, 3, 7) = 21 && grid.get(maze, 0, 0) = 7 && grid.get(maze, 1, 0) = 1)
+    var tree: *avl.Tree := avl.new()
+    var i: int := 0
+    while i < 1000 {
+        avl.put(tree, (i * 37) % 1000, i)
+        i := i + 1
+    }
+    failed := failed + expect("avl size", avl.len(tree) = 1000 && avl.tree_height(tree) <= 12)
+    failed := failed + expect("avl order", avl.min_key(tree) = 0 && avl.max_key(tree) = 999 && avl.get(tree, 37, -1) = 1)
+    i := 0
+    while i < 1000 {
+        if i % 2 = 0 { avl.remove(tree, i) }
+        i := i + 1
+    }
+    failed := failed + expect("avl remove", avl.len(tree) = 500 && avl.has(tree, 4) = 0 && avl.has(tree, 5) = 1 && avl.ceiling(tree, 4, -1) = 5 && avl.floor(tree, 4, -1) = 3 && intlist.get(avl.keys(tree), 0) = 1)
+    var filter: *bloom.Filter := bloom.for_capacity(1000, 0.01)
+    i := 0
+    while i < 1000 {
+        bloom.add(filter, "item" + str.number(i))
+        i := i + 1
+    }
+    var falsePositives: int := 0
+    i := 1000
+    while i < 3000 {
+        falsePositives := falsePositives + bloom.maybe_contains(filter, "item" + str.number(i))
+        i := i + 1
+    }
+    failed := failed + expect("bloom", bloom.maybe_contains(filter, "item7") = 1 && falsePositives < 100)
+    var re: *fltlist.List := fltlist.new()
+    var im: *fltlist.List := fltlist.new()
+    i := 0
+    while i < 8 {
+        fltlist.push(re, mathx.sin(2.0 * mathx.pi() * i / 8.0))
+        fltlist.push(im, 0.0)
+        i := i + 1
+    }
+    fft.transform(re, im, 0)
+    failed := failed + expect("fft", mathx.approx(fltlist.get(fft.magnitudes(re, im), 1), 4.0, 0.000001) && mathx.abs(fltlist.get(re, 0)) < 0.000001)
+    fft.transform(re, im, 1)
+    failed := failed + expect("fft inverse", mathx.approx(fltlist.get(re, 2), 1.0, 0.000001))
+    var a: *fltlist.List := polynomial.of(1.0, 1.0, 0.0)
+    var squared: *fltlist.List := polynomial.mul(a, a)
+    failed := failed + expect("polynomial", polynomial.eval(squared, 2.0) = 9.0 && polynomial.to_string(squared) = "x^2 + 2.00x + 1.00" && polynomial.degree(squared) = 2)
+    var cubic: *fltlist.List := polynomial.from_roots(fltlist.new())
+    fltlist.push(cubic, 0.0)
+    failed := failed + expect("newton", mathx.approx(polynomial.newton(polynomial.of(-2.0, 0.0, 1.0), 1.0), 1.4142135623730951, 0.000000001))
+    failed := failed + expect("units", mathx.approx(units.convert(1.0, "mi", "km"), 1.609344, 0.000001) && mathx.approx(units.convert(100.0, "c", "f"), 212.0, 0.000001) && units.compatible("kg", "m") = 0 && units.human_bytes(1536) = "1.5 KB")
+    failed := failed + expect("decimal", decimal.parse("12.345", 2) = 1235 && decimal.format(-1205, 2) = "-12.05" && decimal.percent(10000, 825) = 825)
+    failed := failed + expect("decimal split", intlist.join(decimal.split(100, 3), ",") = "34,33,33" && intlist.sum(decimal.split(1001, 7)) = 1001)
+    failed := failed + expect("diff", diff.text("a\nb\nc", "a\nx\nc") = "  a\n- b\n+ x\n  c" && diff.identical("q", "q") = 1)
+    failed := failed + expect("markdown", markdown.to_html("# Hi\n\nSome **bold** and `code <x>`.\n\n- one\n- two\n") = "<h1>Hi</h1>\n<p>Some <strong>bold</strong> and <code>code &lt;x&gt;</code>.</p>\n<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n")
+    var conf: *strmap.Map := toml.parse("title = \"Xe\"\n[server]\nport = 8_080\ndebug = true\nhosts = [\"a\", \"b\", 3]\n")
+    failed := failed + expect("toml", toml.get(conf, "title", "") = "Xe" && toml.get_int(conf, "server.port", 0) = 8080 && toml.get_bool(conf, "server.debug", 0) = 1 && strlist.join(toml.get_array(conf, "server.hosts"), "|") = "a|b|3")
+    failed := failed + expect("rle", rle.encode_text("aaabcc") = "3a1b2c" && rle.decode_text("3a1b2c") = "aaabcc" && bytes.to_string(rle.decode(rle.encode(bytes.from_string("zzzzzy")))) = "zzzzzy")
+    failed := failed + expect("roman", roman.to_roman(1994) = "MCMXCIV" && roman.from_roman("MCMXCIV") = 1994 && roman.from_roman("IIII") = 0)
+    failed := failed + expect("expr", expr.eval("2 * (3 + 4) ^ 2") = 98.0 && mathx.approx(expr.eval("sqrt(16) + -2 * 3"), -2.0, 0.000001) && expr.valid("1 +") = 0)
+    var vars: *strmap.Map := strmap.new()
+    strmap.put(vars, "x", "2.5")
+    failed := failed + expect("expr vars", expr.eval_vars("x * 4", vars) = 10.0)
+    var machine: *fsm.Machine := fsm.new("idle")
+    fsm.add(machine, "idle", "start", "running")
+    fsm.add(machine, "running", "stop", "idle")
+    failed := failed + expect("fsm", fsm.fire(machine, "start") = 1 && fsm.fire(machine, "start") = 0 && fsm.fire(machine, "stop") = 1 && fsm.trace(machine) = "idle -> running -> idle")
+    var bucket: *ratelimit.Bucket := ratelimit.new(1000, 3)
+    failed := failed + expect("ratelimit", ratelimit.allow(bucket) = 1 && ratelimit.allow(bucket) = 1 && ratelimit.allow(bucket) = 1 && ratelimit.allow(bucket) = 0)
+    var policy: *retry.Policy := retry.new(5, 100, 1000, 0)
+    failed := failed + expect("retry", retry.delay(policy, 1) = 0 && retry.delay(policy, 3) = 200 && retry.delay(policy, 9) = 1000 && retry.total_delay(policy) = 100 + 200 + 400 + 800)
+    var pool: *arena.Arena := arena.new(4096)
+    i := 0
+    while i < 1000 { arena.allocate(pool, 24)
+        i := i + 1
+    }
+    failed := failed + expect("arena", arena.bytes_used(pool) = 24000 && arena.chunk_count(pool) >= 6 && arena.text(pool, "kept") = "kept")
+    arena.release(pool)
+    heapstats.collect()
+    failed := failed + expect("heapstats", heapstats.collections() >= 1 && heapstats.heap_size() > 0)
+    failed := failed + expect("bench", bench.stop(bench.start()) >= 0 && bench.consume(7) = 7)
+    var set: *intlist.List := intervals.new()
+    intervals.add(set, 1, 3)
+    intervals.add(set, 8, 10)
+    intervals.add(set, 2, 5)
+    intervals.add(set, 6, 7)
+    failed := failed + expect("intervals", intlist.join(intervals.merge(set), ",") = "1,10" && intervals.total_length(set) = 10)
+    var h: string := geohash.encode(57.64911, 10.40744, 11)
+    var back: [2]flt := geohash.decode(h)
+    failed := failed + expect("geohash", h = "u4pruydqqvj" && mathx.abs(back[0] - 57.64911) < 0.00001)
+    failed := failed + expect("haversine", mathx.abs(geohash.distance(0.0, 0.0, 0.0, 1.0) - 111194.9) < 100.0)
+    var ep: int := epoll.create()
+    var wake: int := epoll.eventfd()
+    epoll.add(ep, wake, epoll.readable())
+    failed := failed + expect("epoll idle", intlist.len(epoll.wait(ep, 4, 0)) = 0)
+    epoll.signal(wake)
+    var ready: *intlist.List := epoll.wait(ep, 4, 1000)
+    failed := failed + expect("epoll ready", intlist.len(ready) = 2 && intlist.get(ready, 0) = wake)
+    var root: string := tempfile.directory("xe-misc-")
+    var notify: int := inotify.init()
+    inotify.watch(notify, root, inotify.create_event() | inotify.modify())
+    file.write(root + "/watched.txt", "x")
+    var events: *strlist.List := inotify.read_events(notify)
+    failed := failed + expect("inotify", strlist.len(events) >= 1 && inotify.name_of(strlist.get(events, 0)) = "watched.txt")
+    var store: *kvstore.Store := kvstore.open(root + "/data.log")
+    kvstore.set(store, "name", "xe lang")
+    kvstore.set(store, "note", "line1\nline2")
+    kvstore.set(store, "gone", "x")
+    kvstore.remove(store, "gone")
+    kvstore.close(store)
+    var reopened: *kvstore.Store := kvstore.open(root + "/data.log")
+    failed := failed + expect("kvstore", kvstore.get(reopened, "name", "") = "xe lang" && kvstore.get(reopened, "note", "") = "line1\nline2" && kvstore.has(reopened, "gone") = 0 && kvstore.len(reopened) = 2)
+    kvstore.compact(reopened)
+    kvstore.set(reopened, "late", "1")
+    kvstore.close(reopened)
+    failed := failed + expect("kvstore compact", kvstore.len(kvstore.open(root + "/data.log")) = 3)
+    dir.remove_all(root)
+    failed := failed + expect("ascii85", ascii85.encode("Man is distinguished") = "9jqo^BlbD-BleB1DJ+*+F(f,q" && ascii85.decode(ascii85.encode("hello!")) = "hello!")
+    failed := failed + expect("ngram", mathx.approx(ngram.jaccard("night", "nacht", 2), 1.0 / 7.0, 0.000001) && ngram.dice("night", "nacht", 2) = 0.25 && ngram.dice("abc", "abc", 2) = 1.0 && strlist.len(ngram.words("a b c d", 2)) = 3)
+    failed := failed + expect("cron", cron.matches("*/15 9-17 * * 1-5", datetime.make(2024, 3, 6, 10, 30, 0)) = 1 && cron.matches("*/15 9-17 * * 1-5", datetime.make(2024, 3, 10, 10, 30, 0)) = 0)
+    failed := failed + expect("cron next", datetime.iso(datetime.from_unix(cron.next_after("30 2 * * *", 1700000000), 0)) = "2023-11-15T02:30:00Z")
+    var march: string := calendar.month_grid(2024, 3)
+    failed := failed + expect("calendar", strings.contains(march, "Su Mo Tu We Th Fr Sa") = 1 && strings.contains(march, "31") = 1)
+    failed := failed + expect("easter", calendar.easter(2024)[0] = 3 && calendar.easter(2024)[1] = 31 && calendar.iso_week(datetime.make(2021, 1, 3, 0, 0, 0)) = 53)
+    failed := failed + expect("business days", datetime.date_string(calendar.add_business_days(datetime.make(2024, 3, 8, 0, 0, 0), 3)) = "2024-03-13")
+    var archive: *tar.Archive := tar.new()
+    tar.add(archive, "a.txt", "hello")
+    tar.add(archive, "dir/b.txt", strings.repeat("x", 700))
+    var packed: *bytes.Buffer := tar.build(archive)
+    var unpacked: *tar.Archive := tar.parse(packed)
+    failed := failed + expect("tar", bytes.len(packed) = 512 + 512 + 512 + 1024 + 1024 && tar.count(unpacked) = 2 && tar.find(unpacked, "a.txt") = "hello" && str.length(tar.find(unpacked, "dir/b.txt")) = 700)
+    if failed = 0 { writeln("misc ok") }
+    return failed
+end

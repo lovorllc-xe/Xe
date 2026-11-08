@@ -1,0 +1,121 @@
+// sha1: SHA-1 digests (for legacy protocols such as git and WebSocket handshakes).
+uses bytes
+
+module sha1
+begin
+    fn rotl(v: int, n: int): int
+    begin
+        return ((v << n) | (v >> (32 - n))) & 4294967295
+    end
+
+    fn core(data: *void, size: int, out: *void)
+    begin
+        var total: int := ((size + 9 + 63) / 64) * 64
+        var message: *void := alloc(total + 8)
+        runtime.mem.set(message, 0, total)
+        if size > 0 { runtime.mem.copy(message, data, size) }
+        runtime.hw.write8(message + size, 128)
+        var bits: int := size * 8
+        var b: int := 0
+        while b < 8 {
+            runtime.hw.write8(message + total - 1 - b, (bits >> (b * 8)) & 255)
+            b := b + 1
+        }
+        var h0: int := 1732584193
+        var h1: int := 4023233417
+        var h2: int := 2562383102
+        var h3: int := 271733878
+        var h4: int := 3285377520
+        var w: *int := alloc(80 * 8)
+        var chunk: int := 0
+        while chunk < total {
+            var t: int := 0
+            while t < 16 {
+                var p: *void := message + chunk + t * 4
+                *(w + t) := (runtime.hw.read8(p) << 24) | (runtime.hw.read8(p + 1) << 16) | (runtime.hw.read8(p + 2) << 8) | runtime.hw.read8(p + 3)
+                t := t + 1
+            }
+            while t < 80 {
+                *(w + t) := rotl(*(w + t - 3) ^ *(w + t - 8) ^ *(w + t - 14) ^ *(w + t - 16), 1)
+                t := t + 1
+            }
+            var a: int := h0
+            var bb: int := h1
+            var c: int := h2
+            var d: int := h3
+            var e: int := h4
+            t := 0
+            while t < 80 {
+                var f: int := 0
+                var k: int := 0
+                if t < 20 {
+                    f := (bb & c) | ((~bb & 4294967295) & d)
+                    k := 1518500249
+                }
+                else {
+                    if t < 40 {
+                        f := bb ^ c ^ d
+                        k := 1859775393
+                    }
+                    else {
+                        if t < 60 {
+                            f := (bb & c) | (bb & d) | (c & d)
+                            k := 2400959708
+                        }
+                        else {
+                            f := bb ^ c ^ d
+                            k := 3395469782
+                        }
+                    }
+                }
+                var temp: int := (rotl(a, 5) + f + e + k + *(w + t)) & 4294967295
+                e := d
+                d := c
+                c := rotl(bb, 30)
+                bb := a
+                a := temp
+                t := t + 1
+            }
+            h0 := (h0 + a) & 4294967295
+            h1 := (h1 + bb) & 4294967295
+            h2 := (h2 + c) & 4294967295
+            h3 := (h3 + d) & 4294967295
+            h4 := (h4 + e) & 4294967295
+            chunk := chunk + 64
+        }
+        var words: [5]int
+        words[0] := h0
+        words[1] := h1
+        words[2] := h2
+        words[3] := h3
+        words[4] := h4
+        var index: int := 0
+        while index < 5 {
+            runtime.hw.write8(out + index * 4, (words[index] >> 24) & 255)
+            runtime.hw.write8(out + index * 4 + 1, (words[index] >> 16) & 255)
+            runtime.hw.write8(out + index * 4 + 2, (words[index] >> 8) & 255)
+            runtime.hw.write8(out + index * 4 + 3, words[index] & 255)
+            index := index + 1
+        }
+        free(message)
+        free(w)
+    end
+
+    fn hex(text: string): string
+    begin
+        var data: *bytes.Buffer := bytes.from_string(text)
+        var out: *void := alloc(24)
+        core(data.data, data.size, out)
+        var digits: string := "0123456789abcdef"
+        var result: string := str.builder("")
+        var index: int := 0
+        while index < 20 {
+            var v: int := runtime.hw.read8(out + index)
+            result := str.append(result, str.slice(digits, v / 16, v / 16 + 1) + str.slice(digits, v % 16, v % 16 + 1))
+            index := index + 1
+        }
+        free(out)
+        bytes.release(data)
+        return result
+    end
+end

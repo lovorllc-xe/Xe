@@ -1,0 +1,153 @@
+// stats: descriptive statistics and simple regression over fltlist data.
+uses fltlist
+uses mathx
+
+module stats
+begin
+    fn mean(data: *fltlist.List): flt
+    begin
+        return fltlist.mean(data)
+    end
+
+    fn variance(data: *fltlist.List): flt
+    begin
+        var n: int := fltlist.len(data)
+        if n < 2 { return 0.0 }
+        var average: flt := fltlist.mean(data)
+        var total: flt := 0.0
+        var index: int := 0
+        while index < n {
+            var delta: flt := fltlist.get(data, index) - average
+            total := total + delta * delta
+            index := index + 1
+        }
+        return total / (n - 1)
+    end
+
+    fn population_variance(data: *fltlist.List): flt
+    begin
+        var n: int := fltlist.len(data)
+        if n = 0 { return 0.0 }
+        return variance(data) * (n - 1) / n
+    end
+
+    fn stddev(data: *fltlist.List): flt
+    begin
+        return mathx.sqrt(variance(data))
+    end
+
+    fn sorted_copy(data: *fltlist.List): *fltlist.List
+    begin
+        var copy: *fltlist.List := fltlist.new()
+        var index: int := 0
+        while index < fltlist.len(data) {
+            fltlist.push(copy, fltlist.get(data, index))
+            index := index + 1
+        }
+        fltlist.sort(copy)
+        return copy
+    end
+
+    // Linear-interpolated percentile, p in [0, 100].
+    fn percentile(data: *fltlist.List, p: flt): flt
+    begin
+        var n: int := fltlist.len(data)
+        if n = 0 { return 0.0 }
+        var sorted: *fltlist.List := sorted_copy(data)
+        var rank: flt := (p / 100.0) * (n - 1)
+        var low: int := flt.toint(mathx.floor(rank))
+        var high: int := flt.toint(mathx.ceil(rank))
+        var result: flt := fltlist.get(sorted, low) + (fltlist.get(sorted, high) - fltlist.get(sorted, low)) * (rank - low)
+        fltlist.release(sorted)
+        return result
+    end
+
+    fn median(data: *fltlist.List): flt
+    begin
+        return percentile(data, 50.0)
+    end
+
+    fn min(data: *fltlist.List): flt
+    begin
+        return fltlist.min(data)
+    end
+
+    fn max(data: *fltlist.List): flt
+    begin
+        return fltlist.max(data)
+    end
+
+    fn range(data: *fltlist.List): flt
+    begin
+        return fltlist.max(data) - fltlist.min(data)
+    end
+
+    fn covariance(xs: *fltlist.List, ys: *fltlist.List): flt
+    begin
+        var n: int := fltlist.len(xs)
+        if n < 2 || fltlist.len(ys) != n { return 0.0 }
+        var mx: flt := fltlist.mean(xs)
+        var my: flt := fltlist.mean(ys)
+        var total: flt := 0.0
+        var index: int := 0
+        while index < n {
+            total := total + (fltlist.get(xs, index) - mx) * (fltlist.get(ys, index) - my)
+            index := index + 1
+        }
+        return total / (n - 1)
+    end
+
+    fn correlation(xs: *fltlist.List, ys: *fltlist.List): flt
+    begin
+        var sx: flt := stddev(xs)
+        var sy: flt := stddev(ys)
+        if sx = 0.0 || sy = 0.0 { return 0.0 }
+        return covariance(xs, ys) / (sx * sy)
+    end
+
+    // Least-squares line y = slope * x + intercept.
+    fn slope(xs: *fltlist.List, ys: *fltlist.List): flt
+    begin
+        var vx: flt := variance(xs)
+        if vx = 0.0 { return 0.0 }
+        return covariance(xs, ys) / vx
+    end
+
+    fn intercept(xs: *fltlist.List, ys: *fltlist.List): flt
+    begin
+        return fltlist.mean(ys) - slope(xs, ys) * fltlist.mean(xs)
+    end
+
+    fn zscore(value: flt, data: *fltlist.List): flt
+    begin
+        var deviation: flt := stddev(data)
+        if deviation = 0.0 { return 0.0 }
+        return (value - fltlist.mean(data)) / deviation
+    end
+
+    fn geometric_mean(data: *fltlist.List): flt
+    begin
+        var n: int := fltlist.len(data)
+        if n = 0 { return 0.0 }
+        var total: flt := 0.0
+        var index: int := 0
+        while index < n {
+            total := total + mathx.ln(fltlist.get(data, index))
+            index := index + 1
+        }
+        return mathx.exp(total / n)
+    end
+
+    fn harmonic_mean(data: *fltlist.List): flt
+    begin
+        var n: int := fltlist.len(data)
+        if n = 0 { return 0.0 }
+        var total: flt := 0.0
+        var index: int := 0
+        while index < n {
+            total := total + 1.0 / fltlist.get(data, index)
+            index := index + 1
+        }
+        return n / total
+    end
+end

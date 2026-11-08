@@ -1,0 +1,164 @@
+// grid: 2D integer grids with flood fill and shortest paths around walls (cells equal to wall()).
+uses deque
+
+module grid
+begin
+    type Grid: record
+    begin
+        width: int
+        height: int
+        cells: *int
+    end
+
+    fn wall(): int
+    begin
+        return 1
+    end
+
+    fn new(width: int, height: int): *grid.Grid
+    begin
+        var g: *grid.Grid := alloc(24)
+        g.width := width
+        g.height := height
+        g.cells := alloc(width * height * 8 + 8)
+        runtime.mem.set(g.cells, 0, width * height * 8)
+        return g
+    end
+
+    fn inside(g: *grid.Grid, x: int, y: int): int
+    begin
+        return x >= 0 && y >= 0 && x < g.width && y < g.height
+    end
+
+    fn get(g: *grid.Grid, x: int, y: int): int
+    begin
+        if inside(g, x, y) = 0 { return -1 }
+        return *(g.cells + y * g.width + x)
+    end
+
+    fn set(g: *grid.Grid, x: int, y: int, value: int)
+    begin
+        if inside(g, x, y) = 1 { *(g.cells + y * g.width + x) := value }
+    end
+
+    fn fill(g: *grid.Grid, value: int)
+    begin
+        var i: int := 0
+        while i < g.width * g.height {
+            *(g.cells + i) := value
+            i := i + 1
+        }
+    end
+
+    fn count(g: *grid.Grid, value: int): int
+    begin
+        var total: int := 0
+        var i: int := 0
+        while i < g.width * g.height {
+            if *(g.cells + i) = value { total := total + 1 }
+            i := i + 1
+        }
+        return total
+    end
+
+    // Replaces the connected region (4-neighbour) around x,y with value; returns cells changed.
+    fn flood_fill(g: *grid.Grid, x: int, y: int, value: int): int
+    begin
+        var target: int := get(g, x, y)
+        if target < 0 || target = value { return 0 }
+        var queue: *deque.Deque := deque.new()
+        deque.push_back(queue, y * g.width + x)
+        set(g, x, y, value)
+        var changed: int := 1
+        while deque.empty(queue) = 0 {
+            var cell: int := deque.pop_front(queue)
+            var cx: int := cell % g.width
+            var cy: int := cell / g.width
+            var d: int := 0
+            while d < 4 {
+                var nx: int := cx
+                var ny: int := cy
+                if d = 0 { nx := cx + 1 }
+                if d = 1 { nx := cx - 1 }
+                if d = 2 { ny := cy + 1 }
+                if d = 3 { ny := cy - 1 }
+                if get(g, nx, ny) = target {
+                    set(g, nx, ny, value)
+                    deque.push_back(queue, ny * g.width + nx)
+                    changed := changed + 1
+                }
+                d := d + 1
+            }
+        }
+        deque.release(queue)
+        return changed
+    end
+
+    // Length of the shortest 4-neighbour path avoiding walls, or -1.
+    fn shortest_path(g: *grid.Grid, sx: int, sy: int, tx: int, ty: int): int
+    begin
+        if get(g, sx, sy) = wall() || get(g, tx, ty) = wall() || inside(g, sx, sy) = 0 || inside(g, tx, ty) = 0 { return -1 }
+        var dist: *int := alloc(g.width * g.height * 8 + 8)
+        var i: int := 0
+        while i < g.width * g.height {
+            *(dist + i) := -1
+            i := i + 1
+        }
+        var queue: *deque.Deque := deque.new()
+        *(dist + sy * g.width + sx) := 0
+        deque.push_back(queue, sy * g.width + sx)
+        var answer: int := -1
+        while deque.empty(queue) = 0 && answer < 0 {
+            var cell: int := deque.pop_front(queue)
+            var cx: int := cell % g.width
+            var cy: int := cell / g.width
+            if cx = tx && cy = ty { answer := *(dist + cell) }
+            else {
+                var d: int := 0
+                while d < 4 {
+                    var nx: int := cx
+                    var ny: int := cy
+                    if d = 0 { nx := cx + 1 }
+                    if d = 1 { nx := cx - 1 }
+                    if d = 2 { ny := cy + 1 }
+                    if d = 3 { ny := cy - 1 }
+                    if inside(g, nx, ny) = 1 && get(g, nx, ny) != wall() && *(dist + ny * g.width + nx) < 0 {
+                        *(dist + ny * g.width + nx) := *(dist + cell) + 1
+                        deque.push_back(queue, ny * g.width + nx)
+                    }
+                    d := d + 1
+                }
+            }
+        }
+        free(dist)
+        deque.release(queue)
+        return answer
+    end
+
+    fn render(g: *grid.Grid): string
+    begin
+        var out: string := str.builder("")
+        var y: int := 0
+        while y < g.height {
+            var x: int := 0
+            while x < g.width {
+                var v: int := get(g, x, y)
+                if v = 0 { out := str.append(out, ".") }
+                else {
+                    if v = 1 { out := str.append(out, "#") }
+                    else { out := str.append(out, str.slice("0123456789abcdefghijklmnopqrstuvwxyz", v % 36, v % 36 + 1)) }
+                }
+                x := x + 1
+            }
+            out := str.append(out, "\n")
+            y := y + 1
+        }
+        return out
+    end
+
+    fn release(g: *grid.Grid)
+    begin
+        free(g.cells)
+        free(g)
+    end
+end

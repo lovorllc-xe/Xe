@@ -1,0 +1,61 @@
+// interp: interpolation, easing curves and range mapping.
+uses mathx
+
+module interp
+begin
+    fn lerp(a: flt, b: flt, t: flt): flt
+    begin
+        return a + (b - a) * t
+    end
+
+    fn inverse_lerp(a: flt, b: flt, value: flt): flt
+    begin
+        if a = b { return 0.0 }
+        return (value - a) / (b - a)
+    end
+
+    fn remap(value: flt, inLow: flt, inHigh: flt, outLow: flt, outHigh: flt): flt
+    begin
+        return lerp(outLow, outHigh, inverse_lerp(inLow, inHigh, value))
+    end
+
+    fn clamp01(t: flt): flt
+    begin
+        return mathx.clamp(t, 0.0, 1.0)
+    end
+
+    fn smoothstep(edge0: flt, edge1: flt, value: flt): flt
+    begin
+        var t: flt := clamp01(inverse_lerp(edge0, edge1, value))
+        return t * t * (3.0 - 2.0 * t)
+    end
+
+    fn ease_in_quad(t: flt): flt
+    begin
+        return t * t
+    end
+
+    fn ease_out_quad(t: flt): flt
+    begin
+        return t * (2.0 - t)
+    end
+
+    fn ease_in_out_cubic(t: flt): flt
+    begin
+        if t < 0.5 { return 4.0 * t * t * t }
+        var u: flt := -2.0 * t + 2.0
+        return 1.0 - u * u * u / 2.0
+    end
+
+    fn bezier(p0: flt, p1: flt, p2: flt, p3: flt, t: flt): flt
+    begin
+        var u: flt := 1.0 - t
+        return u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
+    end
+
+    fn cosine(a: flt, b: flt, t: flt): flt
+    begin
+        var f: flt := (1.0 - mathx.cos(t * mathx.pi())) / 2.0
+        return a * (1.0 - f) + b * f
+    end
+end

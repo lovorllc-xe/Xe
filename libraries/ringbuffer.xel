@@ -1,0 +1,73 @@
+// ringbuffer: a fixed-capacity FIFO of ints that overwrites the oldest value when full.
+module ringbuffer
+begin
+    type Ring: record
+    begin
+        data: *int
+        head: int
+        size: int
+        capacity: int
+    end
+
+    fn new(capacity: int): *ringbuffer.Ring
+    begin
+        var ring: *ringbuffer.Ring := alloc(32)
+        var room: int := capacity
+        if room < 1 { room := 1 }
+        ring.data := alloc(room * 8)
+        ring.head := 0
+        ring.size := 0
+        ring.capacity := room
+        return ring
+    end
+
+    fn push(ring: *ringbuffer.Ring, value: int)
+    begin
+        *(ring.data + (ring.head + ring.size) % ring.capacity) := value
+        if ring.size < ring.capacity { ring.size := ring.size + 1 }
+        else { ring.head := (ring.head + 1) % ring.capacity }
+    end
+
+    fn pop(ring: *ringbuffer.Ring): int
+    begin
+        if ring.size = 0 { return 0 }
+        var value: int := *(ring.data + ring.head)
+        ring.head := (ring.head + 1) % ring.capacity
+        ring.size := ring.size - 1
+        return value
+    end
+
+    fn get(ring: *ringbuffer.Ring, index: int): int
+    begin
+        if index < 0 || index >= ring.size { return 0 }
+        return *(ring.data + (ring.head + index) % ring.capacity)
+    end
+
+    fn len(ring: *ringbuffer.Ring): int
+    begin
+        return ring.size
+    end
+
+    fn full(ring: *ringbuffer.Ring): int
+    begin
+        return ring.size = ring.capacity
+    end
+
+    fn average(ring: *ringbuffer.Ring): flt
+    begin
+        if ring.size = 0 { return 0.0 }
+        var total: int := 0
+        var index: int := 0
+        while index < ring.size {
+            total := total + get(ring, index)
+            index := index + 1
+        }
+        return total / (ring.size * 1.0)
+    end
+
+    fn release(ring: *ringbuffer.Ring)
+    begin
+        free(ring.data)
+        free(ring)
+    end
+end

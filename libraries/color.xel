@@ -1,0 +1,171 @@
+// color: RGB/HSV/HSL conversions, hex parsing, blending and ANSI terminal colors.
+uses mathx
+
+module color
+begin
+    type Rgb: record
+    begin
+        r: int
+        g: int
+        b: int
+    end
+
+    fn rgb(r: int, g: int, b: int): color.Rgb
+    begin
+        var c: color.Rgb
+        c.r := r
+        c.g := g
+        c.b := b
+        return c
+    end
+
+    fn nibble(c: int): int
+    begin
+        if c >= 48 && c <= 57 { return c - 48 }
+        if c >= 97 && c <= 102 { return c - 87 }
+        if c >= 65 && c <= 70 { return c - 55 }
+        return 0
+    end
+
+    fn from_hex(text: string): color.Rgb
+    begin
+        var t: string := text
+        if str.length(t) > 0 && str.char(t, 0) = 35 { t := str.slice(t, 1, str.length(t)) }
+        if str.length(t) = 3 { return rgb(nibble(str.char(t, 0)) * 17, nibble(str.char(t, 1)) * 17, nibble(str.char(t, 2)) * 17) }
+        if str.length(t) < 6 { return rgb(0, 0, 0) }
+        return rgb(nibble(str.char(t, 0)) * 16 + nibble(str.char(t, 1)), nibble(str.char(t, 2)) * 16 + nibble(str.char(t, 3)), nibble(str.char(t, 4)) * 16 + nibble(str.char(t, 5)))
+    end
+
+    fn hex2(v: int): string
+    begin
+        var digits: string := "0123456789abcdef"
+        return str.slice(digits, v / 16, v / 16 + 1) + str.slice(digits, v % 16, v % 16 + 1)
+    end
+
+    fn to_hex(c: color.Rgb): string
+    begin
+        return "#" + hex2(c.r) + hex2(c.g) + hex2(c.b)
+    end
+
+    fn clamp(v: flt): int
+    begin
+        var i: int := flt.toint(mathx.round(v))
+        if i < 0 { return 0 }
+        if i > 255 { return 255 }
+        return i
+    end
+
+    // h in degrees [0,360), s and v in [0,1].
+    fn from_hsv(h: flt, s: flt, v: flt): color.Rgb
+    begin
+        var hh: flt := mathx.fmod(h, 360.0)
+        if hh < 0.0 { hh := hh + 360.0 }
+        var c: flt := v * s
+        var x: flt := c * (1.0 - mathx.abs(mathx.fmod(hh / 60.0, 2.0) - 1.0))
+        var m: flt := v - c
+        var r: flt := 0.0
+        var g: flt := 0.0
+        var b: flt := 0.0
+        if hh < 60.0 {
+            r := c
+            g := x
+        }
+        else {
+            if hh < 120.0 {
+                r := x
+                g := c
+            }
+            else {
+                if hh < 180.0 {
+                    g := c
+                    b := x
+                }
+                else {
+                    if hh < 240.0 {
+                        g := x
+                        b := c
+                    }
+                    else {
+                        if hh < 300.0 {
+                            r := x
+                            b := c
+                        }
+                        else {
+                            r := c
+                            b := x
+                        }
+                    }
+                }
+            }
+        }
+        return rgb(clamp((r + m) * 255.0), clamp((g + m) * 255.0), clamp((b + m) * 255.0))
+    end
+
+    fn hue(c: color.Rgb): flt
+    begin
+        var r: flt := c.r / 255.0
+        var g: flt := c.g / 255.0
+        var b: flt := c.b / 255.0
+        var high: flt := mathx.max(r, mathx.max(g, b))
+        var low: flt := mathx.min(r, mathx.min(g, b))
+        var d: flt := high - low
+        if d = 0.0 { return 0.0 }
+        var h: flt := 0.0
+        if high = r { h := 60.0 * mathx.fmod((g - b) / d, 6.0) }
+        else {
+            if high = g { h := 60.0 * ((b - r) / d + 2.0) }
+            else { h := 60.0 * ((r - g) / d + 4.0) }
+        }
+        if h < 0.0 { h := h + 360.0 }
+        return h
+    end
+
+    fn saturation(c: color.Rgb): flt
+    begin
+        var high: flt := mathx.max(c.r * 1.0, mathx.max(c.g * 1.0, c.b * 1.0))
+        var low: flt := mathx.min(c.r * 1.0, mathx.min(c.g * 1.0, c.b * 1.0))
+        if high = 0.0 { return 0.0 }
+        return (high - low) / high
+    end
+
+    fn value(c: color.Rgb): flt
+    begin
+        return mathx.max(c.r * 1.0, mathx.max(c.g * 1.0, c.b * 1.0)) / 255.0
+    end
+
+    fn blend(a: color.Rgb, b: color.Rgb, t: flt): color.Rgb
+    begin
+        return rgb(clamp(a.r + (b.r - a.r) * t), clamp(a.g + (b.g - a.g) * t), clamp(a.b + (b.b - a.b) * t))
+    end
+
+    fn luminance(c: color.Rgb): flt
+    begin
+        return (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255.0
+    end
+
+    fn grayscale(c: color.Rgb): color.Rgb
+    begin
+        var y: int := clamp(luminance(c) * 255.0)
+        return rgb(y, y, y)
+    end
+
+    fn ansi_fg(c: color.Rgb): string
+    begin
+        return str.fromchar(27) + "[38;2;" + str.number(c.r) + ";" + str.number(c.g) + ";" + str.number(c.b) + "m"
+    end
+
+    fn ansi_bg(c: color.Rgb): string
+    begin
+        return str.fromchar(27) + "[48;2;" + str.number(c.r) + ";" + str.number(c.g) + ";" + str.number(c.b) + "m"
+    end
+
+    fn reset(): string
+    begin
+        return str.fromchar(27) + "[0m"
+    end
+
+    fn paint(text: string, c: color.Rgb): string
+    begin
+        return ansi_fg(c) + text + reset()
+    end
+end

@@ -1,0 +1,121 @@
+// os: process and system information (pid, uid, cwd, hostname, environment, exit).
+uses strlist
+
+module os
+begin
+    fn pid(): int
+    begin
+        return syscall.invoke3(39, 0, 0, 0)
+    end
+
+    fn ppid(): int
+    begin
+        return syscall.invoke3(110, 0, 0, 0)
+    end
+
+    fn uid(): int
+    begin
+        return syscall.invoke3(102, 0, 0, 0)
+    end
+
+    fn gid(): int
+    begin
+        return syscall.invoke3(104, 0, 0, 0)
+    end
+
+    fn c_string(buffer: *void, limit: int): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        var going: int := 1
+        while index < limit && going = 1 {
+            var c: int := runtime.hw.read8(buffer + index)
+            if c = 0 { going := 0 }
+            else { text := str.append(text, str.fromchar(c)) }
+            index := index + 1
+        }
+        return text
+    end
+
+    fn cwd(): string
+    begin
+        var buffer: *void := alloc(4096)
+        var result: int := syscall.invoke3(79, buffer, 4096, 0)
+        var text: string := ""
+        if result > 0 { text := c_string(buffer, 4096) }
+        free(buffer)
+        return text
+    end
+
+    fn chdir(target: string): int
+    begin
+        return syscall.invoke3(80, target, 0, 0) = 0
+    end
+
+    // uname fields: 0 sysname, 1 nodename (hostname), 2 release, 3 version, 4 machine.
+    fn uname_field(field: int): string
+    begin
+        var buffer: *void := alloc(65 * 6)
+        syscall.invoke3(63, buffer, 0, 0)
+        var text: string := c_string(buffer + field * 65, 65)
+        free(buffer)
+        return text
+    end
+
+    fn hostname(): string
+    begin
+        return uname_field(1)
+    end
+
+    fn kernel(): string
+    begin
+        return uname_field(2)
+    end
+
+    fn arch(): string
+    begin
+        return uname_field(4)
+    end
+
+    fn getenv(name: string, fallback: string): string
+    begin
+        var value: string := env.get(name)
+        if str.length(value) = 0 { return fallback }
+        return value
+    end
+
+    fn args(): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var index: int := 0
+        while index < arg.count() {
+            strlist.push(out, arg.get(index))
+            index := index + 1
+        }
+        return out
+    end
+
+    fn exit(code: int)
+    begin
+        syscall.invoke3(60, code, 0, 0)
+    end
+
+    fn home(): string
+    begin
+        return env.get("HOME")
+    end
+
+    fn user(): string
+    begin
+        var name: string := env.get("USER")
+        if str.length(name) = 0 { name := env.get("LOGNAME") }
+        return name
+    end
+
+    fn temp_dir(): string
+    begin
+        var dir: string := env.get("TMPDIR")
+        if str.length(dir) = 0 { return "/tmp" }
+        return dir
+    end
+end

@@ -1,0 +1,52 @@
+// tempfile: create unique temporary files and directories.
+uses random
+uses os
+uses path
+
+module tempfile
+begin
+    fn unique_name(prefix: string, suffix: string): string
+    begin
+        var rng: *random.Rng := random.new_random()
+        return path.join(os.temp_dir(), prefix + random.string(rng, 12, "abcdefghijklmnopqrstuvwxyz0123456789") + suffix)
+    end
+
+    // Creates an empty file exclusively (O_CREAT|O_EXCL) and returns its path.
+    fn file(prefix: string, suffix: string): string
+    begin
+        var attempts: int := 0
+        while attempts < 100 {
+            var name: string := unique_name(prefix, suffix)
+            var fd: int := syscall.invoke3(2, name, 193, 384)
+            if fd >= 0 {
+                syscall.invoke3(3, fd, 0, 0)
+                return name
+            }
+            attempts := attempts + 1
+        }
+        return ""
+    end
+
+    fn directory(prefix: string): string
+    begin
+        var attempts: int := 0
+        while attempts < 100 {
+            var name: string := unique_name(prefix, "")
+            if syscall.invoke3(83, name, 448, 0) = 0 { return name }
+            attempts := attempts + 1
+        }
+        return ""
+    end
+
+    fn with_contents(prefix: string, contents: string): string
+    begin
+        var name: string := file(prefix, "")
+        if str.length(name) > 0 { file.write(name, contents) }
+        return name
+    end
+
+    fn remove(name: string): int
+    begin
+        return syscall.invoke3(87, name, 0, 0) = 0
+    end
+end

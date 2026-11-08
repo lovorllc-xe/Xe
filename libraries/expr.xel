@@ -1,0 +1,224 @@
+// expr: evaluate arithmetic expressions: + - * / % ^, parentheses, unary minus, functions and variables.
+//   expr.eval("2 * (3 + 4) ^ 2")        -> 98
+//   expr.eval_vars("x * pi", vars)       -> uses a strmap of numeric text values
+uses mathx
+uses strmap
+uses strings
+
+module expr
+begin
+    type Parser: record
+    begin
+        text: string
+        position: int
+        error: string
+        vars: *strmap.Map
+    end
+
+    fn make(text: string, vars: *strmap.Map): *expr.Parser
+    begin
+        var p: *expr.Parser := alloc(40)
+        p.text := text
+        p.position := 0
+        p.error := ""
+        p.vars := vars
+        return p
+    end
+
+    fn skip(p: *expr.Parser)
+    begin
+        while p.position < str.length(p.text) && (str.char(p.text, p.position) = 32 || str.char(p.text, p.position) = 9) { p.position := p.position + 1 }
+    end
+
+    fn peek(p: *expr.Parser): int
+    begin
+        skip(p)
+        if p.position >= str.length(p.text) { return -1 }
+        return str.char(p.text, p.position)
+    end
+
+    fn fail(p: *expr.Parser, message: string): flt
+    begin
+        if str.length(p.error) = 0 { p.error := message + " at position " + str.number(p.position) }
+        return 0.0
+    end
+
+    fn number_text(text: string): flt
+    begin
+        var v: flt := 0.0
+        var i: int := 0
+        while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+            v := v * 10.0 + (str.char(text, i) - 48)
+            i := i + 1
+        }
+        if i < str.length(text) && str.char(text, i) = 46 {
+            i := i + 1
+            var scale: flt := 0.1
+            while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+                v := v + scale * (str.char(text, i) - 48)
+                scale := scale * 0.1
+                i := i + 1
+            }
+        }
+        return v
+    end
+
+    fn call(p: *expr.Parser, name: string, x: flt): flt
+    begin
+        if name = "sqrt" { return mathx.sqrt(x) }
+        if name = "sin" { return mathx.sin(x) }
+        if name = "cos" { return mathx.cos(x) }
+        if name = "tan" { return mathx.tan(x) }
+        if name = "ln" { return mathx.ln(x) }
+        if name = "log" { return mathx.log10(x) }
+        if name = "exp" { return mathx.exp(x) }
+        if name = "abs" { return mathx.abs(x) }
+        if name = "floor" { return mathx.floor(x) }
+        if name = "ceil" { return mathx.ceil(x) }
+        if name = "round" { return mathx.round(x) }
+        if name = "atan" { return mathx.atan(x) }
+        return fail(p, "unknown function " + name)
+    end
+
+    fn primary(p: *expr.Parser): flt
+    begin
+        var c: int := peek(p)
+        if c = 40 {
+            p.position := p.position + 1
+            var inner: flt := additive(p)
+            if peek(p) != 41 { return fail(p, "missing )") }
+            p.position := p.position + 1
+            return inner
+        }
+        if (c >= 48 && c <= 57) || c = 46 {
+            var start: int := p.position
+            while p.position < str.length(p.text) && ((str.char(p.text, p.position) >= 48 && str.char(p.text, p.position) <= 57) || str.char(p.text, p.position) = 46) { p.position := p.position + 1 }
+            return number_text(str.slice(p.text, start, p.position))
+        }
+        if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c = 95 {
+            var first: int := p.position
+            while p.position < str.length(p.text) && ((str.char(p.text, p.position) >= 97 && str.char(p.text, p.position) <= 122) || (str.char(p.text, p.position) >= 65 && str.char(p.text, p.position) <= 90) || (str.char(p.text, p.position) >= 48 && str.char(p.text, p.position) <= 57) || str.char(p.text, p.position) = 95) { p.position := p.position + 1 }
+            var name: string := str.slice(p.text, first, p.position)
+            if peek(p) = 40 {
+                p.position := p.position + 1
+                var argument: flt := additive(p)
+                if peek(p) != 41 { return fail(p, "missing )") }
+                p.position := p.position + 1
+                return call(p, name, argument)
+            }
+            if name = "pi" { return mathx.pi() }
+            if name = "e" { return mathx.e() }
+            if strmap.has(p.vars, name) = 1 { return number_text(strmap.get(p.vars, name, "0")) }
+            return fail(p, "unknown name " + name)
+        }
+        return fail(p, "unexpected input")
+    end
+
+    fn unary(p: *expr.Parser): flt
+    begin
+        if peek(p) = 45 {
+            p.position := p.position + 1
+            return -unary(p)
+        }
+        if peek(p) = 43 {
+            p.position := p.position + 1
+            return unary(p)
+        }
+        return power(p)
+    end
+
+    fn power(p: *expr.Parser): flt
+    begin
+        var base: flt := primary(p)
+        if peek(p) = 94 {
+            p.position := p.position + 1
+            return mathx.pow(base, unary(p))
+        }
+        return base
+    end
+
+    fn multiplicative(p: *expr.Parser): flt
+    begin
+        var left: flt := unary(p)
+        var going: int := 1
+        while going = 1 {
+            var c: int := peek(p)
+            if c = 42 {
+                p.position := p.position + 1
+                left := left * unary(p)
+            }
+            else {
+                if c = 47 {
+                    p.position := p.position + 1
+                    var divisor: flt := unary(p)
+                    if divisor = 0.0 { return fail(p, "division by zero") }
+                    left := left / divisor
+                }
+                else {
+                    if c = 37 {
+                        p.position := p.position + 1
+                        left := mathx.fmod(left, unary(p))
+                    }
+                    else { going := 0 }
+                }
+            }
+        }
+        return left
+    end
+
+    fn additive(p: *expr.Parser): flt
+    begin
+        var left: flt := multiplicative(p)
+        var going: int := 1
+        while going = 1 {
+            var c: int := peek(p)
+            if c = 43 {
+                p.position := p.position + 1
+                left := left + multiplicative(p)
+            }
+            else {
+                if c = 45 {
+                    p.position := p.position + 1
+                    left := left - multiplicative(p)
+                }
+                else { going := 0 }
+            }
+        }
+        return left
+    end
+
+    fn run(p: *expr.Parser): flt
+    begin
+        var value: flt := additive(p)
+        if str.length(p.error) = 0 && peek(p) >= 0 { return fail(p, "unexpected trailing input") }
+        return value
+    end
+
+    fn ok(p: *expr.Parser): int
+    begin
+        return str.length(p.error) = 0
+    end
+
+    fn error(p: *expr.Parser): string
+    begin
+        return p.error
+    end
+
+    fn eval_vars(text: string, vars: *strmap.Map): flt
+    begin
+        return run(make(text, vars))
+    end
+
+    fn eval(text: string): flt
+    begin
+        return run(make(text, strmap.new()))
+    end
+
+    // 1 when the expression parses without error.
+    fn valid(text: string): int
+    begin
+        var p: *expr.Parser := make(text, strmap.new())
+        run(p)
+        return str.length(p.error) = 0 || strings.starts_with(p.error, "unknown name") = 1
+    end
+end

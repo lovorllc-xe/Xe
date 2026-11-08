@@ -1,0 +1,59 @@
+// atomic: lock-free integer operations on shared memory cells (*void pointing at 8 bytes).
+module atomic
+begin
+    fn cell(initial: int): *void
+    begin
+        var c: *void := alloc(8)
+        atomic.store(c, initial)
+        return c
+    end
+
+    fn load(c: *void): int
+    begin
+        return atomic.load(c)
+    end
+
+    fn store(c: *void, value: int)
+    begin
+        atomic.store(c, value)
+    end
+
+    fn cas(c: *void, expected: int, desired: int): int
+    begin
+        return atomic.compare_exchange(c, expected, desired)
+    end
+
+    // Adds delta and returns the new value.
+    fn add(c: *void, delta: int): int
+    begin
+        var current: int := atomic.load(c)
+        while atomic.compare_exchange(c, current, current + delta) = 0 { current := atomic.load(c) }
+        return current + delta
+    end
+
+    fn increment(c: *void): int
+    begin
+        return add(c, 1)
+    end
+
+    fn decrement(c: *void): int
+    begin
+        return add(c, -1)
+    end
+
+    // Stores value and returns the previous one.
+    fn exchange(c: *void, value: int): int
+    begin
+        var current: int := atomic.load(c)
+        while atomic.compare_exchange(c, current, value) = 0 { current := atomic.load(c) }
+        return current
+    end
+
+    fn max(c: *void, value: int): int
+    begin
+        var current: int := atomic.load(c)
+        while value > current && atomic.compare_exchange(c, current, value) = 0 { current := atomic.load(c) }
+        if value > current { return value }
+        return current
+    end
+end

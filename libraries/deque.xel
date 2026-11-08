@@ -1,0 +1,101 @@
+// deque: double-ended queue of ints backed by a growable ring buffer.
+module deque
+begin
+    type Deque: record
+    begin
+        data: *int
+        head: int
+        size: int
+        capacity: int
+    end
+
+    fn new(): *deque.Deque
+    begin
+        var queue: *deque.Deque := alloc(32)
+        queue.data := alloc(128)
+        queue.head := 0
+        queue.size := 0
+        queue.capacity := 16
+        return queue
+    end
+
+    fn grow(queue: *deque.Deque)
+    begin
+        var room: int := queue.capacity * 2
+        var bigger: *int := alloc(room * 8)
+        var index: int := 0
+        while index < queue.size {
+            *(bigger + index) := *(queue.data + (queue.head + index) % queue.capacity)
+            index := index + 1
+        }
+        free(queue.data)
+        queue.data := bigger
+        queue.head := 0
+        queue.capacity := room
+    end
+
+    fn push_back(queue: *deque.Deque, value: int)
+    begin
+        if queue.size = queue.capacity { grow(queue) }
+        *(queue.data + (queue.head + queue.size) % queue.capacity) := value
+        queue.size := queue.size + 1
+    end
+
+    fn push_front(queue: *deque.Deque, value: int)
+    begin
+        if queue.size = queue.capacity { grow(queue) }
+        queue.head := (queue.head + queue.capacity - 1) % queue.capacity
+        *(queue.data + queue.head) := value
+        queue.size := queue.size + 1
+    end
+
+    fn pop_front(queue: *deque.Deque): int
+    begin
+        if queue.size = 0 { return 0 }
+        var value: int := *(queue.data + queue.head)
+        queue.head := (queue.head + 1) % queue.capacity
+        queue.size := queue.size - 1
+        return value
+    end
+
+    fn pop_back(queue: *deque.Deque): int
+    begin
+        if queue.size = 0 { return 0 }
+        queue.size := queue.size - 1
+        return *(queue.data + (queue.head + queue.size) % queue.capacity)
+    end
+
+    fn front(queue: *deque.Deque): int
+    begin
+        if queue.size = 0 { return 0 }
+        return *(queue.data + queue.head)
+    end
+
+    fn back(queue: *deque.Deque): int
+    begin
+        if queue.size = 0 { return 0 }
+        return *(queue.data + (queue.head + queue.size - 1) % queue.capacity)
+    end
+
+    fn get(queue: *deque.Deque, index: int): int
+    begin
+        if index < 0 || index >= queue.size { return 0 }
+        return *(queue.data + (queue.head + index) % queue.capacity)
+    end
+
+    fn len(queue: *deque.Deque): int
+    begin
+        return queue.size
+    end
+
+    fn empty(queue: *deque.Deque): int
+    begin
+        return queue.size = 0
+    end
+
+    fn release(queue: *deque.Deque)
+    begin
+        free(queue.data)
+        free(queue)
+    end
+end

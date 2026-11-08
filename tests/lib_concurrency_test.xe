@@ -1,0 +1,112 @@
+uses atomic
+uses mutex
+uses condvar
+uses waitgroup
+uses semaphore
+uses channel
+uses once
+uses parallel
+
+type Shared: record
+begin
+    lock: *void
+    counter: *int
+    cell: *void
+    group: *void
+    ch: *channel.Channel
+end
+
+fn locked_worker(argument: *void): int
+begin
+    var shared: *Shared := argument
+    var i: int := 0
+    while i < 20000 {
+        mutex.lock(shared.lock)
+        *shared.counter := *shared.counter + 1
+        mutex.unlock(shared.lock)
+        atomic.increment(shared.cell)
+        i := i + 1
+    }
+    waitgroup.done(shared.group)
+    return 0
+end
+
+fn producer(argument: *void): int
+begin
+    var shared: *Shared := argument
+    var i: int := 1
+    while i <= 1000 {
+        channel.send(shared.ch, i)
+        i := i + 1
+    }
+    channel.close(shared.ch)
+    return 0
+end
+
+fn range_sum(task: *void): int
+begin
+    var total: int := 0
+    var i: int := parallel.start(task)
+    while i < parallel.finish(task) {
+        total := total + i
+        i := i + 1
+    }
+    return total
+end
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var shared: *Shared := alloc(40)
+    shared.lock := mutex.new()
+    shared.counter := alloc(8)
+    *shared.counter := 0
+    shared.cell := atomic.cell(0)
+    shared.group := waitgroup.new()
+    var ids: [8]int
+    waitgroup.add(shared.group, 8)
+    var t: int := 0
+    while t < 8 {
+        ids[t] := thread.start(&locked_worker, shared)
+        t := t + 1
+    }
+    waitgroup.wait(shared.group)
+    t := 0
+    while t < 8 {
+        thread.join(ids[t])
+        t := t + 1
+    }
+    failed := failed + expect("mutex counter", *shared.counter = 160000)
+    failed := failed + expect("atomic counter", atomic.load(shared.cell) = 160000)
+    shared.ch := channel.new(16)
+    var producerId: int := thread.start(&producer, shared)
+    var total: int := 0
+    var receiving: int := 1
+    while receiving = 1 {
+        var item: [2]int := channel.recv(shared.ch)
+        if item[1] = 0 { receiving := 0 }
+        else { total := total + item[0] }
+    }
+    thread.join(producerId)
+    failed := failed + expect("channel", total = 500500)
+    var empty: *void := 0
+    failed := failed + expect("parallel sum", parallel.sum(&range_sum, 0, 10000000, 8, empty) = 49999995000000)
+    var sem: *void := semaphore.new(2)
+    semaphore.acquire(sem)
+    failed := failed + expect("semaphore", semaphore.try_acquire(sem) = 1 && semaphore.try_acquire(sem) = 0)
+    var o: *once.Once := once.new()
+    var first: int := once.begin_once(o)
+    once.finish(o)
+    failed := failed + expect("once", first = 1 && once.begin_once(o) = 0 && once.done(o) = 1)
+    if failed = 0 { writeln("concurrency ok") }
+    return failed
+end

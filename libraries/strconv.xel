@@ -1,0 +1,275 @@
+// strconv: conversions between strings and numbers in any base.
+module strconv
+begin
+    fn digit_value(value: int): int
+    begin
+        if value >= 48 && value <= 57 { return value - 48 }
+        if value >= 97 && value <= 122 { return value - 87 }
+        if value >= 65 && value <= 90 { return value - 55 }
+        return 99
+    end
+
+    // Parses an integer in base 2..36; accepts sign, 0x/0b/0o prefixes when base is 0 and '_' separators.
+    fn parse_int_base(text: string, radix: int): int
+    begin
+        var size: int := str.length(text)
+        var index: int := 0
+        while index < size && str.char(text, index) = 32 { index := index + 1 }
+        var negative: int := 0
+        if index < size && (str.char(text, index) = 45 || str.char(text, index) = 43) {
+            negative := str.char(text, index) = 45
+            index := index + 1
+        }
+        var base: int := radix
+        if base = 0 {
+            base := 10
+            if index + 1 < size && str.char(text, index) = 48 {
+                var marker: int := str.char(text, index + 1)
+                if marker = 120 || marker = 88 {
+                    base := 16
+                    index := index + 2
+                }
+                else {
+                    if marker = 98 || marker = 66 {
+                        base := 2
+                        index := index + 2
+                    }
+                    else {
+                        if marker = 111 || marker = 79 {
+                            base := 8
+                            index := index + 2
+                        }
+                    }
+                }
+            }
+        }
+        var value: int := 0
+        var going: int := 1
+        while index < size && going = 1 {
+            var c: int := str.char(text, index)
+            if c != 95 {
+                var digit: int := digit_value(c)
+                if digit >= base { going := 0 }
+                else { value := value * base + digit }
+            }
+            index := index + 1
+        }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn parse_int(text: string): int
+    begin
+        return parse_int_base(text, 0)
+    end
+
+    // 1 when text is a complete valid base-10 integer.
+    fn is_int(text: string): int
+    begin
+        var size: int := str.length(text)
+        if size = 0 { return 0 }
+        var index: int := 0
+        if str.char(text, 0) = 45 || str.char(text, 0) = 43 { index := 1 }
+        if index >= size { return 0 }
+        while index < size {
+            var c: int := str.char(text, index)
+            if c < 48 || c > 57 { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn format_int_base(value: int, base: int): string
+    begin
+        if value = 0 { return "0" }
+        var digits: string := "0123456789abcdefghijklmnopqrstuvwxyz"
+        var negative: int := value < 0
+        var n: int := value
+        var text: string := ""
+        var guard: int := 0
+        while n != 0 && guard < 70 {
+            var digit: int := n % base
+            if digit < 0 { digit := -digit }
+            text := str.slice(digits, digit, digit + 1) + text
+            n := n / base
+            guard := guard + 1
+        }
+        if negative = 1 { return "-" + text }
+        return text
+    end
+
+    fn hex(value: int): string
+    begin
+        if value >= 0 { return format_int_base(value, 16) }
+        var text: string := ""
+        var index: int := 0
+        var digits: string := "0123456789abcdef"
+        while index < 16 {
+            var nibble: int := (value >> (index * 4)) & 15
+            text := str.slice(digits, nibble, nibble + 1) + text
+            index := index + 1
+        }
+        return text
+    end
+
+    fn binary(value: int): string
+    begin
+        return format_int_base(value, 2)
+    end
+
+    fn pad_int(value: int, width: int): string
+    begin
+        var text: string := str.number(value)
+        var negative: int := value < 0
+        if negative = 1 { text := str.slice(text, 1, str.length(text)) }
+        while str.length(text) < width { text := "0" + text }
+        if negative = 1 { return "-" + text }
+        return text
+    end
+
+    fn parse_flt(text: string): flt
+    begin
+        var size: int := str.length(text)
+        var index: int := 0
+        while index < size && str.char(text, index) = 32 { index := index + 1 }
+        var negative: int := 0
+        if index < size && (str.char(text, index) = 45 || str.char(text, index) = 43) {
+            negative := str.char(text, index) = 45
+            index := index + 1
+        }
+        var value: flt := 0.0
+        while index < size && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+            value := value * 10.0 + (str.char(text, index) - 48)
+            index := index + 1
+        }
+        if index < size && str.char(text, index) = 46 {
+            index := index + 1
+            var scale: flt := 0.1
+            while index < size && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+                value := value + scale * (str.char(text, index) - 48)
+                scale := scale * 0.1
+                index := index + 1
+            }
+        }
+        if index < size && (str.char(text, index) = 101 || str.char(text, index) = 69) {
+            index := index + 1
+            var expNegative: int := 0
+            if index < size && (str.char(text, index) = 45 || str.char(text, index) = 43) {
+                expNegative := str.char(text, index) = 45
+                index := index + 1
+            }
+            var exponent: int := 0
+            while index < size && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+                exponent := exponent * 10 + str.char(text, index) - 48
+                index := index + 1
+            }
+            var factor: flt := 1.0
+            while exponent > 0 {
+                factor := factor * 10.0
+                exponent := exponent - 1
+            }
+            if expNegative = 1 { value := value / factor }
+            else { value := value * factor }
+        }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn format_flt(value: flt, decimals: int): string
+    begin
+        return flt.format(value, decimals)
+    end
+
+    fn parse_bool(text: string): int
+    begin
+        if text = "1" || text = "true" || text = "TRUE" || text = "True" || text = "yes" || text = "on" { return 1 }
+        return 0
+    end
+
+    fn format_bool(value: int): string
+    begin
+        if value != 0 { return "true" }
+        return "false"
+    end
+
+    // Quotes a string with C-style escapes.
+    fn quote(text: string): string
+    begin
+        var result: string := str.builder(str.fromchar(34))
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var c: int := str.char(text, index)
+            if c = 34 { result := str.append(result, str.fromchar(92) + str.fromchar(34)) }
+            else {
+                if c = 92 { result := str.append(result, str.fromchar(92) + str.fromchar(92)) }
+                else {
+                    if c = 10 { result := str.append(result, str.fromchar(92) + "n") }
+                    else {
+                        if c = 9 { result := str.append(result, str.fromchar(92) + "t") }
+                        else {
+                            if c = 13 { result := str.append(result, str.fromchar(92) + "r") }
+                            else {
+                                if c < 32 { result := str.append(result, str.fromchar(92) + "x" + str.slice("0123456789abcdef", c / 16, c / 16 + 1) + str.slice("0123456789abcdef", c % 16, c % 16 + 1)) }
+                                else { result := str.append(result, str.fromchar(c)) }
+                            }
+                        }
+                    }
+                }
+            }
+            index := index + 1
+        }
+        return str.append(result, str.fromchar(34))
+    end
+
+    fn unquote(text: string): string
+    begin
+        var size: int := str.length(text)
+        if size < 2 { return text }
+        var result: string := str.builder("")
+        var index: int := 1
+        while index < size - 1 {
+            var c: int := str.char(text, index)
+            if c = 92 && index + 1 < size - 1 {
+                var next: int := str.char(text, index + 1)
+                index := index + 1
+                if next = 110 { result := str.append(result, str.fromchar(10)) }
+                else {
+                    if next = 116 { result := str.append(result, str.fromchar(9)) }
+                    else {
+                        if next = 114 { result := str.append(result, str.fromchar(13)) }
+                        else {
+                            if next = 120 && index + 2 < size {
+                                var code: int := digit_value(str.char(text, index + 1)) * 16 + digit_value(str.char(text, index + 2))
+                                result := str.append(result, str.fromchar(code))
+                                index := index + 2
+                            }
+                            else { result := str.append(result, str.fromchar(next)) }
+                        }
+                    }
+                }
+            }
+            else { result := str.append(result, str.fromchar(c)) }
+            index := index + 1
+        }
+        return result
+    end
+
+    fn thousands(value: int): string
+    begin
+        var text: string := str.number(value)
+        var negative: int := value < 0
+        if negative = 1 { text := str.slice(text, 1, str.length(text)) }
+        var result: string := ""
+        var count: int := 0
+        var index: int := str.length(text) - 1
+        while index >= 0 {
+            if count > 0 && count % 3 = 0 { result := "," + result }
+            result := str.slice(text, index, index + 1) + result
+            count := count + 1
+            index := index - 1
+        }
+        if negative = 1 { return "-" + result }
+        return result
+    end
+end

@@ -1,0 +1,257 @@
+// avl: ordered int -> int map as a self-balancing AVL tree (floor/ceiling, min/max, in-order walks).
+uses intlist
+
+module avl
+begin
+    type Node: record
+    begin
+        key: int
+        value: int
+        left: *avl.Node
+        right: *avl.Node
+        height: int
+    end
+
+    type Tree: record
+    begin
+        root: *avl.Node
+        size: int
+    end
+
+    fn new(): *avl.Tree
+    begin
+        var t: *avl.Tree := alloc(16)
+        t.root := 0
+        t.size := 0
+        return t
+    end
+
+    fn is_null(n: *avl.Node): int
+    begin
+        return @n = 0
+    end
+
+    fn height(n: *avl.Node): int
+    begin
+        if @n = 0 { return 0 }
+        return n.height
+    end
+
+    fn update(n: *avl.Node)
+    begin
+        var l: int := height(n.left)
+        var r: int := height(n.right)
+        if l > r { n.height := l + 1 }
+        else { n.height := r + 1 }
+    end
+
+    fn rotate_right(y: *avl.Node): *avl.Node
+    begin
+        var x: *avl.Node := y.left
+        y.left := x.right
+        x.right := y
+        update(y)
+        update(x)
+        return x
+    end
+
+    fn rotate_left(x: *avl.Node): *avl.Node
+    begin
+        var y: *avl.Node := x.right
+        x.right := y.left
+        y.left := x
+        update(x)
+        update(y)
+        return y
+    end
+
+    fn balance(n: *avl.Node): *avl.Node
+    begin
+        update(n)
+        var factor: int := height(n.left) - height(n.right)
+        if factor > 1 {
+            if height(n.left.left) < height(n.left.right) { n.left := rotate_left(n.left) }
+            return rotate_right(n)
+        }
+        if factor < -1 {
+            if height(n.right.right) < height(n.right.left) { n.right := rotate_right(n.right) }
+            return rotate_left(n)
+        }
+        return n
+    end
+
+    fn make_node(key: int, value: int): *avl.Node
+    begin
+        var n: *avl.Node := alloc(40)
+        n.key := key
+        n.value := value
+        n.left := 0
+        n.right := 0
+        n.height := 1
+        return n
+    end
+
+    fn insert_node(n: *avl.Node, key: int, value: int, added: *int): *avl.Node
+    begin
+        if @n = 0 {
+            *added := 1
+            return make_node(key, value)
+        }
+        if key < n.key { n.left := insert_node(n.left, key, value, added) }
+        else {
+            if key > n.key { n.right := insert_node(n.right, key, value, added) }
+            else {
+                n.value := value
+                return n
+            }
+        }
+        return balance(n)
+    end
+
+    fn put(t: *avl.Tree, key: int, value: int)
+    begin
+        var added: *int := alloc(8)
+        *added := 0
+        t.root := insert_node(t.root, key, value, added)
+        t.size := t.size + *added
+        free(added)
+    end
+
+    fn find_node(n: *avl.Node, key: int): *avl.Node
+    begin
+        var cursor: *avl.Node := n
+        while @cursor != 0 {
+            if key < cursor.key { cursor := cursor.left }
+            else {
+                if key > cursor.key { cursor := cursor.right }
+                else { return cursor }
+            }
+        }
+        return cursor
+    end
+
+    fn has(t: *avl.Tree, key: int): int
+    begin
+        return @find_node(t.root, key) != 0
+    end
+
+    fn get(t: *avl.Tree, key: int, fallback: int): int
+    begin
+        var n: *avl.Node := find_node(t.root, key)
+        if @n = 0 { return fallback }
+        return n.value
+    end
+
+    fn min_node(n: *avl.Node): *avl.Node
+    begin
+        var cursor: *avl.Node := n
+        while @cursor.left != 0 { cursor := cursor.left }
+        return cursor
+    end
+
+    fn remove_node(n: *avl.Node, key: int, removed: *int): *avl.Node
+    begin
+        if @n = 0 { return n }
+        if key < n.key { n.left := remove_node(n.left, key, removed) }
+        else {
+            if key > n.key { n.right := remove_node(n.right, key, removed) }
+            else {
+                if @n.left = 0 || @n.right = 0 {
+                    var child: *avl.Node := n.left
+                    if @n.left = 0 { child := n.right }
+                    *removed := 1
+                    free(n)
+                    return child
+                }
+                var successor: *avl.Node := min_node(n.right)
+                n.key := successor.key
+                n.value := successor.value
+                n.right := remove_node(n.right, successor.key, removed)
+            }
+        }
+        return balance(n)
+    end
+
+    fn remove(t: *avl.Tree, key: int): int
+    begin
+        var removed: *int := alloc(8)
+        *removed := 0
+        t.root := remove_node(t.root, key, removed)
+        var result: int := *removed
+        t.size := t.size - result
+        free(removed)
+        return result
+    end
+
+    fn len(t: *avl.Tree): int
+    begin
+        return t.size
+    end
+
+    fn min_key(t: *avl.Tree): int
+    begin
+        if @t.root = 0 { return 0 }
+        return min_node(t.root).key
+    end
+
+    fn max_key(t: *avl.Tree): int
+    begin
+        if @t.root = 0 { return 0 }
+        var cursor: *avl.Node := t.root
+        while @cursor.right != 0 { cursor := cursor.right }
+        return cursor.key
+    end
+
+    // Largest key <= wanted, or fallback.
+    fn floor(t: *avl.Tree, wanted: int, fallback: int): int
+    begin
+        var best: int := fallback
+        var cursor: *avl.Node := t.root
+        while @cursor != 0 {
+            if cursor.key = wanted { return wanted }
+            if cursor.key < wanted {
+                best := cursor.key
+                cursor := cursor.right
+            }
+            else { cursor := cursor.left }
+        }
+        return best
+    end
+
+    // Smallest key >= wanted, or fallback.
+    fn ceiling(t: *avl.Tree, wanted: int, fallback: int): int
+    begin
+        var best: int := fallback
+        var cursor: *avl.Node := t.root
+        while @cursor != 0 {
+            if cursor.key = wanted { return wanted }
+            if cursor.key > wanted {
+                best := cursor.key
+                cursor := cursor.left
+            }
+            else { cursor := cursor.right }
+        }
+        return best
+    end
+
+    fn walk(n: *avl.Node, out: *intlist.List)
+    begin
+        if @n = 0 { return }
+        walk(n.left, out)
+        intlist.push(out, n.key)
+        walk(n.right, out)
+    end
+
+    // All keys in ascending order.
+    fn keys(t: *avl.Tree): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        walk(t.root, out)
+        return out
+    end
+
+    fn tree_height(t: *avl.Tree): int
+    begin
+        return height(t.root)
+    end
+end

@@ -1,0 +1,127 @@
+// calendar: month grids, week numbers, Easter and business-day arithmetic.
+uses datetime
+uses strings
+uses intlist
+
+module calendar
+begin
+    fn month_name_full(month: int): string
+    begin
+        var names: string := "January February March April May June July August September October November December"
+        var parts: *intlist.List := intlist.new()
+        var index: int := 1
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(names) {
+            if i = str.length(names) || str.char(names, i) = 32 {
+                if index = month { return str.slice(names, start, i) }
+                index := index + 1
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return ""
+    end
+
+    // Classic `cal` style output; weeks start on Sunday.
+    fn month_grid(year: int, month: int): string
+    begin
+        var title: string := month_name_full(month) + " " + str.number(year)
+        var out: string := str.builder(strings.center(title, 20, " ") + "\nSu Mo Tu We Th Fr Sa\n")
+        var first: int := datetime.weekday(datetime.make(year, month, 1, 0, 0, 0))
+        var days: int := datetime.days_in_month(year, month)
+        var cell: int := 0
+        while cell < first {
+            out := str.append(out, "   ")
+            cell := cell + 1
+        }
+        var day: int := 1
+        while day <= days {
+            out := str.append(out, strings.pad_left(str.number(day), 2, " "))
+            cell := cell + 1
+            if cell % 7 = 0 { out := str.append(out, "\n") }
+            else {
+                if day < days { out := str.append(out, " ") }
+            }
+            day := day + 1
+        }
+        if cell % 7 != 0 { out := str.append(out, "\n") }
+        return out
+    end
+
+    // ISO 8601 week number (1..53).
+    fn iso_week(d: datetime.Date): int
+    begin
+        var w: int := datetime.weekday(d)
+        if w = 0 { w := 7 }
+        var week: int := (datetime.day_of_year(d) - w + 10) / 7
+        if week < 1 { return iso_week(datetime.make(d.year - 1, 12, 31, 0, 0, 0)) }
+        if week = 53 {
+            var jan1: int := datetime.weekday(datetime.make(d.year + 1, 1, 1, 0, 0, 0))
+            if jan1 >= 1 && jan1 <= 4 { return 1 }
+        }
+        return week
+    end
+
+    // Gregorian Easter Sunday as [month, day].
+    fn easter(year: int): [2]int
+    begin
+        var result: [2]int
+        var a: int := year % 19
+        var b: int := year / 100
+        var c: int := year % 100
+        var d: int := b / 4
+        var e: int := b % 4
+        var f: int := (b + 8) / 25
+        var g: int := (b - f + 1) / 3
+        var h: int := (19 * a + b - d - g + 15) % 30
+        var i: int := c / 4
+        var k: int := c % 4
+        var l: int := (32 + 2 * e + 2 * i - h - k) % 7
+        var m: int := (a + 11 * h + 22 * l) / 451
+        result[0] := (h + l - 7 * m + 114) / 31
+        result[1] := (h + l - 7 * m + 114) % 31 + 1
+        return result
+    end
+
+    fn is_weekend(d: datetime.Date): int
+    begin
+        var w: int := datetime.weekday(d)
+        return w = 0 || w = 6
+    end
+
+    // Adds weekdays (Mon-Fri), skipping weekends.
+    fn add_business_days(d: datetime.Date, days: int): datetime.Date
+    begin
+        var current: datetime.Date := d
+        var left: int := days
+        var step: int := 1
+        if left < 0 {
+            step := -1
+            left := -left
+        }
+        while left > 0 {
+            current := datetime.add_days(current, step)
+            if is_weekend(current) = 0 { left := left - 1 }
+        }
+        return current
+    end
+
+    fn business_days_between(a: datetime.Date, b: datetime.Date): int
+    begin
+        var count: int := 0
+        var current: datetime.Date := a
+        while datetime.to_unix(current) < datetime.to_unix(b) {
+            current := datetime.add_days(current, 1)
+            if is_weekend(current) = 0 { count := count + 1 }
+        }
+        return count
+    end
+
+    fn age(birth: datetime.Date, today: datetime.Date): int
+    begin
+        var years: int := today.year - birth.year
+        if today.month < birth.month || (today.month = birth.month && today.day < birth.day) { years := years - 1 }
+        return years
+    end
+end

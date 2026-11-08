@@ -1,0 +1,187 @@
+module diag
+begin
+    // The node pool reserves its last words for compiler-wide diagnostic state.
+    fn reportedSlot(): int
+    begin
+        return 12582906
+    end
+
+    fn expressionSlot(): int
+    begin
+        return 12582907
+    end
+
+    fn reset(pool: *[12582912]int)
+    begin
+        (*pool)[reportedSlot()] := 0
+        (*pool)[expressionSlot()] := -1
+        (*pool)[12582908] := 0
+    end
+
+    fn poolFull(pool: *[12582912]int): int
+    begin
+        return (*pool)[12582908]
+    end
+
+    fn hasReported(pool: *[12582912]int): int
+    begin
+        return (*pool)[reportedSlot()]
+    end
+
+    fn noteExpression(pool: *[12582912]int, offset: int): int
+    begin
+        if (*pool)[expressionSlot()] < offset { (*pool)[expressionSlot()] := offset }
+        return -1
+    end
+
+    fn clearExpression(pool: *[12582912]int)
+    begin
+        (*pool)[expressionSlot()] := -1
+    end
+
+    fn expressionOffset(pool: *[12582912]int, fallback: int): int
+    begin
+        var offset: int := (*pool)[expressionSlot()]
+        if offset < 0 { return fallback }
+        return offset
+    end
+
+    fn markerAt(source: string, start: int): int
+    begin
+        if start + 15 > str.length(source) { return 0 }
+        if str.slice(source, start, start + 17) = "// xelang-loaded:" { return 17 }
+        if str.slice(source, start, start + 15) = "// xelang-file:" { return 15 }
+        return 0
+    end
+
+    fn lineStart(source: string, offset: int): int
+    begin
+        var start: int := offset
+        while start > 0 && str.char(source, start - 1) != 10 { start := start - 1 }
+        return start
+    end
+
+    fn lineFinish(source: string, offset: int): int
+    begin
+        var finish: int := offset
+        while finish < str.length(source) && str.char(source, finish) != 10 { finish := finish + 1 }
+        return finish
+    end
+
+    fn clamp(source: string, offset: int): int
+    begin
+        if offset < 0 { return 0 }
+        if offset > str.length(source) { return str.length(source) }
+        return offset
+    end
+
+    // Returns [line, column, markerStart, markerLength].
+    fn position(source: string, offset: int): [4]int
+    begin
+        var result: [4]int
+        var at: int := clamp(source, offset)
+        var start: int := lineStart(source, at)
+        result[0] := 1
+        result[1] := at - start + 1
+        result[2] := -1
+        result[3] := 0
+        var cursor: int := start
+        var searching: int := 1
+        while searching = 1 {
+            if cursor <= 0 { searching := 0 }
+            else {
+                var previous: int := lineStart(source, cursor - 1)
+                var marker: int := markerAt(source, previous)
+                if marker > 0 {
+                    result[2] := previous
+                    result[3] := marker
+                    searching := 0
+                }
+                else {
+                    result[0] := result[0] + 1
+                    cursor := previous
+                }
+            }
+        }
+        return result
+    end
+
+    fn location(source: string, offset: int): string
+    begin
+        var where: [4]int := position(source, offset)
+        var path: string := "<input>"
+        if where[2] >= 0 {
+            path := str.slice(source, where[2] + where[3], lineFinish(source, where[2]))
+        }
+        return path + ":" + str.number(where[0]) + ":" + str.number(where[1])
+    end
+
+    fn padLeft(text: string, width: int): string
+    begin
+        var result: string := str.builder("")
+        var missing: int := width - str.length(text)
+        while missing > 0 {
+            result := str.append(result, " ")
+            missing := missing - 1
+        }
+        return str.append(result, text)
+    end
+
+    fn excerpt(source: string, offset: int): string
+    begin
+        var at: int := clamp(source, offset)
+        var where: [4]int := position(source, at)
+        var start: int := lineStart(source, at)
+        var finish: int := lineFinish(source, at)
+        var number: string := str.number(where[0])
+        var gutter: string := padLeft("", str.length(number))
+        var text: string := str.builder(" " + number + " | ")
+        var index: int := start
+        while index < finish {
+            var value: int := str.char(source, index)
+            if value = 9 { text := str.append(text, "    ") }
+            else { text := str.append(text, str.fromchar(value)) }
+            index := index + 1
+        }
+        text := str.append(text, "\n " + gutter + " | ")
+        index := start
+        while index < at {
+            if str.char(source, index) = 9 { text := str.append(text, "    ") }
+            else { text := str.append(text, " ") }
+            index := index + 1
+        }
+        return str.append(text, "^")
+    end
+
+    fn emit(text: string)
+    begin
+        var line: string := text + str.fromchar(10)
+        syscall.invoke3(1, 2, line, str.length(line))
+    end
+
+    fn print(source: string, offset: int, message: string): int
+    begin
+        emit(location(source, offset) + ": error: " + message)
+        emit(excerpt(source, offset))
+        return 0
+    end
+
+    fn note(source: string, offset: int, message: string): int
+    begin
+        emit(location(source, offset) + ": note: " + message)
+        return 0
+    end
+
+    // Prints only the first diagnostic of a compilation; callers return its 0 result.
+    fn report(source: string, pool: *[12582912]int, offset: int, message: string): int
+    begin
+        if (*pool)[reportedSlot()] != 0 { return 0 }
+        (*pool)[reportedSlot()] := 1
+        return print(source, offset, message)
+    end
+
+    fn quoted(source: string, first: int, finish: int): string
+    begin
+        return "'" + str.slice(source, first, finish) + "'"
+    end
+end

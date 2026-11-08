@@ -1,0 +1,180 @@
+// tcp: IPv4 TCP clients and servers with buffered line reading.
+uses ip
+uses bytes
+uses cstr
+
+module tcp
+begin
+    type Conn: record
+    begin
+        fd: int
+        buffer: *bytes.Buffer
+        start: int
+        closed: int
+    end
+
+    fn wrap(fd: int): *tcp.Conn
+    begin
+        var c: *tcp.Conn := alloc(32)
+        c.fd := fd
+        c.buffer := bytes.new()
+        c.start := 0
+        c.closed := 0
+        return c
+    end
+
+    // Connects to a dotted IPv4 address; returns a connection with fd < 0 on failure.
+    fn connect(address: string, port: int): *tcp.Conn
+    begin
+        var fd: int := syscall.invoke3(41, 2, 1, 0)
+        if fd < 0 { return wrap(fd) }
+        var target: *void := ip.sockaddr(ip.parse(address), port)
+        var result: int := syscall.invoke3(42, fd, target, 16)
+        free(target)
+        if result < 0 {
+            syscall.invoke3(3, fd, 0, 0)
+            return wrap(result)
+        }
+        return wrap(fd)
+    end
+
+    fn ok(c: *tcp.Conn): int
+    begin
+        return c.fd >= 0
+    end
+
+    // Listens on all interfaces (port 0 picks a free port; see port()).
+    fn listen(port: int, backlog: int): int
+    begin
+        var fd: int := syscall.invoke3(41, 2, 1, 0)
+        if fd < 0 { return fd }
+        var one: *int := alloc(8)
+        *one := 1
+        syscall.invoke6(54, fd, 1, 2, one, 4, 0)
+        free(one)
+        var local: *void := ip.sockaddr(0, port)
+        var bound: int := syscall.invoke3(49, fd, local, 16)
+        free(local)
+        if bound < 0 {
+            syscall.invoke3(3, fd, 0, 0)
+            return bound
+        }
+        if syscall.invoke3(50, fd, backlog, 0) < 0 {
+            syscall.invoke3(3, fd, 0, 0)
+            return -1
+        }
+        return fd
+    end
+
+    fn local_port(fd: int): int
+    begin
+        var raw: *void := alloc(16)
+        var size: *int := alloc(8)
+        *size := 16
+        syscall.invoke3(51, fd, raw, size)
+        var port: int := ip.sockaddr_port(raw)
+        free(raw)
+        free(size)
+        return port
+    end
+
+    fn accept(server: int): *tcp.Conn
+    begin
+        return wrap(syscall.invoke3(43, server, 0, 0))
+    end
+
+    fn send(c: *tcp.Conn, text: string): int
+    begin
+        var size: int := str.length(text)
+        var sent: int := 0
+        var data: *void := cstr.pointer(text)
+        while sent < size {
+            var n: int := syscall.invoke6(44, c.fd, data + sent, size - sent, 16384, 0, 0)
+            if n <= 0 { return 0 }
+            sent := sent + n
+        }
+        return 1
+    end
+
+    fn send_buffer(c: *tcp.Conn, data: *bytes.Buffer): int
+    begin
+        var sent: int := 0
+        while sent < data.size {
+            var n: int := syscall.invoke6(44, c.fd, data.data + sent, data.size - sent, 16384, 0, 0)
+            if n <= 0 { return 0 }
+            sent := sent + n
+        }
+        return 1
+    end
+
+    fn fill(c: *tcp.Conn): int
+    begin
+        if c.closed = 1 { return 0 }
+        if c.start > 0 && c.start = c.buffer.size {
+            bytes.clear(c.buffer)
+            c.start := 0
+        }
+        bytes.reserve(c.buffer, c.buffer.size + 65536)
+        var n: int := syscall.invoke3(0, c.fd, c.buffer.data + c.buffer.size, 65536)
+        if n <= 0 {
+            c.closed := 1
+            return 0
+        }
+        c.buffer.size := c.buffer.size + n
+        return n
+    end
+
+    // Reads one line (without the trailing \r\n); returns "" with closed set at end of stream.
+    fn read_line(c: *tcp.Conn): string
+    begin
+        var going: int := 1
+        while going = 1 {
+            var index: int := c.start
+            while index < c.buffer.size {
+                if bytes.get(c.buffer, index) = 10 {
+                    var finish: int := index
+                    if finish > c.start && bytes.get(c.buffer, finish - 1) = 13 { finish := finish - 1 }
+                    var line: string := bytes.slice_string(c.buffer, c.start, finish)
+                    c.start := index + 1
+                    return line
+                }
+                index := index + 1
+            }
+            if fill(c) = 0 { going := 0 }
+        }
+        var rest: string := bytes.slice_string(c.buffer, c.start, c.buffer.size)
+        c.start := c.buffer.size
+        return rest
+    end
+
+    fn read_exact(c: *tcp.Conn, count: int): string
+    begin
+        while c.buffer.size - c.start < count && fill(c) > 0 { }
+        var available: int := c.buffer.size - c.start
+        var take: int := count
+        if take > available { take := available }
+        var text: string := bytes.slice_string(c.buffer, c.start, c.start + take)
+        c.start := c.start + take
+        return text
+    end
+
+    fn read_all(c: *tcp.Conn): string
+    begin
+        while fill(c) > 0 { }
+        var text: string := bytes.slice_string(c.buffer, c.start, c.buffer.size)
+        c.start := c.buffer.size
+        return text
+    end
+
+    fn close(c: *tcp.Conn)
+    begin
+        if c.fd >= 0 { syscall.invoke3(3, c.fd, 0, 0) }
+        c.fd := -1
+        c.closed := 1
+    end
+
+    fn close_server(fd: int)
+    begin
+        syscall.invoke3(3, fd, 0, 0)
+    end
+end

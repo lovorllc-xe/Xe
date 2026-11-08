@@ -1,0 +1,349 @@
+// numeric: integer number theory and bit tricks.
+uses intlist
+
+module numeric
+begin
+    fn abs(value: int): int
+    begin
+        if value < 0 { return -value }
+        return value
+    end
+
+    fn min(a: int, b: int): int
+    begin
+        if a < b { return a }
+        return b
+    end
+
+    fn max(a: int, b: int): int
+    begin
+        if a > b { return a }
+        return b
+    end
+
+    fn clamp(value: int, low: int, high: int): int
+    begin
+        if value < low { return low }
+        if value > high { return high }
+        return value
+    end
+
+    fn sign(value: int): int
+    begin
+        if value > 0 { return 1 }
+        if value < 0 { return -1 }
+        return 0
+    end
+
+    fn gcd(a: int, b: int): int
+    begin
+        var x: int := abs(a)
+        var y: int := abs(b)
+        while y != 0 {
+            var rest: int := x % y
+            x := y
+            y := rest
+        }
+        return x
+    end
+
+    fn lcm(a: int, b: int): int
+    begin
+        if a = 0 || b = 0 { return 0 }
+        return abs(a / gcd(a, b) * b)
+    end
+
+    fn ipow(base: int, exponent: int): int
+    begin
+        var result: int := 1
+        var factor: int := base
+        var power: int := exponent
+        while power > 0 {
+            if power % 2 = 1 { result := result * factor }
+            factor := factor * factor
+            power := power / 2
+        }
+        return result
+    end
+
+    // (a * b) mod m without overflow for 0 <= a, b < m < 2^62.
+    fn mulmod(a: int, b: int, m: int): int
+    begin
+        if a < 3037000499 && b < 3037000499 { return (a * b) % m }
+        var result: int := 0
+        var x: int := a % m
+        var y: int := b % m
+        while y > 0 {
+            if y % 2 = 1 {
+                result := result + x
+                if result >= m { result := result - m }
+            }
+            x := x + x
+            if x >= m { x := x - m }
+            y := y / 2
+        }
+        return result
+    end
+
+    fn modpow(base: int, exponent: int, modulus: int): int
+    begin
+        if modulus = 1 { return 0 }
+        var result: int := 1
+        var factor: int := base % modulus
+        if factor < 0 { factor := factor + modulus }
+        var power: int := exponent
+        while power > 0 {
+            if power % 2 = 1 { result := mulmod(result, factor, modulus) }
+            factor := mulmod(factor, factor, modulus)
+            power := power / 2
+        }
+        return result
+    end
+
+    // Modular inverse of a modulo m, or -1 if it does not exist.
+    fn modinv(a: int, m: int): int
+    begin
+        var oldR: int := a % m
+        if oldR < 0 { oldR := oldR + m }
+        var r: int := m
+        var oldS: int := 1
+        var s: int := 0
+        while r != 0 {
+            var q: int := oldR / r
+            var t: int := oldR - q * r
+            oldR := r
+            r := t
+            t := oldS - q * s
+            oldS := s
+            s := t
+        }
+        if oldR != 1 { return -1 }
+        if oldS < 0 { oldS := oldS + m }
+        return oldS % m
+    end
+
+    fn is_prime(n: int): int
+    begin
+        if n < 2 { return 0 }
+        if n < 4 { return 1 }
+        if n % 2 = 0 || n % 3 = 0 { return 0 }
+        if n < 1000000 {
+            var divisor: int := 5
+            while divisor * divisor <= n {
+                if n % divisor = 0 || n % (divisor + 2) = 0 { return 0 }
+                divisor := divisor + 6
+            }
+            return 1
+        }
+        var d: int := n - 1
+        var r: int := 0
+        while d % 2 = 0 {
+            d := d / 2
+            r := r + 1
+        }
+        var bases: [7]int
+        bases[0] := 2
+        bases[1] := 3
+        bases[2] := 5
+        bases[3] := 7
+        bases[4] := 11
+        bases[5] := 13
+        bases[6] := 17
+        var index: int := 0
+        while index < 7 {
+            var x: int := modpow(bases[index], d, n)
+            if x != 1 && x != n - 1 {
+                var round: int := 1
+                var composite: int := 1
+                while round < r && composite = 1 {
+                    x := mulmod(x, x, n)
+                    if x = n - 1 { composite := 0 }
+                    round := round + 1
+                }
+                if composite = 1 { return 0 }
+            }
+            index := index + 1
+        }
+        return 1
+    end
+
+    // All primes <= limit (sieve of Eratosthenes).
+    fn primes(limit: int): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        if limit < 2 { return out }
+        var composite: *void := alloc(limit + 1)
+        runtime.mem.set(composite, 0, limit + 1)
+        var n: int := 2
+        while n <= limit {
+            if runtime.hw.read8(composite + n) = 0 {
+                intlist.push(out, n)
+                var multiple: int := n * n
+                while multiple <= limit {
+                    runtime.hw.write8(composite + multiple, 1)
+                    multiple := multiple + n
+                }
+            }
+            n := n + 1
+        }
+        free(composite)
+        return out
+    end
+
+    fn factorize(value: int): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        var n: int := abs(value)
+        var divisor: int := 2
+        while divisor * divisor <= n {
+            while n % divisor = 0 {
+                intlist.push(out, divisor)
+                n := n / divisor
+            }
+            if divisor = 2 { divisor := 3 } else { divisor := divisor + 2 }
+        }
+        if n > 1 { intlist.push(out, n) }
+        return out
+    end
+
+    fn isqrt(value: int): int
+    begin
+        if value < 2 { return value }
+        var x: int := value
+        var y: int := (x + 1) / 2
+        while y < x {
+            x := y
+            y := (x + value / x) / 2
+        }
+        return x
+    end
+
+    fn factorial(n: int): int
+    begin
+        var result: int := 1
+        var index: int := 2
+        while index <= n {
+            result := result * index
+            index := index + 1
+        }
+        return result
+    end
+
+    fn binomial(n: int, k: int): int
+    begin
+        if k < 0 || k > n { return 0 }
+        var take: int := k
+        if take > n - take { take := n - take }
+        var result: int := 1
+        var index: int := 1
+        while index <= take {
+            result := result * (n - take + index) / index
+            index := index + 1
+        }
+        return result
+    end
+
+    fn fibonacci(n: int): int
+    begin
+        var a: int := 0
+        var b: int := 1
+        var index: int := 0
+        while index < n {
+            var next: int := a + b
+            a := b
+            b := next
+            index := index + 1
+        }
+        return a
+    end
+
+    fn popcount(value: int): int
+    begin
+        var x: int := value
+        var total: int := 0
+        while x != 0 {
+            x := x & (x - 1)
+            total := total + 1
+        }
+        return total
+    end
+
+    fn trailing_zeros(value: int): int
+    begin
+        if value = 0 { return 64 }
+        var count: int := 0
+        var x: int := value
+        while (x & 1) = 0 {
+            x := x >> 1
+            count := count + 1
+        }
+        return count
+    end
+
+    fn leading_zeros(value: int): int
+    begin
+        if value = 0 { return 64 }
+        if value < 0 { return 0 }
+        var count: int := 0
+        var bit: int := 62
+        while bit >= 0 && ((value >> bit) & 1) = 0 {
+            count := count + 1
+            bit := bit - 1
+        }
+        return count + 1
+    end
+
+    fn is_power_of_two(value: int): int
+    begin
+        return value > 0 && (value & (value - 1)) = 0
+    end
+
+    fn next_power_of_two(value: int): int
+    begin
+        var result: int := 1
+        while result < value { result := result * 2 }
+        return result
+    end
+
+    fn digit_sum(value: int): int
+    begin
+        var n: int := abs(value)
+        var total: int := 0
+        while n > 0 {
+            total := total + n % 10
+            n := n / 10
+        }
+        return total
+    end
+
+    fn reverse_digits(value: int): int
+    begin
+        var n: int := abs(value)
+        var result: int := 0
+        while n > 0 {
+            result := result * 10 + n % 10
+            n := n / 10
+        }
+        return result * sign(value)
+    end
+
+    fn is_palindrome(value: int): int
+    begin
+        return value >= 0 && reverse_digits(value) = value
+    end
+
+    // Logical right shift (fills with zero bits).
+    fn shr(value: int, amount: int): int
+    begin
+        if amount <= 0 { return value }
+        if amount >= 64 { return 0 }
+        return (value >> amount) & ~(-1 << (64 - amount))
+    end
+
+    fn rotl(value: int, amount: int): int
+    begin
+        var bits: int := amount % 64
+        if bits = 0 { return value }
+        return (value << bits) | shr(value, 64 - bits)
+    end
+end

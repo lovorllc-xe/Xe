@@ -1,0 +1,85 @@
+// ini: parse INI/config files into a strmap with "section.key" keys.
+uses strmap
+uses strlist
+uses strings
+
+module ini
+begin
+    fn parse(text: string): *strmap.Map
+    begin
+        var map: *strmap.Map := strmap.new()
+        var lines: *strlist.List := strlist.lines(text)
+        var section: string := ""
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strings.trim(strlist.get(lines, index))
+            if str.length(line) > 0 && str.char(line, 0) != 59 && str.char(line, 0) != 35 {
+                if str.char(line, 0) = 91 && strings.ends_with(line, "]") = 1 {
+                    section := strings.trim(str.slice(line, 1, str.length(line) - 1))
+                }
+                else {
+                    var eq: int := strings.index_of(line, "=")
+                    if eq < 0 { eq := strings.index_of(line, ":") }
+                    if eq > 0 {
+                        var key: string := strings.trim(str.slice(line, 0, eq))
+                        var value: string := strings.trim(str.slice(line, eq + 1, str.length(line)))
+                        if str.length(value) >= 2 && ((str.char(value, 0) = 34 && strings.ends_with(value, str.fromchar(34)) = 1) || (str.char(value, 0) = 39 && strings.ends_with(value, str.fromchar(39)) = 1)) {
+                            value := str.slice(value, 1, str.length(value) - 1)
+                        }
+                        if str.length(section) > 0 { key := section + "." + key }
+                        strmap.put(map, key, value)
+                    }
+                }
+            }
+            index := index + 1
+        }
+        return map
+    end
+
+    fn load(path: string): *strmap.Map
+    begin
+        return parse(file.read(path))
+    end
+
+    fn get(map: *strmap.Map, key: string, fallback: string): string
+    begin
+        return strmap.get(map, key, fallback)
+    end
+
+    fn get_int(map: *strmap.Map, key: string, fallback: int): int
+    begin
+        var text: string := strmap.get(map, key, "")
+        if str.length(text) = 0 { return fallback }
+        var value: int := 0
+        var index: int := 0
+        var negative: int := 0
+        if str.char(text, 0) = 45 {
+            negative := 1
+            index := 1
+        }
+        while index < str.length(text) && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+            value := value * 10 + str.char(text, index) - 48
+            index := index + 1
+        }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn get_bool(map: *strmap.Map, key: string, fallback: int): int
+    begin
+        var text: string := strings.to_lower(strmap.get(map, key, ""))
+        if str.length(text) = 0 { return fallback }
+        return text = "1" || text = "true" || text = "yes" || text = "on"
+    end
+
+    fn format(map: *strmap.Map): string
+    begin
+        var out: string := str.builder("")
+        var slot: int := 0
+        while slot < strmap.capacity(map) {
+            if strmap.occupied(map, slot) = 1 { out := str.append(out, strmap.key_at(map, slot) + " = " + strmap.value_at(map, slot) + "\n") }
+            slot := slot + 1
+        }
+        return out
+    end
+end

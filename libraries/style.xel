@@ -1,0 +1,92 @@
+// style: ANSI text styles and 16-color terminal output (respects NO_COLOR).
+module style
+begin
+    fn enabled(): int
+    begin
+        return str.length(env.get("NO_COLOR")) = 0
+    end
+
+    fn code(sequence: string, text: string): string
+    begin
+        if enabled() = 0 { return text }
+        return str.fromchar(27) + "[" + sequence + "m" + text + str.fromchar(27) + "[0m"
+    end
+
+    fn bold(text: string): string
+    begin
+        return code("1", text)
+    end
+
+    fn dim(text: string): string
+    begin
+        return code("2", text)
+    end
+
+    fn italic(text: string): string
+    begin
+        return code("3", text)
+    end
+
+    fn underline(text: string): string
+    begin
+        return code("4", text)
+    end
+
+    fn inverse(text: string): string
+    begin
+        return code("7", text)
+    end
+
+    fn red(text: string): string
+    begin
+        return code("31", text)
+    end
+
+    fn green(text: string): string
+    begin
+        return code("32", text)
+    end
+
+    fn yellow(text: string): string
+    begin
+        return code("33", text)
+    end
+
+    fn blue(text: string): string
+    begin
+        return code("34", text)
+    end
+
+    fn magenta(text: string): string
+    begin
+        return code("35", text)
+    end
+
+    fn cyan(text: string): string
+    begin
+        return code("36", text)
+    end
+
+    fn gray(text: string): string
+    begin
+        return code("90", text)
+    end
+
+    fn strip(text: string): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < str.length(text) {
+            if str.char(text, index) = 27 && index + 1 < str.length(text) && str.char(text, index + 1) = 91 {
+                index := index + 2
+                while index < str.length(text) && (str.char(text, index) < 64 || str.char(text, index) > 126) { index := index + 1 }
+                index := index + 1
+            }
+            else {
+                out := str.append(out, str.fromchar(str.char(text, index)))
+                index := index + 1
+            }
+        }
+        return out
+    end
+end

@@ -1,0 +1,41 @@
+// condvar: condition variables paired with mutex.xel mutexes.
+uses futex
+uses mutex
+
+module condvar
+begin
+    fn new(): *void
+    begin
+        var c: *void := alloc(8)
+        atomic.store(c, 0)
+        return c
+    end
+
+    // Atomically releases m, waits for a signal, then re-acquires m. Spurious wakeups are possible:
+    // always wait inside a loop that re-checks the condition.
+    fn wait(c: *void, m: *void)
+    begin
+        var sequence: int := atomic.load(c)
+        mutex.unlock(m)
+        futex.wait(c, sequence & 2147483647)
+        mutex.lock(m)
+    end
+
+    fn bump(c: *void)
+    begin
+        var current: int := atomic.load(c)
+        while atomic.compare_exchange(c, current, (current + 1) & 2147483647) = 0 { current := atomic.load(c) }
+    end
+
+    fn signal(c: *void)
+    begin
+        bump(c)
+        futex.wake(c, 1)
+    end
+
+    fn broadcast(c: *void)
+    begin
+        bump(c)
+        futex.wake_all(c)
+    end
+end

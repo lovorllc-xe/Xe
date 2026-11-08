@@ -1,0 +1,132 @@
+// csv: RFC 4180 CSV parsing and writing (quoted fields, embedded commas, quotes and newlines).
+uses strlist
+uses ptrlist
+
+module csv
+begin
+    // Parses a whole document into a list of rows (each a *strlist.List).
+    fn parse(text: string, separator: int): *ptrlist.List
+    begin
+        var rows: *ptrlist.List := ptrlist.new()
+        var row: *strlist.List := strlist.new()
+        var field: string := str.builder("")
+        var quoted: int := 0
+        var index: int := 0
+        var size: int := str.length(text)
+        var pending: int := 0
+        while index < size {
+            var c: int := str.char(text, index)
+            if quoted = 1 {
+                if c = 34 {
+                    if index + 1 < size && str.char(text, index + 1) = 34 {
+                        field := str.append(field, str.fromchar(34))
+                        index := index + 1
+                    }
+                    else { quoted := 0 }
+                }
+                else { field := str.append(field, str.fromchar(c)) }
+            }
+            else {
+                if c = 34 {
+                    quoted := 1
+                    pending := 1
+                }
+                else {
+                    if c = separator {
+                        strlist.push(row, field)
+                        field := str.builder("")
+                        pending := 1
+                    }
+                    else {
+                        if c = 10 || c = 13 {
+                            if c = 13 && index + 1 < size && str.char(text, index + 1) = 10 { index := index + 1 }
+                            strlist.push(row, field)
+                            ptrlist.push(rows, row)
+                            row := strlist.new()
+                            field := str.builder("")
+                            pending := 0
+                        }
+                        else {
+                            field := str.append(field, str.fromchar(c))
+                            pending := 1
+                        }
+                    }
+                }
+            }
+            index := index + 1
+        }
+        if pending = 1 || str.length(field) > 0 {
+            strlist.push(row, field)
+            ptrlist.push(rows, row)
+        }
+        return rows
+    end
+
+    fn parse_line(line: string): *strlist.List
+    begin
+        var rows: *ptrlist.List := parse(line, 44)
+        if ptrlist.len(rows) = 0 { return strlist.new() }
+        return ptrlist.get(rows, 0)
+    end
+
+    fn needs_quotes(field: string, separator: int): int
+    begin
+        var index: int := 0
+        while index < str.length(field) {
+            var c: int := str.char(field, index)
+            if c = separator || c = 34 || c = 10 || c = 13 { return 1 }
+            index := index + 1
+        }
+        return 0
+    end
+
+    fn quote(field: string, separator: int): string
+    begin
+        if needs_quotes(field, separator) = 0 { return field }
+        var out: string := str.builder(str.fromchar(34))
+        var index: int := 0
+        while index < str.length(field) {
+            var c: int := str.char(field, index)
+            if c = 34 { out := str.append(out, str.fromchar(34)) }
+            out := str.append(out, str.fromchar(c))
+            index := index + 1
+        }
+        return str.append(out, str.fromchar(34))
+    end
+
+    fn format_row(row: *strlist.List, separator: int): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < strlist.len(row) {
+            if index > 0 { out := str.append(out, str.fromchar(separator)) }
+            out := str.append(out, quote(strlist.get(row, index), separator))
+            index := index + 1
+        }
+        return out
+    end
+
+    fn format(rows: *ptrlist.List, separator: int): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < ptrlist.len(rows) {
+            out := str.append(out, format_row(ptrlist.get(rows, index), separator) + "\n")
+            index := index + 1
+        }
+        return out
+    end
+
+    fn cell(rows: *ptrlist.List, row: int, column: int): string
+    begin
+        var r: *strlist.List := ptrlist.get(rows, row)
+        if @r = 0 { return "" }
+        return strlist.get(r, column)
+    end
+
+    fn column_index(rows: *ptrlist.List, name: string): int
+    begin
+        if ptrlist.len(rows) = 0 { return -1 }
+        return strlist.index_of(ptrlist.get(rows, 0), name)
+    end
+end

@@ -1,0 +1,114 @@
+// hashing: fast non-cryptographic hash functions for strings and ints.
+module hashing
+begin
+    fn mask32(value: int): int
+    begin
+        return value & 4294967295
+    end
+
+    fn fnv1a64(text: string): int
+    begin
+        var value: int := 1469598103934665603
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            value := (value ^ str.char(text, index)) * 1099511628211
+            index := index + 1
+        }
+        return value
+    end
+
+    fn fnv1a32(text: string): int
+    begin
+        var value: int := 2166136261
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            value := mask32((value ^ str.char(text, index)) * 16777619)
+            index := index + 1
+        }
+        return value
+    end
+
+    fn djb2(text: string): int
+    begin
+        var value: int := 5381
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            value := mask32(value * 33 + str.char(text, index))
+            index := index + 1
+        }
+        return value
+    end
+
+    fn sdbm(text: string): int
+    begin
+        var value: int := 0
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            value := mask32(str.char(text, index) + (value << 6) + (value << 16) - value)
+            index := index + 1
+        }
+        return value
+    end
+
+    fn rotl32(value: int, amount: int): int
+    begin
+        return mask32((value << amount) | (mask32(value) >> (32 - amount)))
+    end
+
+    // MurmurHash3 x86 32-bit.
+    fn murmur3(text: string, seed: int): int
+    begin
+        var h: int := mask32(seed)
+        var size: int := str.length(text)
+        var blocks: int := size / 4
+        var index: int := 0
+        while index < blocks {
+            var at: int := index * 4
+            var k: int := str.char(text, at) | (str.char(text, at + 1) << 8) | (str.char(text, at + 2) << 16) | (str.char(text, at + 3) << 24)
+            k := mask32(k * 3432918353)
+            k := rotl32(k, 15)
+            k := mask32(k * 461845907)
+            h := h ^ k
+            h := rotl32(h, 13)
+            h := mask32(h * 5 + 3864292196)
+            index := index + 1
+        }
+        var tail: int := blocks * 4
+        var k1: int := 0
+        var rest: int := size & 3
+        if rest >= 3 { k1 := k1 ^ (str.char(text, tail + 2) << 16) }
+        if rest >= 2 { k1 := k1 ^ (str.char(text, tail + 1) << 8) }
+        if rest >= 1 {
+            k1 := k1 ^ str.char(text, tail)
+            k1 := mask32(k1 * 3432918353)
+            k1 := rotl32(k1, 15)
+            k1 := mask32(k1 * 461845907)
+            h := h ^ k1
+        }
+        h := h ^ size
+        h := h ^ (h >> 16)
+        h := mask32(h * 2246822507)
+        h := h ^ (h >> 13)
+        h := mask32(h * 3266489909)
+        h := h ^ (h >> 16)
+        return h
+    end
+
+    // 64-bit integer mixer (splitmix64 finalizer).
+    fn mix64(value: int): int
+    begin
+        var z: int := value
+        z := (z ^ ((z >> 30) & 17179869183)) * -4658895280553007687
+        z := (z ^ ((z >> 27) & 137438953471)) * -7723592293110705685
+        return z ^ ((z >> 31) & 8589934591)
+    end
+
+    fn combine(seed: int, value: int): int
+    begin
+        return seed ^ (mix64(value) + 2654435769 + (seed << 6) + ((seed >> 2) & 4611686018427387903))
+    end
+end

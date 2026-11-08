@@ -54,6 +54,13 @@ begin
 
     fn localLastUse(source: string, start: int, finish: int, wantedFirst: int, wantedFinish: int, declaration: int): int
     begin
+        var key: string := "ll:" + str.number(start) + ":" + str.number(finish) + ":" + str.number(wantedFirst) + ":" + str.number(wantedFinish) + ":" + str.number(declaration)
+        if memo.has(key) = 1 { return memo.number(memo.get(key)) }
+        return memo.putNumber(key, localLastUseSlow(source, start, finish, wantedFirst, wantedFinish, declaration))
+    end
+
+    fn localLastUseSlow(source: string, start: int, finish: int, wantedFirst: int, wantedFinish: int, declaration: int): int
+    begin
         var position: int := start
         var line: int := 1
         var last: int := declaration
@@ -77,6 +84,26 @@ begin
         return last
     end
 
+    fn fieldAccessed(source: string, start: int, finish: int, wanted: string): int
+    begin
+        var position: int := start
+        var line: int := 1
+        while position < finish {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], wanted) = 1 && item[2] < finish && str.char(source, item[2]) = 46 { return 1 }
+                if item[0] = 38 {
+                    var addressed: [4]int := parser.significant(source, item[2], item[3])
+                    if addressed[0] = token.nameKind() && textEquals(source, addressed[1], addressed[2], wanted) = 1 { return 1 }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        return 0
+    end
+
     fn registerIndex(source: string, start: int, finish: int, wanted: string, before: int): int
     begin
         // Keep register allocation available for medium sized hot functions
@@ -93,7 +120,7 @@ begin
                     var name: [4]int := parser.significant(source, item[2], item[3])
                     var colon: [4]int := parser.significant(source, name[2], name[3])
                     var kind: [4]int := parser.significant(source, colon[2], colon[3])
-                    if textEquals(source, name[1], name[2], wanted) = 1 && textEquals(source, kind[1], kind[2], "int") = 1 && name[1] <= before { target := name[1] }
+                    if textEquals(source, name[1], name[2], wanted) = 1 && (textEquals(source, kind[1], kind[2], "int") = 1 || kind[0] = 42) && name[1] <= before { target := name[1] }
                 }
                 position := item[2]
                 line := item[3]
@@ -113,6 +140,7 @@ begin
                     var addressed: [4]int := parser.significant(source, item[2], item[3])
                     if addressed[0] = token.nameKind() && textEquals(source, addressed[1], addressed[2], wanted) = 1 { return -1 }
                 }
+                if item[0] = token.nameKind() && textEquals(source, item[1], item[2], wanted) = 1 && item[2] < finish && str.char(source, item[2]) = 46 { return -1 }
                 position := item[2]
                 line := item[3]
             }
@@ -134,7 +162,7 @@ begin
                     var name: [4]int := parser.significant(source, item[2], item[3])
                     var colon: [4]int := parser.significant(source, name[2], name[3])
                     var kind: [4]int := parser.significant(source, colon[2], colon[3])
-                    if textEquals(source, kind[1], kind[2], "int") = 1 && hasLaterDeclaration(source, finish, name[2], name[3], str.slice(source, name[1], name[2])) = 0 {
+                    if (textEquals(source, kind[1], kind[2], "int") = 1 || (kind[0] = 42 && fieldAccessed(source, start, finish, str.slice(source, name[1], name[2])) = 0)) && hasLaterDeclaration(source, finish, name[2], name[3], str.slice(source, name[1], name[2])) = 0 {
                         var slot: int := 0
                         while slot < 5 && ends[slot] >= name[1] { slot := slot + 1 }
                         if slot < 5 {
@@ -151,6 +179,13 @@ begin
     end
 
     fn registerCount(source: string, start: int, finish: int): int
+    begin
+        var key: string := "rc:" + str.number(start) + ":" + str.number(finish)
+        if memo.has(key) = 1 { return memo.number(memo.get(key)) }
+        return memo.putNumber(key, registerCountSlow(source, start, finish))
+    end
+
+    fn registerCountSlow(source: string, start: int, finish: int): int
     begin
         if finish - start > 2048 { return 0 }
         var ends: [5]int
@@ -170,7 +205,7 @@ begin
                     var name: [4]int := parser.significant(source, item[2], item[3])
                     var colon: [4]int := parser.significant(source, name[2], name[3])
                     var kind: [4]int := parser.significant(source, colon[2], colon[3])
-                    if textEquals(source, kind[1], kind[2], "int") = 1 && hasLaterDeclaration(source, finish, name[2], name[3], str.slice(source, name[1], name[2])) = 0 {
+                    if (textEquals(source, kind[1], kind[2], "int") = 1 || (kind[0] = 42 && fieldAccessed(source, start, finish, str.slice(source, name[1], name[2])) = 0)) && hasLaterDeclaration(source, finish, name[2], name[3], str.slice(source, name[1], name[2])) = 0 {
                         var slot: int := 0
                         while slot < 5 && ends[slot] >= name[1] { slot := slot + 1 }
                         if slot < 5 {

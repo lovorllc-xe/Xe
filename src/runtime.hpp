@@ -325,7 +325,7 @@ inline std::int64_t threadJoin(std::int64_t id) {
 }
 inline std::string readFile(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
-    if (!file) throw std::runtime_error("cannot open file for reading: " + path);
+    if (!file) return std::string();
     std::ostringstream contents; contents << file.rdbuf();
     if (!file.good() && !file.eof()) throw std::runtime_error("failed while reading file: " + path);
     return contents.str();
@@ -365,6 +365,8 @@ inline std::string stringFromChar(std::int64_t value) {
     return std::string(1, static_cast<char>(value));
 }
 
+template<class T> struct IsStdVector : std::false_type {};
+template<class T, class A> struct IsStdVector<std::vector<T, A>> : std::true_type {};
 template<class T> RawPointer::operator T*() const {
     if constexpr (!std::is_void_v<T>) {
         if (size < sizeof(T)) throw std::length_error("allocation is too small for the requested pointer type");
@@ -381,7 +383,8 @@ template<class T> RawPointer::operator T*() const {
             if (existing != heapObjects.end()) {
                 if (existing->second.type != typeid(T)) throw std::runtime_error("allocation was already converted to a different pointer type");
             } else {
-                ::new (value) T{};
+                if constexpr (IsStdVector<T>::value) ::new (value) T(size / sizeof(typename T::value_type));
+                else ::new (value) T{};
                 heapObjects.emplace(value, ObjectRecord{typeid(T), [](void* address) { std::destroy_at(static_cast<T*>(address)); }});
             }
         }

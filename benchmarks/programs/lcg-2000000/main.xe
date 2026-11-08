@@ -1,0 +1,30 @@
+fn lcg(n: int): int
+begin
+    var x: int := 1
+    var s: int := 0
+    var i: int := 0
+    while i < n {
+        x := (x * 1103515245 + 12345) % 2147483648
+        s := (s + (x >> 16)) % 1000000007
+        i := i + 1
+    }
+    return s
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(lcg(n))
+    return 0
+end

@@ -1,0 +1,61 @@
+// roman: Roman numerals for 1..3999.
+module roman
+begin
+    fn to_roman(value: int): string
+    begin
+        if value < 1 || value > 3999 { return "" }
+        var symbols: string := "M CMD CDC XCL XLX IXV IVI "
+        var values: string := "1000 900 500 400 100 90 50 40 10 9 5 4 1"
+        var out: string := str.builder("")
+        var n: int := value
+        var index: int := 0
+        var cursor: int := 0
+        while index < 13 {
+            var start: int := cursor
+            while cursor < str.length(values) && str.char(values, cursor) != 32 { cursor := cursor + 1 }
+            var amount: int := 0
+            var k: int := start
+            while k < cursor {
+                amount := amount * 10 + str.char(values, k) - 48
+                k := k + 1
+            }
+            cursor := cursor + 1
+            var symbol: string := str.slice(symbols, index * 2, index * 2 + 2)
+            if str.char(symbol, 1) = 32 { symbol := str.slice(symbol, 0, 1) }
+            while n >= amount {
+                out := str.append(out, symbol)
+                n := n - amount
+            }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn digit(c: int): int
+    begin
+        if c = 73 { return 1 }
+        if c = 86 { return 5 }
+        if c = 88 { return 10 }
+        if c = 76 { return 50 }
+        if c = 67 { return 100 }
+        if c = 68 { return 500 }
+        if c = 77 { return 1000 }
+        return 0
+    end
+
+    // Returns 0 for invalid input.
+    fn from_roman(text: string): int
+    begin
+        var total: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            var v: int := digit(str.char(text, i))
+            if v = 0 { return 0 }
+            if i + 1 < str.length(text) && digit(str.char(text, i + 1)) > v { total := total - v }
+            else { total := total + v }
+            i := i + 1
+        }
+        if to_roman(total) != text { return 0 }
+        return total
+    end
+end

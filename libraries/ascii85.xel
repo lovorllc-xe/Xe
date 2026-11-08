@@ -1,0 +1,90 @@
+// ascii85: Ascii85 (Base85) encoding and decoding, used by PDF and PostScript.
+module ascii85
+begin
+    fn encode(text: string): string
+    begin
+        var out: string := str.builder("")
+        var size: int := str.length(text)
+        var i: int := 0
+        while i < size {
+            var chunk: int := 0
+            var count: int := 0
+            while count < 4 {
+                chunk := chunk * 256
+                if i + count < size { chunk := chunk + str.char(text, i + count) }
+                count := count + 1
+            }
+            var have: int := size - i
+            if have > 4 { have := 4 }
+            if chunk = 0 && have = 4 { out := str.append(out, "z") }
+            else {
+                var digits: *int := alloc(40)
+                var k: int := 4
+                var value: int := chunk
+                while k >= 0 {
+                    *(digits + k) := value % 85
+                    value := value / 85
+                    k := k - 1
+                }
+                k := 0
+                while k < have + 1 {
+                    out := str.append(out, str.fromchar(*(digits + k) + 33))
+                    k := k + 1
+                }
+                free(digits)
+            }
+            i := i + 4
+        }
+        return out
+    end
+
+    fn decode(text: string): string
+    begin
+        var out: string := str.builder("")
+        var group: *int := alloc(40)
+        var filled: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c = 122 && filled = 0 { out := str.append(out, str.fromchar(0) + str.fromchar(0) + str.fromchar(0) + str.fromchar(0)) }
+            else {
+                if c >= 33 && c <= 117 {
+                    *(group + filled) := c - 33
+                    filled := filled + 1
+                    if filled = 5 {
+                        var value: int := 0
+                        var k: int := 0
+                        while k < 5 {
+                            value := value * 85 + *(group + k)
+                            k := k + 1
+                        }
+                        out := str.append(out, str.fromchar((value >> 24) & 255) + str.fromchar((value >> 16) & 255) + str.fromchar((value >> 8) & 255) + str.fromchar(value & 255))
+                        filled := 0
+                    }
+                }
+            }
+            i := i + 1
+        }
+        if filled > 1 {
+            var k2: int := filled
+            while k2 < 5 {
+                *(group + k2) := 84
+                k2 := k2 + 1
+            }
+            var value2: int := 0
+            k2 := 0
+            while k2 < 5 {
+                value2 := value2 * 85 + *(group + k2)
+                k2 := k2 + 1
+            }
+            var bytes: int := filled - 1
+            var b: int := 0
+            while b < bytes {
+                out := str.append(out, str.fromchar((value2 >> (24 - b * 8)) & 255))
+                b := b + 1
+            }
+        }
+        free(group)
+        return out
+    end
+end

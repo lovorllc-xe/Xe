@@ -1,0 +1,80 @@
+uses path
+uses os
+uses stat
+uses dir
+uses clock
+uses datetime
+uses duration
+uses cstr
+uses subprocess
+uses tempfile
+uses signals
+uses tty
+uses sysinfo
+uses mmapfile
+uses argparse
+uses slog
+uses progress
+uses style
+uses strlist
+uses strings
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    failed := failed + expect("path join", path.join("/a/b", "c.txt") = "/a/b/c.txt" && path.basename("/a/b/c.txt") = "c.txt" && path.dirname("/a/b/c.txt") = "/a/b")
+    failed := failed + expect("path ext", path.extension("x/arch.tar.gz") = ".gz" && path.stem("a/b.xe") = "b" && path.with_extension("m.xe", ".s") = "m.s")
+    failed := failed + expect("path normalize", path.normalize("/a/./b/../c//d/") = "/a/c/d" && path.normalize("../x/../y") = "../y" && path.relative("/a/b", "/a/c/d") = "../c/d")
+    failed := failed + expect("os", os.pid() > 1 && str.length(os.cwd()) > 0 && str.length(os.hostname()) > 0 && os.arch() = "x86_64")
+    var root: string := tempfile.directory("xe-test-")
+    failed := failed + expect("tempdir", stat.is_dir(root) = 1)
+    dir.make_all(path.join3(root, "sub", "deep"))
+    file.write(path.join3(root, "sub", "a.txt"), "hello")
+    file.write(path.join(path.join3(root, "sub", "deep"), "b.txt"), "world!")
+    failed := failed + expect("stat", stat.size(path.join3(root, "sub", "a.txt")) = 5 && stat.is_file(path.join3(root, "sub", "a.txt")) = 1)
+    var all: *strlist.List := dir.walk(root)
+    failed := failed + expect("dir walk", strlist.len(all) = 4 && strlist.len(dir.files_with_extension(root, ".txt")) = 2)
+    var mapped: *mmapfile.Mapping := mmapfile.open(path.join(path.join3(root, "sub", "deep"), "b.txt"))
+    failed := failed + expect("mmap", mmapfile.len(mapped) = 6 && mmapfile.text(mapped, 0, 5) = "world" && mmapfile.byte(mapped, 5) = 33)
+    mmapfile.close(mapped)
+    dir.remove_all(root)
+    failed := failed + expect("remove_all", stat.exists(root) = 0)
+    var run: *subprocess.Result := subprocess.shell("echo out; echo err 1>&2; exit 3")
+    failed := failed + expect("subprocess", run.output = "out\n" && run.errors = "err\n" && run.status = 3)
+    var piped: *subprocess.Result := subprocess.shell_input("tr a-z A-Z", "shout")
+    failed := failed + expect("subprocess stdin", piped.output = "SHOUT")
+    failed := failed + expect("which", strings.ends_with(subprocess.which("sh"), "/sh") = 1)
+    var epoch: datetime.Date := datetime.from_unix(951782400, 0)
+    failed := failed + expect("datetime civil", datetime.iso(epoch) = "2000-02-29T00:00:00Z" && datetime.weekday_name(epoch) = "Tue")
+    var parsed: datetime.Date := datetime.parse("2024-12-31T23:59:30+02:00")
+    failed := failed + expect("datetime parse", datetime.to_unix(parsed) = 1735682370 && datetime.iso(datetime.add_seconds(parsed, 30)) = "2025-01-01T00:00:00+02:00")
+    failed := failed + expect("datetime months", datetime.date_string(datetime.add_months(datetime.make(2024, 1, 31, 0, 0, 0), 1)) = "2024-02-29")
+    failed := failed + expect("http date", datetime.http(datetime.from_unix(784111777, 0)) = "Sun, 06 Nov 1994 08:49:37 GMT")
+    failed := failed + expect("duration", duration.parse("1h30m") = 5400000000000 && duration.parse("250ms") = 250000000 && duration.format(5400000000000) = "1h30m")
+    var watch: *clock.Stopwatch := clock.stopwatch()
+    clock.sleep_ms(5)
+    failed := failed + expect("clock", clock.elapsed(watch) >= 5000000 && clock.unix() > 1700000000)
+    failed := failed + expect("sysinfo", sysinfo.cpu_count() >= 1 && sysinfo.memory_total() > 0 && sysinfo.process_memory() > 0)
+    failed := failed + expect("signals", signals.ignore_broken_pipes() = 1 && signals.alive(os.pid()) = 1)
+    var p: *argparse.Parser := argparse.new("tool", "test")
+    argparse.flag(p, "verbose", "v", "more output")
+    argparse.option(p, "count", "n", "3", "how many")
+    var cli: *strlist.List := strlist.split("-v --count=7 file.txt", " ")
+    failed := failed + expect("argparse", argparse.parse_list(p, cli) = 1 && argparse.has(p, "verbose") = 1 && argparse.get_int(p, "count") = 7 && argparse.positional(p, 0) = "file.txt")
+    var logger: *slog.Logger := slog.new()
+    slog.without_time(logger)
+    failed := failed + expect("slog", slog.format(slog.with(logger, "user", "ann lee"), 1, "hi", strlist.new()) = "level=info msg=hi user=\"ann lee\"")
+    failed := failed + expect("style", style.strip(style.bold(style.red("x"))) = "x")
+    failed := failed + expect("cstr", cstr.from_pointer(cstr.pointer("roundtrip"), 100) = "roundtrip")
+    if failed = 0 { writeln("system ok") }
+    return failed
+end

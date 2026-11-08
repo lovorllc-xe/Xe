@@ -1,0 +1,123 @@
+// diff: line-based diffs via longest common subsequence, with unified-style output.
+uses strlist
+uses intlist
+
+module diff
+begin
+    // Edit script: each line prefixed with "  " (same), "- " (removed) or "+ " (added).
+    fn lines(a: *strlist.List, b: *strlist.List): *strlist.List
+    begin
+        var n: int := strlist.len(a)
+        var m: int := strlist.len(b)
+        var table: *int := alloc((n + 1) * (m + 1) * 8 + 8)
+        runtime.mem.set(table, 0, (n + 1) * (m + 1) * 8)
+        var i: int := n - 1
+        while i >= 0 {
+            var j: int := m - 1
+            while j >= 0 {
+                if strlist.get(a, i) = strlist.get(b, j) { *(table + i * (m + 1) + j) := *(table + (i + 1) * (m + 1) + j + 1) + 1 }
+                else {
+                    var down: int := *(table + (i + 1) * (m + 1) + j)
+                    var right: int := *(table + i * (m + 1) + j + 1)
+                    if down >= right { *(table + i * (m + 1) + j) := down }
+                    else { *(table + i * (m + 1) + j) := right }
+                }
+                j := j - 1
+            }
+            i := i - 1
+        }
+        var out: *strlist.List := strlist.new()
+        i := 0
+        var k: int := 0
+        while i < n && k < m {
+            if strlist.get(a, i) = strlist.get(b, k) {
+                strlist.push(out, "  " + strlist.get(a, i))
+                i := i + 1
+                k := k + 1
+            }
+            else {
+                if *(table + (i + 1) * (m + 1) + k) >= *(table + i * (m + 1) + k + 1) {
+                    strlist.push(out, "- " + strlist.get(a, i))
+                    i := i + 1
+                }
+                else {
+                    strlist.push(out, "+ " + strlist.get(b, k))
+                    k := k + 1
+                }
+            }
+        }
+        while i < n {
+            strlist.push(out, "- " + strlist.get(a, i))
+            i := i + 1
+        }
+        while k < m {
+            strlist.push(out, "+ " + strlist.get(b, k))
+            k := k + 1
+        }
+        free(table)
+        return out
+    end
+
+    fn text(a: string, b: string): string
+    begin
+        return strlist.join(lines(strlist.lines(a), strlist.lines(b)), "\n")
+    end
+
+    // Counts of changed lines: [added, removed].
+    fn stats(a: string, b: string): [2]int
+    begin
+        var result: [2]int
+        var script: *strlist.List := lines(strlist.lines(a), strlist.lines(b))
+        var i: int := 0
+        while i < strlist.len(script) {
+            var line: string := strlist.get(script, i)
+            if str.char(line, 0) = 43 { result[0] := result[0] + 1 }
+            if str.char(line, 0) = 45 { result[1] := result[1] + 1 }
+            i := i + 1
+        }
+        return result
+    end
+
+    fn identical(a: string, b: string): int
+    begin
+        var s: [2]int := stats(a, b)
+        return s[0] = 0 && s[1] = 0
+    end
+
+    // Only changed lines with `context` unchanged lines around them.
+    fn unified(a: string, b: string, context: int): string
+    begin
+        var script: *strlist.List := lines(strlist.lines(a), strlist.lines(b))
+        var n: int := strlist.len(script)
+        var keep: *intlist.List := intlist.new()
+        var i: int := 0
+        while i < n {
+            intlist.push(keep, 0)
+            i := i + 1
+        }
+        i := 0
+        while i < n {
+            if str.char(strlist.get(script, i), 0) != 32 {
+                var k: int := i - context
+                while k <= i + context {
+                    if k >= 0 && k < n { intlist.set(keep, k, 1) }
+                    k := k + 1
+                }
+            }
+            i := i + 1
+        }
+        var out: string := str.builder("")
+        var gap: int := 0
+        i := 0
+        while i < n {
+            if intlist.get(keep, i) = 1 {
+                if gap = 1 { out := str.append(out, "...\n") }
+                out := str.append(out, strlist.get(script, i) + "\n")
+                gap := 0
+            }
+            else { gap := 1 }
+            i := i + 1
+        }
+        return out
+    end
+end

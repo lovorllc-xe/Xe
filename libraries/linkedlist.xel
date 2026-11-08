@@ -1,0 +1,136 @@
+// linkedlist: a doubly linked list of ints with O(1) insertion at both ends.
+module linkedlist
+begin
+    type Node: record
+    begin
+        value: int
+        prev: *linkedlist.Node
+        next: *linkedlist.Node
+    end
+
+    type List: record
+    begin
+        head: *linkedlist.Node
+        tail: *linkedlist.Node
+        size: int
+    end
+
+    fn new(): *linkedlist.List
+    begin
+        var list: *linkedlist.List := alloc(24)
+        list.head := 0
+        list.tail := 0
+        list.size := 0
+        return list
+    end
+
+    fn node(value: int): *linkedlist.Node
+    begin
+        var item: *linkedlist.Node := alloc(24)
+        item.value := value
+        item.prev := 0
+        item.next := 0
+        return item
+    end
+
+    fn push_back(list: *linkedlist.List, value: int): *linkedlist.Node
+    begin
+        var item: *linkedlist.Node := node(value)
+        if list.size = 0 {
+            list.head := item
+            list.tail := item
+        }
+        else {
+            item.prev := list.tail
+            list.tail.next := item
+            list.tail := item
+        }
+        list.size := list.size + 1
+        return item
+    end
+
+    fn push_front(list: *linkedlist.List, value: int): *linkedlist.Node
+    begin
+        var item: *linkedlist.Node := node(value)
+        if list.size = 0 {
+            list.head := item
+            list.tail := item
+        }
+        else {
+            item.next := list.head
+            list.head.prev := item
+            list.head := item
+        }
+        list.size := list.size + 1
+        return item
+    end
+
+    fn unlink(list: *linkedlist.List, item: *linkedlist.Node): int
+    begin
+        if @item.prev = 0 { list.head := item.next }
+        else { item.prev.next := item.next }
+        if @item.next = 0 { list.tail := item.prev }
+        else { item.next.prev := item.prev }
+        list.size := list.size - 1
+        var value: int := item.value
+        free(item)
+        return value
+    end
+
+    fn pop_front(list: *linkedlist.List): int
+    begin
+        if list.size = 0 { return 0 }
+        return unlink(list, list.head)
+    end
+
+    fn pop_back(list: *linkedlist.List): int
+    begin
+        if list.size = 0 { return 0 }
+        return unlink(list, list.tail)
+    end
+
+    fn len(list: *linkedlist.List): int
+    begin
+        return list.size
+    end
+
+    fn first(list: *linkedlist.List): *linkedlist.Node
+    begin
+        return list.head
+    end
+
+    fn next(item: *linkedlist.Node): *linkedlist.Node
+    begin
+        return item.next
+    end
+
+    fn is_end(item: *linkedlist.Node): int
+    begin
+        return @item = 0
+    end
+
+    fn value(item: *linkedlist.Node): int
+    begin
+        return item.value
+    end
+
+    fn join(list: *linkedlist.List, separator: string): string
+    begin
+        var text: string := str.builder("")
+        var cursor: *linkedlist.Node := list.head
+        var first: int := 1
+        while @cursor != 0 {
+            if first = 0 { text := str.append(text, separator) }
+            text := str.append(text, str.number(cursor.value))
+            first := 0
+            cursor := cursor.next
+        }
+        return text
+    end
+
+    fn release(list: *linkedlist.List)
+    begin
+        while list.size > 0 { pop_front(list) }
+        free(list)
+    end
+end

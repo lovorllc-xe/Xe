@@ -1,0 +1,72 @@
+uses ip
+uses tcp
+uses udp
+uses dns
+uses mime
+uses http
+uses httpserver
+uses strings
+
+type ServerState: record
+begin
+    fd: int
+    served: int
+end
+
+fn serve(argument: *void): int
+begin
+    var state: *ServerState := argument
+    var count: int := 0
+    while count < 3 {
+        var req: *httpserver.Request := httpserver.next(state.fd)
+        if req.path = "/hello" { httpserver.text(req, "hello " + httpserver.param(req, "name")) }
+        else {
+            if req.method = "POST" { httpserver.json(req, "{\"echo\":" + str.number(str.length(req.body)) + "}") }
+            else { httpserver.not_found(req) }
+        }
+        count := count + 1
+    }
+    return count
+end
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    failed := failed + expect("ip", ip.format(ip.parse("192.168.1.20")) = "192.168.1.20" && ip.parse("1.2.3") = -1 && ip.in_cidr("10.9.8.7", "10.0.0.0/8") = 1 && ip.is_private("8.8.8.8") = 0)
+    failed := failed + expect("dns local", dns.resolve("localhost") = "127.0.0.1" && dns.resolve("10.0.0.1") = "10.0.0.1")
+    failed := failed + expect("mime", mime.for_path("a/b.json") = "application/json" && strings.starts_with(mime.sniff("<html>"), "text/html") = 1)
+    var state: *ServerState := alloc(16)
+    state.fd := httpserver.listen(0)
+    var port: int := httpserver.port(state.fd)
+    failed := failed + expect("listen", state.fd >= 0 && port > 0)
+    var serverThread: int := thread.start(&serve, state)
+    var base: string := "http://127.0.0.1:" + str.number(port)
+    var hello: *http.Response := http.get(base + "/hello?name=xe%20lang")
+    failed := failed + expect("http get", hello.status = 200 && hello.body = "hello xe lang" && strings.starts_with(http.header(hello, "Content-Type"), "text/plain") = 1)
+    var posted: *http.Response := http.post(base + "/echo", "text/plain", "12345")
+    failed := failed + expect("http post", posted.status = 200 && posted.body = "{\"echo\":5}")
+    var missing: *http.Response := http.get(base + "/nothing")
+    failed := failed + expect("http 404", missing.status = 404)
+    failed := failed + expect("server thread", thread.join(serverThread) = 3)
+    httpserver.close(state.fd)
+    var u1: int := udp.socket()
+    var u2: int := udp.socket()
+    udp.bind(u2, 0)
+    udp.send_to(u1, "127.0.0.1", udp.local_port(u2), "ping")
+    failed := failed + expect("udp", udp.wait_readable(u2, 2000) = 1 && udp.receive(u2, 100) = "ping")
+    udp.close(u1)
+    udp.close(u2)
+    var refused: *tcp.Conn := tcp.connect("127.0.0.1", 1)
+    failed := failed + expect("tcp refused", tcp.ok(refused) = 0)
+    if failed = 0 { writeln("network ok") }
+    return failed
+end

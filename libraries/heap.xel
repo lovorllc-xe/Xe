@@ -1,0 +1,116 @@
+// heap: binary min-heap of (priority, value) int pairs; a priority queue.
+module heap
+begin
+    type Heap: record
+    begin
+        priorities: *int
+        values: *int
+        size: int
+        capacity: int
+    end
+
+    fn new(): *heap.Heap
+    begin
+        var queue: *heap.Heap := alloc(32)
+        queue.priorities := alloc(128)
+        queue.values := alloc(128)
+        queue.size := 0
+        queue.capacity := 16
+        return queue
+    end
+
+    fn swap(queue: *heap.Heap, a: int, b: int)
+    begin
+        var p: int := *(queue.priorities + a)
+        var v: int := *(queue.values + a)
+        *(queue.priorities + a) := *(queue.priorities + b)
+        *(queue.values + a) := *(queue.values + b)
+        *(queue.priorities + b) := p
+        *(queue.values + b) := v
+    end
+
+    fn push(queue: *heap.Heap, priority: int, value: int)
+    begin
+        if queue.size = queue.capacity {
+            var room: int := queue.capacity * 2
+            var p: *int := alloc(room * 8)
+            var v: *int := alloc(room * 8)
+            runtime.mem.copy(p, queue.priorities, queue.size * 8)
+            runtime.mem.copy(v, queue.values, queue.size * 8)
+            free(queue.priorities)
+            free(queue.values)
+            queue.priorities := p
+            queue.values := v
+            queue.capacity := room
+        }
+        var index: int := queue.size
+        *(queue.priorities + index) := priority
+        *(queue.values + index) := value
+        queue.size := queue.size + 1
+        var moving: int := 1
+        while index > 0 && moving = 1 {
+            var parent: int := (index - 1) / 2
+            if *(queue.priorities + parent) > *(queue.priorities + index) {
+                swap(queue, parent, index)
+                index := parent
+            }
+            else { moving := 0 }
+        }
+    end
+
+    fn peek_priority(queue: *heap.Heap): int
+    begin
+        if queue.size = 0 { return 0 }
+        return *queue.priorities
+    end
+
+    fn peek(queue: *heap.Heap): int
+    begin
+        if queue.size = 0 { return 0 }
+        return *queue.values
+    end
+
+    // Removes the entry with the smallest priority and returns its value.
+    fn pop(queue: *heap.Heap): int
+    begin
+        if queue.size = 0 { return 0 }
+        var result: int := *queue.values
+        queue.size := queue.size - 1
+        if queue.size > 0 {
+            *queue.priorities := *(queue.priorities + queue.size)
+            *queue.values := *(queue.values + queue.size)
+            var index: int := 0
+            var moving: int := 1
+            while moving = 1 {
+                var left: int := index * 2 + 1
+                var right: int := left + 1
+                var smallest: int := index
+                if left < queue.size && *(queue.priorities + left) < *(queue.priorities + smallest) { smallest := left }
+                if right < queue.size && *(queue.priorities + right) < *(queue.priorities + smallest) { smallest := right }
+                if smallest = index { moving := 0 }
+                else {
+                    swap(queue, index, smallest)
+                    index := smallest
+                }
+            }
+        }
+        return result
+    end
+
+    fn len(queue: *heap.Heap): int
+    begin
+        return queue.size
+    end
+
+    fn empty(queue: *heap.Heap): int
+    begin
+        return queue.size = 0
+    end
+
+    fn release(queue: *heap.Heap)
+    begin
+        free(queue.priorities)
+        free(queue.values)
+        free(queue)
+    end
+end

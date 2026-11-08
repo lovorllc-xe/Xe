@@ -1,0 +1,210 @@
+// strlist: a growable array of strings.
+module strlist
+begin
+    type List: record
+    begin
+        data: *string
+        size: int
+        capacity: int
+    end
+
+    fn new(): *strlist.List
+    begin
+        var list: *strlist.List := alloc(24)
+        list.data := alloc(64)
+        list.size := 0
+        list.capacity := 8
+        return list
+    end
+
+    fn push(list: *strlist.List, value: string)
+    begin
+        if list.size >= list.capacity {
+            var room: int := list.capacity * 2
+            var bigger: *string := alloc(room * 8)
+            runtime.mem.copy(bigger, list.data, list.size * 8)
+            free(list.data)
+            list.data := bigger
+            list.capacity := room
+        }
+        *(list.data + list.size) := value
+        list.size := list.size + 1
+    end
+
+    fn len(list: *strlist.List): int
+    begin
+        return list.size
+    end
+
+    fn get(list: *strlist.List, index: int): string
+    begin
+        if index < 0 || index >= list.size { return "" }
+        return *(list.data + index)
+    end
+
+    fn set(list: *strlist.List, index: int, value: string): int
+    begin
+        if index < 0 || index >= list.size { return 0 }
+        *(list.data + index) := value
+        return 1
+    end
+
+    fn pop(list: *strlist.List): string
+    begin
+        if list.size = 0 { return "" }
+        list.size := list.size - 1
+        return *(list.data + list.size)
+    end
+
+    fn clear(list: *strlist.List)
+    begin
+        list.size := 0
+    end
+
+    fn index_of(list: *strlist.List, value: string): int
+    begin
+        var index: int := 0
+        while index < list.size {
+            if *(list.data + index) = value { return index }
+            index := index + 1
+        }
+        return -1
+    end
+
+    fn contains(list: *strlist.List, value: string): int
+    begin
+        return index_of(list, value) >= 0
+    end
+
+    fn remove(list: *strlist.List, index: int): string
+    begin
+        if index < 0 || index >= list.size { return "" }
+        var removed: string := *(list.data + index)
+        var cursor: int := index
+        while cursor < list.size - 1 {
+            *(list.data + cursor) := *(list.data + cursor + 1)
+            cursor := cursor + 1
+        }
+        list.size := list.size - 1
+        return removed
+    end
+
+    fn compare(left: string, right: string): int
+    begin
+        var leftSize: int := str.length(left)
+        var rightSize: int := str.length(right)
+        var index: int := 0
+        while index < leftSize && index < rightSize {
+            var a: int := str.char(left, index)
+            var b: int := str.char(right, index)
+            if a != b { return a - b }
+            index := index + 1
+        }
+        return leftSize - rightSize
+    end
+
+    fn sort(list: *strlist.List)
+    begin
+        var outer: int := 1
+        while outer < list.size {
+            var value: string := *(list.data + outer)
+            var inner: int := outer - 1
+            var moving: int := 1
+            while moving = 1 {
+                if inner < 0 { moving := 0 }
+                else {
+                    if compare(*(list.data + inner), value) > 0 {
+                        *(list.data + inner + 1) := *(list.data + inner)
+                        inner := inner - 1
+                    }
+                    else { moving := 0 }
+                }
+            }
+            *(list.data + inner + 1) := value
+            outer := outer + 1
+        }
+    end
+
+    fn reverse(list: *strlist.List)
+    begin
+        var low: int := 0
+        var high: int := list.size - 1
+        while low < high {
+            var swap: string := *(list.data + low)
+            *(list.data + low) := *(list.data + high)
+            *(list.data + high) := swap
+            low := low + 1
+            high := high - 1
+        }
+    end
+
+    fn join(list: *strlist.List, separator: string): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < list.size {
+            if index > 0 { text := str.append(text, separator) }
+            text := str.append(text, *(list.data + index))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn split(text: string, separator: string): *strlist.List
+    begin
+        var list: *strlist.List := strlist.new()
+        var size: int := str.length(text)
+        var gap: int := str.length(separator)
+        if gap = 0 {
+            var each: int := 0
+            while each < size {
+                push(list, str.slice(text, each, each + 1))
+                each := each + 1
+            }
+            return list
+        }
+        var start: int := 0
+        var index: int := 0
+        while index <= size - gap {
+            var matched: int := 1
+            var offset: int := 0
+            while offset < gap && matched = 1 {
+                if str.char(text, index + offset) != str.char(separator, offset) { matched := 0 }
+                offset := offset + 1
+            }
+            if matched = 1 {
+                push(list, str.slice(text, start, index))
+                index := index + gap
+                start := index
+            }
+            else { index := index + 1 }
+        }
+        push(list, str.slice(text, start, size))
+        return list
+    end
+
+    fn lines(text: string): *strlist.List
+    begin
+        var list: *strlist.List := strlist.new()
+        var size: int := str.length(text)
+        var start: int := 0
+        var index: int := 0
+        while index < size {
+            if str.char(text, index) = 10 {
+                var finish: int := index
+                if finish > start && str.char(text, finish - 1) = 13 { finish := finish - 1 }
+                push(list, str.slice(text, start, finish))
+                start := index + 1
+            }
+            index := index + 1
+        }
+        if start < size { push(list, str.slice(text, start, size)) }
+        return list
+    end
+
+    fn release(list: *strlist.List)
+    begin
+        free(list.data)
+        free(list)
+    end
+end

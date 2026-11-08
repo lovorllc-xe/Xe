@@ -1,0 +1,54 @@
+// mime: content types by file extension and simple sniffing.
+uses path
+uses strings
+
+module mime
+begin
+    fn by_extension(extension: string): string
+    begin
+        var e: string := strings.to_lower(extension)
+        if e = ".html" || e = ".htm" { return "text/html; charset=utf-8" }
+        if e = ".css" { return "text/css; charset=utf-8" }
+        if e = ".js" || e = ".mjs" { return "text/javascript; charset=utf-8" }
+        if e = ".json" { return "application/json" }
+        if e = ".txt" || e = ".xe" || e = ".xel" || e = ".md" { return "text/plain; charset=utf-8" }
+        if e = ".csv" { return "text/csv" }
+        if e = ".xml" { return "application/xml" }
+        if e = ".svg" { return "image/svg+xml" }
+        if e = ".png" { return "image/png" }
+        if e = ".jpg" || e = ".jpeg" { return "image/jpeg" }
+        if e = ".gif" { return "image/gif" }
+        if e = ".webp" { return "image/webp" }
+        if e = ".ico" { return "image/x-icon" }
+        if e = ".bmp" { return "image/bmp" }
+        if e = ".wav" { return "audio/wav" }
+        if e = ".mp3" { return "audio/mpeg" }
+        if e = ".mp4" { return "video/mp4" }
+        if e = ".pdf" { return "application/pdf" }
+        if e = ".zip" { return "application/zip" }
+        if e = ".gz" { return "application/gzip" }
+        if e = ".wasm" { return "application/wasm" }
+        return "application/octet-stream"
+    end
+
+    fn for_path(file: string): string
+    begin
+        return by_extension(path.extension(file))
+    end
+
+    fn sniff(data: string): string
+    begin
+        if strings.starts_with(data, str.fromchar(137) + "PNG") = 1 { return "image/png" }
+        if strings.starts_with(data, "GIF8") = 1 { return "image/gif" }
+        if strings.starts_with(data, "%PDF") = 1 { return "application/pdf" }
+        if strings.starts_with(data, "PK") = 1 { return "application/zip" }
+        if strings.starts_with(strings.trim(data), "<") = 1 { return "text/html; charset=utf-8" }
+        if strings.starts_with(strings.trim(data), "{") = 1 || strings.starts_with(strings.trim(data), "[") = 1 { return "application/json" }
+        return "text/plain; charset=utf-8"
+    end
+
+    fn is_text(content: string): int
+    begin
+        return strings.starts_with(content, "text/") = 1 || strings.contains(content, "json") = 1 || strings.contains(content, "xml") = 1
+    end
+end

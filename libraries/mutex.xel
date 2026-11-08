@@ -1,0 +1,45 @@
+// mutex: blocking futex-based mutexes (uncontended lock/unlock never enter the kernel).
+uses futex
+
+module mutex
+begin
+    // State: 0 unlocked, 1 locked, 2 locked with waiters.
+    fn new(): *void
+    begin
+        var m: *void := alloc(8)
+        atomic.store(m, 0)
+        return m
+    end
+
+    fn lock(m: *void)
+    begin
+        if atomic.compare_exchange(m, 0, 1) = 1 { return }
+        var spins: int := 0
+        while spins < 100 {
+            if atomic.load(m) = 0 && atomic.compare_exchange(m, 0, 1) = 1 { return }
+            spins := spins + 1
+        }
+        var acquired: int := 0
+        while acquired = 0 {
+            if atomic.load(m) = 2 || atomic.compare_exchange(m, 1, 2) = 1 { futex.wait(m, 2) }
+            if atomic.compare_exchange(m, 0, 2) = 1 { acquired := 1 }
+        }
+    end
+
+    fn try_lock(m: *void): int
+    begin
+        return atomic.compare_exchange(m, 0, 1)
+    end
+
+    fn unlock(m: *void)
+    begin
+        if atomic.compare_exchange(m, 1, 0) = 1 { return }
+        atomic.store(m, 0)
+        futex.wake(m, 1)
+    end
+
+    fn release(m: *void)
+    begin
+        free(m)
+    end
+end

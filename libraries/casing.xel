@@ -1,0 +1,122 @@
+// casing: convert identifiers between snake_case, kebab-case, camelCase, PascalCase and slugs.
+uses strlist
+
+module casing
+begin
+    fn is_upper(c: int): int
+    begin
+        return c >= 65 && c <= 90
+    end
+
+    fn is_lower(c: int): int
+    begin
+        return c >= 97 && c <= 122
+    end
+
+    fn is_digit(c: int): int
+    begin
+        return c >= 48 && c <= 57
+    end
+
+    // Splits an identifier into lowercase words.
+    fn words(text: string): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var current: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var c: int := str.char(text, index)
+            if is_upper(c) = 0 && is_lower(c) = 0 && is_digit(c) = 0 {
+                if str.length(current) > 0 {
+                    strlist.push(out, current)
+                    current := str.builder("")
+                }
+            }
+            else {
+                if is_upper(c) = 1 && str.length(current) > 0 {
+                    var previous: int := str.char(text, index - 1)
+                    var nextLower: int := 0
+                    if index + 1 < size { nextLower := is_lower(str.char(text, index + 1)) }
+                    if is_lower(previous) = 1 || is_digit(previous) = 1 || nextLower = 1 {
+                        strlist.push(out, current)
+                        current := str.builder("")
+                    }
+                }
+                if is_upper(c) = 1 { c := c + 32 }
+                current := str.append(current, str.fromchar(c))
+            }
+            index := index + 1
+        }
+        if str.length(current) > 0 { strlist.push(out, current) }
+        return out
+    end
+
+    fn capital(word: string): string
+    begin
+        if str.length(word) = 0 { return word }
+        var first: int := str.char(word, 0)
+        if is_lower(first) = 1 { first := first - 32 }
+        return str.fromchar(first) + str.slice(word, 1, str.length(word))
+    end
+
+    fn snake(text: string): string
+    begin
+        return strlist.join(words(text), "_")
+    end
+
+    fn kebab(text: string): string
+    begin
+        return strlist.join(words(text), "-")
+    end
+
+    fn slug(text: string): string
+    begin
+        return kebab(text)
+    end
+
+    fn screaming(text: string): string
+    begin
+        var parts: *strlist.List := words(text)
+        var result: string := str.builder("")
+        var index: int := 0
+        while index < strlist.len(parts) {
+            if index > 0 { result := str.append(result, "_") }
+            var word: string := strlist.get(parts, index)
+            var k: int := 0
+            while k < str.length(word) {
+                var c: int := str.char(word, k)
+                if is_lower(c) = 1 { c := c - 32 }
+                result := str.append(result, str.fromchar(c))
+                k := k + 1
+            }
+            index := index + 1
+        }
+        return result
+    end
+
+    fn pascal(text: string): string
+    begin
+        var parts: *strlist.List := words(text)
+        var result: string := str.builder("")
+        var index: int := 0
+        while index < strlist.len(parts) {
+            result := str.append(result, capital(strlist.get(parts, index)))
+            index := index + 1
+        }
+        return result
+    end
+
+    fn camel(text: string): string
+    begin
+        var parts: *strlist.List := words(text)
+        var result: string := str.builder("")
+        var index: int := 0
+        while index < strlist.len(parts) {
+            if index = 0 { result := str.append(result, strlist.get(parts, index)) }
+            else { result := str.append(result, capital(strlist.get(parts, index))) }
+            index := index + 1
+        }
+        return result
+    end
+end

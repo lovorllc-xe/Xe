@@ -1,0 +1,690 @@
+// regex: regular expressions compiled to a backtracking VM with failure memoization
+// (linear-time per position, no catastrophic backtracking).
+// Syntax: literals . [abc] [^a-z] \d \w \s \D \W \S \b ^ $ ( ) (?: ) | * + ? {m} {m,} {m,n} and lazy *? +? ??
+uses intlist
+uses strlist
+
+module regex
+begin
+    type Regex: record
+    begin
+        op: *intlist.List
+        x: *intlist.List
+        y: *intlist.List
+        classes: *intlist.List
+        kind: *intlist.List
+        v1: *intlist.List
+        v2: *intlist.List
+        v3: *intlist.List
+        groups: int
+        error: string
+        pattern: string
+        position: int
+        caps: *int
+        text: string
+        memo: *void
+        anchored: int
+    end
+
+    fn node(re: *regex.Regex, kind: int, a: int, b: int, c: int): int
+    begin
+        intlist.push(re.kind, kind)
+        intlist.push(re.v1, a)
+        intlist.push(re.v2, b)
+        intlist.push(re.v3, c)
+        return intlist.len(re.kind) - 1
+    end
+
+    fn peek(re: *regex.Regex): int
+    begin
+        if re.position >= str.length(re.pattern) { return -1 }
+        return str.char(re.pattern, re.position)
+    end
+
+    fn new_class(re: *regex.Regex): int
+    begin
+        var index: int := intlist.len(re.classes) / 4
+        intlist.push(re.classes, 0)
+        intlist.push(re.classes, 0)
+        intlist.push(re.classes, 0)
+        intlist.push(re.classes, 0)
+        return index
+    end
+
+    fn class_add(re: *regex.Regex, cls: int, low: int, high: int)
+    begin
+        var c: int := low
+        while c <= high {
+            var slot: int := cls * 4 + c / 64
+            intlist.set(re.classes, slot, intlist.get(re.classes, slot) | (1 << (c % 64)))
+            c := c + 1
+        }
+    end
+
+    fn class_negate(re: *regex.Regex, cls: int)
+    begin
+        var k: int := 0
+        while k < 4 {
+            intlist.set(re.classes, cls * 4 + k, ~intlist.get(re.classes, cls * 4 + k))
+            k := k + 1
+        }
+    end
+
+    fn class_has(re: *regex.Regex, cls: int, c: int): int
+    begin
+        return (intlist.get(re.classes, cls * 4 + c / 64) >> (c % 64)) & 1
+    end
+
+    // Adds an escape class (\d \w \s and uppercase negations) to cls; returns 1 if handled.
+    fn escape_class(re: *regex.Regex, cls: int, e: int): int
+    begin
+        if e = 100 || e = 68 {
+            var t: int := new_class(re)
+            class_add(re, t, 48, 57)
+            if e = 68 { class_negate(re, t) }
+            merge(re, cls, t)
+            return 1
+        }
+        if e = 119 || e = 87 {
+            var w: int := new_class(re)
+            class_add(re, w, 48, 57)
+            class_add(re, w, 65, 90)
+            class_add(re, w, 97, 122)
+            class_add(re, w, 95, 95)
+            if e = 87 { class_negate(re, w) }
+            merge(re, cls, w)
+            return 1
+        }
+        if e = 115 || e = 83 {
+            var sp: int := new_class(re)
+            class_add(re, sp, 9, 13)
+            class_add(re, sp, 32, 32)
+            if e = 83 { class_negate(re, sp) }
+            merge(re, cls, sp)
+            return 1
+        }
+        return 0
+    end
+
+    fn merge(re: *regex.Regex, target: int, source: int)
+    begin
+        var k: int := 0
+        while k < 4 {
+            intlist.set(re.classes, target * 4 + k, intlist.get(re.classes, target * 4 + k) | intlist.get(re.classes, source * 4 + k))
+            k := k + 1
+        }
+    end
+
+    fn escape_char(e: int): int
+    begin
+        if e = 110 { return 10 }
+        if e = 116 { return 9 }
+        if e = 114 { return 13 }
+        if e = 102 { return 12 }
+        if e = 118 { return 11 }
+        if e = 48 { return 0 }
+        return e
+    end
+
+    fn parse_class(re: *regex.Regex): int
+    begin
+        var cls: int := new_class(re)
+        var negate: int := 0
+        if peek(re) = 94 {
+            negate := 1
+            re.position := re.position + 1
+        }
+        var first: int := 1
+        while peek(re) >= 0 && (peek(re) != 93 || first = 1) {
+            var c: int := peek(re)
+            re.position := re.position + 1
+            var handled: int := 0
+            if c = 92 && peek(re) >= 0 {
+                var e: int := peek(re)
+                re.position := re.position + 1
+                if escape_class(re, cls, e) = 1 { handled := 1 }
+                else { c := escape_char(e) }
+            }
+            if handled = 0 {
+                if peek(re) = 45 && re.position + 1 < str.length(re.pattern) && str.char(re.pattern, re.position + 1) != 93 {
+                    re.position := re.position + 1
+                    var high: int := peek(re)
+                    re.position := re.position + 1
+                    if high = 92 && peek(re) >= 0 {
+                        high := escape_char(peek(re))
+                        re.position := re.position + 1
+                    }
+                    class_add(re, cls, c, high)
+                }
+                else { class_add(re, cls, c, c) }
+            }
+            first := 0
+        }
+        if peek(re) != 93 {
+            re.error := "missing ] in character class"
+            return cls
+        }
+        re.position := re.position + 1
+        if negate = 1 { class_negate(re, cls) }
+        return cls
+    end
+
+    fn parse_atom(re: *regex.Regex): int
+    begin
+        var c: int := peek(re)
+        if c = 40 {
+            re.position := re.position + 1
+            var capture: int := -1
+            if peek(re) = 63 && re.position + 1 < str.length(re.pattern) && str.char(re.pattern, re.position + 1) = 58 { re.position := re.position + 2 }
+            else {
+                capture := re.groups
+                re.groups := re.groups + 1
+            }
+            var inner: int := parse_alt(re)
+            if peek(re) != 41 {
+                re.error := "missing )"
+                return inner
+            }
+            re.position := re.position + 1
+            return node(re, 11, inner, capture, 0)
+        }
+        re.position := re.position + 1
+        if c = 46 { return node(re, 2, 0, 0, 0) }
+        if c = 94 { return node(re, 4, 0, 0, 0) }
+        if c = 36 { return node(re, 5, 0, 0, 0) }
+        if c = 91 { return node(re, 3, parse_class(re), 0, 0) }
+        if c = 92 {
+            var e: int := peek(re)
+            if e < 0 {
+                re.error := "trailing backslash"
+                return node(re, 12, 0, 0, 0)
+            }
+            re.position := re.position + 1
+            if e = 98 { return node(re, 14, 0, 0, 0) }
+            var cls: int := new_class(re)
+            if escape_class(re, cls, e) = 1 { return node(re, 3, cls, 0, 0) }
+            return node(re, 1, escape_char(e), 0, 0)
+        }
+        return node(re, 1, c, 0, 0)
+    end
+
+    fn parse_number(re: *regex.Regex): int
+    begin
+        var value: int := -1
+        while peek(re) >= 48 && peek(re) <= 57 {
+            if value < 0 { value := 0 }
+            value := value * 10 + peek(re) - 48
+            re.position := re.position + 1
+        }
+        return value
+    end
+
+    fn parse_repeat(re: *regex.Regex): int
+    begin
+        var atom: int := parse_atom(re)
+        var going: int := 1
+        while going = 1 {
+            var c: int := peek(re)
+            if c = 42 || c = 43 || c = 63 {
+                re.position := re.position + 1
+                var greedy: int := 1
+                if peek(re) = 63 {
+                    greedy := 0
+                    re.position := re.position + 1
+                }
+                if c = 42 { atom := node(re, 8, atom, greedy, 0) }
+                if c = 43 { atom := node(re, 9, atom, greedy, 0) }
+                if c = 63 { atom := node(re, 10, atom, greedy, 0) }
+            }
+            else {
+                if c = 123 {
+                    var saved: int := re.position
+                    re.position := re.position + 1
+                    var low: int := parse_number(re)
+                    var high: int := low
+                    if peek(re) = 44 {
+                        re.position := re.position + 1
+                        high := parse_number(re)
+                    }
+                    if low >= 0 && peek(re) = 125 {
+                        re.position := re.position + 1
+                        atom := node(re, 13, atom, low, high)
+                    }
+                    else {
+                        re.position := saved
+                        going := 0
+                    }
+                }
+                else { going := 0 }
+            }
+        }
+        return atom
+    end
+
+    fn parse_concat(re: *regex.Regex): int
+    begin
+        var result: int := node(re, 12, 0, 0, 0)
+        while peek(re) >= 0 && peek(re) != 124 && peek(re) != 41 {
+            if peek(re) = 123 && re.position = 0 {
+                re.error := "nothing to repeat"
+                return result
+            }
+            var next: int := parse_repeat(re)
+            result := node(re, 6, result, next, 0)
+        }
+        return result
+    end
+
+    fn parse_alt(re: *regex.Regex): int
+    begin
+        var left: int := parse_concat(re)
+        while peek(re) = 124 {
+            re.position := re.position + 1
+            var right: int := parse_concat(re)
+            left := node(re, 7, left, right, 0)
+        }
+        return left
+    end
+
+    fn emit(re: *regex.Regex, op: int, x: int, y: int): int
+    begin
+        intlist.push(re.op, op)
+        intlist.push(re.x, x)
+        intlist.push(re.y, y)
+        return intlist.len(re.op) - 1
+    end
+
+    fn here(re: *regex.Regex): int
+    begin
+        return intlist.len(re.op)
+    end
+
+    // ops: 1 char, 2 any, 3 class, 4 bol, 5 eol, 6 split(x preferred), 7 jmp, 8 save, 9 match, 10 word boundary
+    fn generate(re: *regex.Regex, n: int)
+    begin
+        var kind: int := intlist.get(re.kind, n)
+        var a: int := intlist.get(re.v1, n)
+        var b: int := intlist.get(re.v2, n)
+        if kind = 1 { emit(re, 1, a, 0) }
+        if kind = 2 { emit(re, 2, 0, 0) }
+        if kind = 3 { emit(re, 3, a, 0) }
+        if kind = 4 { emit(re, 4, 0, 0) }
+        if kind = 5 { emit(re, 5, 0, 0) }
+        if kind = 14 { emit(re, 10, 0, 0) }
+        if kind = 6 {
+            generate(re, a)
+            generate(re, b)
+        }
+        if kind = 7 {
+            var split: int := emit(re, 6, 0, 0)
+            intlist.set(re.x, split, here(re))
+            generate(re, a)
+            var jump: int := emit(re, 7, 0, 0)
+            intlist.set(re.y, split, here(re))
+            generate(re, b)
+            intlist.set(re.x, jump, here(re))
+        }
+        if kind = 8 {
+            var loop: int := emit(re, 6, 0, 0)
+            var body: int := here(re)
+            generate(re, a)
+            emit(re, 7, loop, 0)
+            if b = 1 {
+                intlist.set(re.x, loop, body)
+                intlist.set(re.y, loop, here(re))
+            }
+            else {
+                intlist.set(re.y, loop, body)
+                intlist.set(re.x, loop, here(re))
+            }
+        }
+        if kind = 9 {
+            var start: int := here(re)
+            generate(re, a)
+            var again: int := emit(re, 6, 0, 0)
+            if b = 1 {
+                intlist.set(re.x, again, start)
+                intlist.set(re.y, again, here(re))
+            }
+            else {
+                intlist.set(re.y, again, start)
+                intlist.set(re.x, again, here(re))
+            }
+        }
+        if kind = 10 {
+            var choice: int := emit(re, 6, 0, 0)
+            var body2: int := here(re)
+            generate(re, a)
+            if b = 1 {
+                intlist.set(re.x, choice, body2)
+                intlist.set(re.y, choice, here(re))
+            }
+            else {
+                intlist.set(re.y, choice, body2)
+                intlist.set(re.x, choice, here(re))
+            }
+        }
+        if kind = 11 {
+            if b >= 0 { emit(re, 8, b * 2 + 2, 0) }
+            generate(re, a)
+            if b >= 0 { emit(re, 8, b * 2 + 3, 0) }
+        }
+        if kind = 13 {
+            var low: int := b
+            var high: int := intlist.get(re.v3, n)
+            var copies: int := 0
+            while copies < low {
+                generate(re, a)
+                copies := copies + 1
+            }
+            if high < 0 {
+                var star: int := node(re, 8, a, 1, 0)
+                generate(re, star)
+            }
+            else {
+                var extra: int := high - low
+                var pending: *intlist.List := intlist.new()
+                while extra > 0 {
+                    var optional: int := emit(re, 6, 0, 0)
+                    intlist.set(re.x, optional, here(re))
+                    intlist.push(pending, optional)
+                    generate(re, a)
+                    extra := extra - 1
+                }
+                var p: int := 0
+                while p < intlist.len(pending) {
+                    intlist.set(re.y, intlist.get(pending, p), here(re))
+                    p := p + 1
+                }
+            }
+        }
+    end
+
+    fn compile(pattern: string): *regex.Regex
+    begin
+        var re: *regex.Regex := alloc(136)
+        re.op := intlist.new()
+        re.x := intlist.new()
+        re.y := intlist.new()
+        re.classes := intlist.new()
+        re.kind := intlist.new()
+        re.v1 := intlist.new()
+        re.v2 := intlist.new()
+        re.v3 := intlist.new()
+        re.groups := 0
+        re.error := ""
+        re.pattern := pattern
+        re.position := 0
+        re.text := ""
+        var root: int := parse_alt(re)
+        if re.position < str.length(pattern) && str.length(re.error) = 0 { re.error := "unexpected ) at offset " + str.number(re.position) }
+        emit(re, 8, 0, 0)
+        generate(re, root)
+        emit(re, 8, 1, 0)
+        emit(re, 9, 0, 0)
+        re.caps := alloc((re.groups + 1) * 16 + 16)
+        re.anchored := 0
+        if intlist.get(re.op, 1) = 4 { re.anchored := 1 }
+        return re
+    end
+
+    fn ok(re: *regex.Regex): int
+    begin
+        return str.length(re.error) = 0
+    end
+
+    fn error(re: *regex.Regex): string
+    begin
+        return re.error
+    end
+
+    fn is_word(c: int): int
+    begin
+        return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c = 95
+    end
+
+    fn run(re: *regex.Regex, start: int, from: int): int
+    begin
+        var pc: int := start
+        var sp: int := from
+        var size: int := str.length(re.text)
+        var plen: int := intlist.len(re.op)
+        while 1 = 1 {
+            var op: int := *(re.op.data + pc)
+            if op = 9 { return 1 }
+            if op = 1 {
+                if sp >= size || str.char(re.text, sp) != *(re.x.data + pc) { return 0 }
+                pc := pc + 1
+                sp := sp + 1
+            }
+            else {
+                if op = 2 {
+                    if sp >= size || str.char(re.text, sp) = 10 { return 0 }
+                    pc := pc + 1
+                    sp := sp + 1
+                }
+                else {
+                    if op = 3 {
+                        if sp >= size || class_has(re, *(re.x.data + pc), str.char(re.text, sp)) = 0 { return 0 }
+                        pc := pc + 1
+                        sp := sp + 1
+                    }
+                    else {
+                        if op = 4 {
+                            if sp != 0 { return 0 }
+                            pc := pc + 1
+                        }
+                        else {
+                            if op = 5 {
+                                if sp != size { return 0 }
+                                pc := pc + 1
+                            }
+                            else {
+                                if op = 7 { pc := *(re.x.data + pc) }
+                                else {
+                                    if op = 8 {
+                                        var slot: *int := re.caps + *(re.x.data + pc)
+                                        var old: int := *slot
+                                        *slot := sp
+                                        if run(re, pc + 1, sp) = 1 { return 1 }
+                                        *slot := old
+                                        return 0
+                                    }
+                                    else {
+                                        if op = 10 {
+                                            var before: int := 0
+                                            var after: int := 0
+                                            if sp > 0 { before := is_word(str.char(re.text, sp - 1)) }
+                                            if sp < size { after := is_word(str.char(re.text, sp)) }
+                                            if before = after { return 0 }
+                                            pc := pc + 1
+                                        }
+                                        else {
+                                            var bit: int := pc * (size + 1) + sp
+                                            var cell: *void := re.memo + bit / 8
+                                            var mask: int := 1 << (bit % 8)
+                                            if (runtime.hw.read8(cell) & mask) != 0 { return 0 }
+                                            if run(re, *(re.x.data + pc), sp) = 1 { return 1 }
+                                            runtime.hw.write8(cell, runtime.hw.read8(cell) | mask)
+                                            pc := *(re.y.data + pc)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return 0
+    end
+
+    fn prepare(re: *regex.Regex, text: string)
+    begin
+        if @re.memo != 0 { free(re.memo) }
+        re.text := text
+        var bits: int := intlist.len(re.op) * (str.length(text) + 1)
+        re.memo := alloc(bits / 8 + 8)
+        runtime.mem.set(re.memo, 0, bits / 8 + 8)
+    end
+
+    fn reset_caps(re: *regex.Regex)
+    begin
+        var index: int := 0
+        while index < (re.groups + 1) * 2 {
+            *(re.caps + index) := -1
+            index := index + 1
+        }
+    end
+
+    // Finds the first match at or after offset; returns its start or -1.
+    fn find_from(re: *regex.Regex, text: string, offset: int): int
+    begin
+        if ok(re) = 0 { return -1 }
+        prepare(re, text)
+        var start: int := offset
+        var size: int := str.length(text)
+        while start <= size {
+            reset_caps(re)
+            if run(re, 0, start) = 1 { return start }
+            if re.anchored = 1 { return -1 }
+            start := start + 1
+        }
+        return -1
+    end
+
+    fn find(re: *regex.Regex, text: string): int
+    begin
+        return find_from(re, text, 0)
+    end
+
+    fn is_match(re: *regex.Regex, text: string): int
+    begin
+        return find(re, text) >= 0
+    end
+
+    fn full_match(re: *regex.Regex, text: string): int
+    begin
+        if ok(re) = 0 { return 0 }
+        prepare(re, text)
+        reset_caps(re)
+        return run(re, 0, 0) = 1 && *(re.caps + 1) = str.length(text)
+    end
+
+    fn match_end(re: *regex.Regex): int
+    begin
+        return *(re.caps + 1)
+    end
+
+    // Text of capture group n from the last successful match (0 is the whole match).
+    fn group(re: *regex.Regex, n: int): string
+    begin
+        if n < 0 || n > re.groups { return "" }
+        var first: int := *(re.caps + n * 2)
+        var last: int := *(re.caps + n * 2 + 1)
+        if first < 0 || last < first { return "" }
+        return str.slice(re.text, first, last)
+    end
+
+    fn group_count(re: *regex.Regex): int
+    begin
+        return re.groups
+    end
+
+    fn find_all(re: *regex.Regex, text: string): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var offset: int := 0
+        var size: int := str.length(text)
+        while offset <= size {
+            var start: int := find_from(re, text, offset)
+            if start < 0 { offset := size + 1 }
+            else {
+                strlist.push(out, group(re, 0))
+                var finish: int := match_end(re)
+                if finish = start { offset := finish + 1 }
+                else { offset := finish }
+            }
+        }
+        return out
+    end
+
+    fn expand(re: *regex.Regex, replacement: string): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(replacement)
+        while index < size {
+            var c: int := str.char(replacement, index)
+            if c = 36 && index + 1 < size && str.char(replacement, index + 1) >= 48 && str.char(replacement, index + 1) <= 57 {
+                out := str.append(out, group(re, str.char(replacement, index + 1) - 48))
+                index := index + 2
+            }
+            else {
+                out := str.append(out, str.fromchar(c))
+                index := index + 1
+            }
+        }
+        return out
+    end
+
+    // Replaces every match; $0..$9 in the replacement refer to groups.
+    fn replace_all(re: *regex.Regex, text: string, replacement: string): string
+    begin
+        var out: string := str.builder("")
+        var offset: int := 0
+        var size: int := str.length(text)
+        var going: int := 1
+        while going = 1 && offset <= size {
+            var start: int := find_from(re, text, offset)
+            if start < 0 { going := 0 }
+            else {
+                var finish: int := match_end(re)
+                out := str.append(out, str.slice(text, offset, start))
+                out := str.append(out, expand(re, replacement))
+                if finish = start {
+                    if start < size { out := str.append(out, str.slice(text, start, start + 1)) }
+                    offset := start + 1
+                }
+                else { offset := finish }
+            }
+        }
+        if offset < size { out := str.append(out, str.slice(text, offset, size)) }
+        return out
+    end
+
+    fn split(re: *regex.Regex, text: string): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var offset: int := 0
+        var last: int := 0
+        var size: int := str.length(text)
+        var going: int := 1
+        while going = 1 && offset <= size {
+            var start: int := find_from(re, text, offset)
+            if start < 0 { going := 0 }
+            else {
+                var finish: int := match_end(re)
+                if finish > start {
+                    strlist.push(out, str.slice(text, last, start))
+                    last := finish
+                    offset := finish
+                }
+                else { offset := start + 1 }
+            }
+        }
+        strlist.push(out, str.slice(text, last, size))
+        return out
+    end
+
+    // One-shot helpers.
+    fn test(pattern: string, text: string): int
+    begin
+        return is_match(compile(pattern), text)
+    end
+
+    fn replace(pattern: string, text: string, replacement: string): string
+    begin
+        return replace_all(compile(pattern), text, replacement)
+    end
+end

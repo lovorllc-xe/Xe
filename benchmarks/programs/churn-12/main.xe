@@ -1,0 +1,52 @@
+type Cell: record
+begin
+    value: int
+    other: int
+end
+
+fn churn(n: int): int
+begin
+    var slots: [64]*Cell
+    var total: int := 0
+    var i: int := 0
+    while i < n {
+        var cell: *Cell := alloc(16)
+        cell.value := i
+        var k: int := i % 64
+        var old: *Cell := slots[k]
+        if @old != 0 {
+            total := (total + old.value) % 1000000007
+            free(old)
+        }
+        slots[k] := cell
+        i := i + 1
+    }
+    i := 0
+    while i < 64 {
+        var old: *Cell := slots[i]
+        if @old != 0 {
+            total := (total + old.value) % 1000000007
+            free(old)
+        }
+        i := i + 1
+    }
+    return total
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(churn(n))
+    return 0
+end

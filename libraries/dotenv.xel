@@ -1,0 +1,72 @@
+// dotenv: read KEY=VALUE files (.env) with comments, quotes and ${VAR} expansion.
+uses strmap
+uses strlist
+uses strings
+
+module dotenv
+begin
+    fn expand(value: string, map: *strmap.Map): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(value)
+        while index < size {
+            if str.char(value, index) = 36 && index + 1 < size && str.char(value, index + 1) = 123 {
+                var close: int := strings.index_from(value, "}", index)
+                if close > 0 {
+                    var name: string := str.slice(value, index + 2, close)
+                    var replacement: string := strmap.get(map, name, "")
+                    if str.length(replacement) = 0 { replacement := env.get(name) }
+                    out := str.append(out, replacement)
+                    index := close + 1
+                }
+                else {
+                    out := str.append(out, "$")
+                    index := index + 1
+                }
+            }
+            else {
+                out := str.append(out, str.fromchar(str.char(value, index)))
+                index := index + 1
+            }
+        }
+        return out
+    end
+
+    fn parse(text: string): *strmap.Map
+    begin
+        var map: *strmap.Map := strmap.new()
+        var lines: *strlist.List := strlist.lines(text)
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strings.trim(strlist.get(lines, index))
+            if strings.starts_with(line, "export ") = 1 { line := strings.trim(str.slice(line, 7, str.length(line))) }
+            var eq: int := strings.index_of(line, "=")
+            if str.length(line) > 0 && str.char(line, 0) != 35 && eq > 0 {
+                var key: string := strings.trim(str.slice(line, 0, eq))
+                var value: string := strings.trim(str.slice(line, eq + 1, str.length(line)))
+                var quote: int := 0
+                if str.length(value) >= 2 && (str.char(value, 0) = 34 || str.char(value, 0) = 39) {
+                    quote := str.char(value, 0)
+                    var closing: int := strings.index_from(value, str.fromchar(quote), 1)
+                    if closing < 0 { closing := str.length(value) }
+                    value := str.slice(value, 1, closing)
+                }
+                else {
+                    var hash: int := strings.index_of(value, " #")
+                    if hash >= 0 { value := strings.trim(str.slice(value, 0, hash)) }
+                }
+                if quote = 34 { value := strings.replace(value, str.fromchar(92) + "n", str.fromchar(10)) }
+                if quote != 39 { value := expand(value, map) }
+                strmap.put(map, key, value)
+            }
+            index := index + 1
+        }
+        return map
+    end
+
+    fn load(path: string): *strmap.Map
+    begin
+        return parse(file.read(path))
+    end
+end

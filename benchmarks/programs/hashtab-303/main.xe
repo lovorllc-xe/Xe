@@ -1,0 +1,62 @@
+fn hashtab(n: int): int
+begin
+    var cap: int := 16
+    while cap < n * 2 {
+        cap := cap * 2
+    }
+    var keys: *[268435456]int := alloc((cap) * 8)
+    defer free(keys)
+    var zero_keys: int := 0
+    while zero_keys < cap {
+        (*keys)[zero_keys] := 0
+        zero_keys := zero_keys + 1
+    }
+    var vals: *[268435456]int := alloc((cap) * 8)
+    defer free(vals)
+    var zero_vals: int := 0
+    while zero_vals < cap {
+        (*vals)[zero_vals] := 0
+        zero_vals := zero_vals + 1
+    }
+    var i: int := 1
+    while i <= n {
+        var k: int := (i * 2654435761) % 4294967296
+        var h: int := k & (cap - 1)
+        while (*keys)[h] != 0 && (*keys)[h] != k {
+            h := (h + 1) & (cap - 1)
+        }
+        (*keys)[h] := k
+        (*vals)[h] := (*vals)[h] + i
+        i := i + 1
+    }
+    var total: int := 0
+    i := 1
+    while i <= n {
+        var k: int := (i * 2654435761) % 4294967296
+        var h: int := k & (cap - 1)
+        while (*keys)[h] != k {
+            h := (h + 1) & (cap - 1)
+        }
+        total := (total + (*vals)[h]) % 1000000007
+        i := i + 1
+    }
+    return total
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(hashtab(n))
+    return 0
+end

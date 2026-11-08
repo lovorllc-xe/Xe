@@ -1,0 +1,229 @@
+// datetime: calendar dates and times (UTC or fixed offsets), ISO 8601 formatting and parsing.
+uses clock
+uses strconv
+
+module datetime
+begin
+    type Date: record
+    begin
+        year: int
+        month: int
+        day: int
+        hour: int
+        minute: int
+        second: int
+        nanosecond: int
+        offset: int
+    end
+
+    fn floor_div(a: int, b: int): int
+    begin
+        var q: int := a / b
+        if (a % b != 0) && ((a < 0) != (b < 0)) { q := q - 1 }
+        return q
+    end
+
+    // Days since 1970-01-01 for a proleptic Gregorian date.
+    fn days_from_civil(year: int, month: int, day: int): int
+    begin
+        var y: int := year
+        if month <= 2 { y := y - 1 }
+        var era: int := floor_div(y, 400)
+        var yoe: int := y - era * 400
+        var m: int := month + 9
+        if month > 2 { m := month - 3 }
+        var doy: int := (153 * m + 2) / 5 + day - 1
+        var doe: int := yoe * 365 + yoe / 4 - yoe / 100 + doy
+        return era * 146097 + doe - 719468
+    end
+
+    fn from_unix(seconds: int, offsetSeconds: int): datetime.Date
+    begin
+        var d: datetime.Date
+        var local: int := seconds + offsetSeconds
+        var days: int := floor_div(local, 86400)
+        var rest: int := local - days * 86400
+        d.hour := rest / 3600
+        d.minute := (rest % 3600) / 60
+        d.second := rest % 60
+        d.nanosecond := 0
+        d.offset := offsetSeconds
+        var z: int := days + 719468
+        var era: int := floor_div(z, 146097)
+        var doe: int := z - era * 146097
+        var yoe: int := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        var y: int := yoe + era * 400
+        var doy: int := doe - (365 * yoe + yoe / 4 - yoe / 100)
+        var mp: int := (5 * doy + 2) / 153
+        d.day := doy - (153 * mp + 2) / 5 + 1
+        if mp < 10 { d.month := mp + 3 }
+        else { d.month := mp - 9 }
+        if d.month <= 2 { y := y + 1 }
+        d.year := y
+        return d
+    end
+
+    fn now(): datetime.Date
+    begin
+        var nanos: int := clock.realtime()
+        var d: datetime.Date := from_unix(nanos / 1000000000, 0)
+        d.nanosecond := nanos % 1000000000
+        return d
+    end
+
+    fn make(year: int, month: int, day: int, hour: int, minute: int, second: int): datetime.Date
+    begin
+        var d: datetime.Date
+        d.year := year
+        d.month := month
+        d.day := day
+        d.hour := hour
+        d.minute := minute
+        d.second := second
+        d.nanosecond := 0
+        d.offset := 0
+        return d
+    end
+
+    fn to_unix(d: datetime.Date): int
+    begin
+        return days_from_civil(d.year, d.month, d.day) * 86400 + d.hour * 3600 + d.minute * 60 + d.second - d.offset
+    end
+
+    fn is_leap(year: int): int
+    begin
+        return (year % 4 = 0 && year % 100 != 0) || year % 400 = 0
+    end
+
+    fn days_in_month(year: int, month: int): int
+    begin
+        if month = 2 {
+            if is_leap(year) = 1 { return 29 }
+            return 28
+        }
+        if month = 4 || month = 6 || month = 9 || month = 11 { return 30 }
+        return 31
+    end
+
+    // 0 = Sunday ... 6 = Saturday.
+    fn weekday(d: datetime.Date): int
+    begin
+        var days: int := days_from_civil(d.year, d.month, d.day)
+        var w: int := (days + 4) % 7
+        if w < 0 { w := w + 7 }
+        return w
+    end
+
+    fn weekday_name(d: datetime.Date): string
+    begin
+        var names: string := "SunMonTueWedThuFriSat"
+        var w: int := weekday(d)
+        return str.slice(names, w * 3, w * 3 + 3)
+    end
+
+    fn month_name(month: int): string
+    begin
+        var names: string := "JanFebMarAprMayJunJulAugSepOctNovDec"
+        if month < 1 || month > 12 { return "" }
+        return str.slice(names, (month - 1) * 3, month * 3)
+    end
+
+    fn day_of_year(d: datetime.Date): int
+    begin
+        return days_from_civil(d.year, d.month, d.day) - days_from_civil(d.year, 1, 1) + 1
+    end
+
+    fn add_seconds(d: datetime.Date, seconds: int): datetime.Date
+    begin
+        return from_unix(to_unix(d) + seconds, d.offset)
+    end
+
+    fn add_days(d: datetime.Date, days: int): datetime.Date
+    begin
+        return add_seconds(d, days * 86400)
+    end
+
+    fn add_months(d: datetime.Date, months: int): datetime.Date
+    begin
+        var out: datetime.Date := d
+        var total: int := d.year * 12 + (d.month - 1) + months
+        out.year := floor_div(total, 12)
+        out.month := total - out.year * 12 + 1
+        var limit: int := days_in_month(out.year, out.month)
+        if out.day > limit { out.day := limit }
+        return out
+    end
+
+    fn diff_seconds(a: datetime.Date, b: datetime.Date): int
+    begin
+        return to_unix(a) - to_unix(b)
+    end
+
+    fn iso(d: datetime.Date): string
+    begin
+        var text: string := strconv.pad_int(d.year, 4) + "-" + strconv.pad_int(d.month, 2) + "-" + strconv.pad_int(d.day, 2) + "T" + strconv.pad_int(d.hour, 2) + ":" + strconv.pad_int(d.minute, 2) + ":" + strconv.pad_int(d.second, 2)
+        if d.offset = 0 { return text + "Z" }
+        var sign: string := "+"
+        var off: int := d.offset
+        if off < 0 {
+            sign := "-"
+            off := -off
+        }
+        return text + sign + strconv.pad_int(off / 3600, 2) + ":" + strconv.pad_int((off % 3600) / 60, 2)
+    end
+
+    fn date_string(d: datetime.Date): string
+    begin
+        return strconv.pad_int(d.year, 4) + "-" + strconv.pad_int(d.month, 2) + "-" + strconv.pad_int(d.day, 2)
+    end
+
+    fn time_string(d: datetime.Date): string
+    begin
+        return strconv.pad_int(d.hour, 2) + ":" + strconv.pad_int(d.minute, 2) + ":" + strconv.pad_int(d.second, 2)
+    end
+
+    // RFC 1123 / HTTP date: "Sun, 06 Nov 1994 08:49:37 GMT".
+    fn http(d: datetime.Date): string
+    begin
+        var utc: datetime.Date := from_unix(to_unix(d), 0)
+        return weekday_name(utc) + ", " + strconv.pad_int(utc.day, 2) + " " + month_name(utc.month) + " " + strconv.pad_int(utc.year, 4) + " " + time_string(utc) + " GMT"
+    end
+
+    fn number_at(text: string, start: int, count: int): int
+    begin
+        var value: int := 0
+        var index: int := start
+        while index < start + count && index < str.length(text) {
+            value := value * 10 + str.char(text, index) - 48
+            index := index + 1
+        }
+        return value
+    end
+
+    // Parses "YYYY-MM-DD", "YYYY-MM-DDTHH:MM:SS" with optional "Z" or "+HH:MM".
+    fn parse(text: string): datetime.Date
+    begin
+        var d: datetime.Date := make(number_at(text, 0, 4), number_at(text, 5, 2), number_at(text, 8, 2), 0, 0, 0)
+        if str.length(text) >= 19 {
+            d.hour := number_at(text, 11, 2)
+            d.minute := number_at(text, 14, 2)
+            d.second := number_at(text, 17, 2)
+            var position: int := 19
+            if position < str.length(text) && str.char(text, position) = 46 {
+                position := position + 1
+                while position < str.length(text) && str.char(text, position) >= 48 && str.char(text, position) <= 57 { position := position + 1 }
+            }
+            if position + 5 < str.length(text) + 1 && position < str.length(text) && (str.char(text, position) = 43 || str.char(text, position) = 45) {
+                var off: int := number_at(text, position + 1, 2) * 3600 + number_at(text, position + 4, 2) * 60
+                if str.char(text, position) = 45 { off := -off }
+                d.offset := off
+            }
+        }
+        return d
+    end
+
+    fn valid(d: datetime.Date): int
+    begin
+        return d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= days_in_month(d.year, d.month) && d.hour >= 0 && d.hour < 24 && d.minute >= 0 && d.minute < 60 && d.second >= 0 && d.second < 61
+    end
+end

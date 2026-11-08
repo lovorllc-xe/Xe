@@ -1,0 +1,123 @@
+// dns: resolve hostnames to IPv4 addresses via /etc/hosts and UDP DNS queries.
+uses ip
+uses udp
+uses bytes
+uses strlist
+uses strings
+uses cstr
+
+module dns
+begin
+    fn from_hosts(name: string): string
+    begin
+        var lines: *strlist.List := strlist.lines(file.read("/etc/hosts"))
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strings.trim(strings.before(strlist.get(lines, index), "#"))
+            line := strings.replace(line, str.fromchar(9), " ")
+            var parts: *strlist.List := strlist.split(line, " ")
+            var k: int := 1
+            while k < strlist.len(parts) {
+                if strlist.get(parts, k) = name && ip.valid(strlist.get(parts, 0)) = 1 { return strlist.get(parts, 0) }
+                k := k + 1
+            }
+            index := index + 1
+        }
+        return ""
+    end
+
+    fn nameserver(): string
+    begin
+        var lines: *strlist.List := strlist.lines(file.read("/etc/resolv.conf"))
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strings.trim(strlist.get(lines, index))
+            if strings.starts_with(line, "nameserver") = 1 {
+                var server: string := strings.trim(str.slice(line, 10, str.length(line)))
+                if ip.valid(server) = 1 { return server }
+            }
+            index := index + 1
+        }
+        return "8.8.8.8"
+    end
+
+    fn query(name: string, id: int): *bytes.Buffer
+    begin
+        var packet: *bytes.Buffer := bytes.new()
+        bytes.write_be(packet, id, 2)
+        bytes.write_be(packet, 256, 2)
+        bytes.write_be(packet, 1, 2)
+        bytes.write_be(packet, 0, 2)
+        bytes.write_be(packet, 0, 2)
+        bytes.write_be(packet, 0, 2)
+        var labels: *strlist.List := strlist.split(name, ".")
+        var index: int := 0
+        while index < strlist.len(labels) {
+            var label: string := strlist.get(labels, index)
+            if str.length(label) > 0 {
+                bytes.push(packet, str.length(label))
+                bytes.append_string(packet, label)
+            }
+            index := index + 1
+        }
+        bytes.push(packet, 0)
+        bytes.write_be(packet, 1, 2)
+        bytes.write_be(packet, 1, 2)
+        return packet
+    end
+
+    fn skip_name(packet: *bytes.Buffer, offset: int): int
+    begin
+        var position: int := offset
+        while position < packet.size {
+            var length: int := bytes.get(packet, position)
+            if length = 0 { return position + 1 }
+            if (length & 192) = 192 { return position + 2 }
+            position := position + length + 1
+        }
+        return position
+    end
+
+    // Raw DNS lookup against a specific server; returns "" when nothing was found.
+    fn lookup_at(name: string, server: string): string
+    begin
+        var fd: int := udp.socket()
+        if fd < 0 { return "" }
+        var packet: *bytes.Buffer := query(name, 4660)
+        var target: *void := ip.sockaddr(ip.parse(server), 53)
+        syscall.invoke6(44, fd, packet.data, packet.size, 0, target, 16)
+        free(target)
+        var answer: string := ""
+        if udp.wait_readable(fd, 3000) = 1 {
+            var reply: *bytes.Buffer := bytes.new()
+            bytes.reserve(reply, 1500)
+            var got: int := syscall.invoke6(45, fd, reply.data, 1500, 0, 0, 0)
+            if got > 12 {
+                reply.size := got
+                var answers: int := bytes.read_be_at(reply, 6, 2)
+                var position: int := skip_name(reply, 12) + 4
+                var index: int := 0
+                while index < answers && position < got && str.length(answer) = 0 {
+                    position := skip_name(reply, position)
+                    var recordType: int := bytes.read_be_at(reply, position, 2)
+                    var length: int := bytes.read_be_at(reply, position + 8, 2)
+                    position := position + 10
+                    if recordType = 1 && length = 4 { answer := str.number(bytes.get(reply, position)) + "." + str.number(bytes.get(reply, position + 1)) + "." + str.number(bytes.get(reply, position + 2)) + "." + str.number(bytes.get(reply, position + 3)) }
+                    position := position + length
+                    index := index + 1
+                }
+            }
+        }
+        udp.close(fd)
+        return answer
+    end
+
+    fn resolve(name: string): string
+    begin
+        if ip.valid(name) = 1 { return name }
+        if name = "localhost" { return "127.0.0.1" }
+        var local: string := from_hosts(name)
+        if str.length(local) > 0 { return local }
+        return lookup_at(name, nameserver())
+    end
+end

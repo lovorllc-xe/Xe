@@ -1,0 +1,47 @@
+fn mandel(n: int): int
+begin
+    var count: int := 0
+    var py: int := 0
+    while py < n {
+        var px: int := 0
+        while px < n {
+            var cx: flt := (px * 1.0) * 3.0 / (n * 1.0) - 2.0
+            var cy: flt := (py * 1.0) * 2.0 / (n * 1.0) - 1.0
+            var x: flt := 0.0
+            var y: flt := 0.0
+            var it: int := 0
+            var inside: int := 1
+            while it < 40 && inside = 1 {
+                var t: flt := x * x - y * y + cx
+                y := 2.0 * x * y + cy
+                x := t
+                if x * x + y * y > 4.0 {
+                    inside := 0
+                }
+                it := it + 1
+            }
+            count := count + inside
+            px := px + 1
+        }
+        py := py + 1
+    }
+    return count
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(mandel(n))
+    return 0
+end

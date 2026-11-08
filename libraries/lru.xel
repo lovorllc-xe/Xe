@@ -1,0 +1,113 @@
+// lru: a least-recently-used cache from string keys to string values.
+uses strintmap
+
+module lru
+begin
+    type Cache: record
+    begin
+        index: *strintmap.Map
+        keys: *string
+        values: *string
+        prev: *int
+        next: *int
+        head: int
+        tail: int
+        size: int
+        capacity: int
+        hits: int
+        misses: int
+    end
+
+    fn new(capacity: int): *lru.Cache
+    begin
+        var cache: *lru.Cache := alloc(88)
+        var room: int := capacity
+        if room < 1 { room := 1 }
+        cache.index := strintmap.new()
+        cache.keys := alloc(room * 8)
+        cache.values := alloc(room * 8)
+        cache.prev := alloc(room * 8)
+        cache.next := alloc(room * 8)
+        cache.head := -1
+        cache.tail := -1
+        cache.size := 0
+        cache.capacity := room
+        return cache
+    end
+
+    fn detach(cache: *lru.Cache, slot: int)
+    begin
+        var before: int := *(cache.prev + slot)
+        var after: int := *(cache.next + slot)
+        if before >= 0 { *(cache.next + before) := after }
+        else { cache.head := after }
+        if after >= 0 { *(cache.prev + after) := before }
+        else { cache.tail := before }
+    end
+
+    fn attach_front(cache: *lru.Cache, slot: int)
+    begin
+        *(cache.prev + slot) := -1
+        *(cache.next + slot) := cache.head
+        if cache.head >= 0 { *(cache.prev + cache.head) := slot }
+        cache.head := slot
+        if cache.tail < 0 { cache.tail := slot }
+    end
+
+    fn get(cache: *lru.Cache, key: string, fallback: string): string
+    begin
+        var slot: int := strintmap.get(cache.index, key, -1)
+        if slot < 0 {
+            cache.misses := cache.misses + 1
+            return fallback
+        }
+        cache.hits := cache.hits + 1
+        detach(cache, slot)
+        attach_front(cache, slot)
+        return *(cache.values + slot)
+    end
+
+    fn has(cache: *lru.Cache, key: string): int
+    begin
+        return strintmap.has(cache.index, key)
+    end
+
+    fn put(cache: *lru.Cache, key: string, value: string)
+    begin
+        var slot: int := strintmap.get(cache.index, key, -1)
+        if slot >= 0 {
+            *(cache.values + slot) := value
+            detach(cache, slot)
+            attach_front(cache, slot)
+            return
+        }
+        if cache.size < cache.capacity {
+            slot := cache.size
+            cache.size := cache.size + 1
+        }
+        else {
+            slot := cache.tail
+            detach(cache, slot)
+            strintmap.remove(cache.index, *(cache.keys + slot))
+        }
+        *(cache.keys + slot) := key
+        *(cache.values + slot) := value
+        strintmap.put(cache.index, key, slot)
+        attach_front(cache, slot)
+    end
+
+    fn len(cache: *lru.Cache): int
+    begin
+        return cache.size
+    end
+
+    fn hits(cache: *lru.Cache): int
+    begin
+        return cache.hits
+    end
+
+    fn misses(cache: *lru.Cache): int
+    begin
+        return cache.misses
+    end
+end

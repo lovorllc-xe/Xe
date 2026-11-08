@@ -1,0 +1,71 @@
+// unionfind: disjoint-set union with path compression and union by size.
+module unionfind
+begin
+    type Sets: record
+    begin
+        parent: *int
+        size: *int
+        count: int
+        groups: int
+    end
+
+    fn new(count: int): *unionfind.Sets
+    begin
+        var sets: *unionfind.Sets := alloc(32)
+        sets.parent := alloc(count * 8 + 8)
+        sets.size := alloc(count * 8 + 8)
+        sets.count := count
+        sets.groups := count
+        var index: int := 0
+        while index < count {
+            *(sets.parent + index) := index
+            *(sets.size + index) := 1
+            index := index + 1
+        }
+        return sets
+    end
+
+    fn find(sets: *unionfind.Sets, item: int): int
+    begin
+        var root: int := item
+        while *(sets.parent + root) != root { root := *(sets.parent + root) }
+        var cursor: int := item
+        while *(sets.parent + cursor) != root {
+            var next: int := *(sets.parent + cursor)
+            *(sets.parent + cursor) := root
+            cursor := next
+        }
+        return root
+    end
+
+    fn union(sets: *unionfind.Sets, a: int, b: int): int
+    begin
+        var rootA: int := find(sets, a)
+        var rootB: int := find(sets, b)
+        if rootA = rootB { return 0 }
+        if *(sets.size + rootA) < *(sets.size + rootB) {
+            var swap: int := rootA
+            rootA := rootB
+            rootB := swap
+        }
+        *(sets.parent + rootB) := rootA
+        *(sets.size + rootA) := *(sets.size + rootA) + *(sets.size + rootB)
+        sets.groups := sets.groups - 1
+        return 1
+    end
+
+    fn connected(sets: *unionfind.Sets, a: int, b: int): int
+    begin
+        return find(sets, a) = find(sets, b)
+    end
+
+    fn group_size(sets: *unionfind.Sets, item: int): int
+    begin
+        return *(sets.size + find(sets, item))
+    end
+
+    fn groups(sets: *unionfind.Sets): int
+    begin
+        return sets.groups
+    end
+end

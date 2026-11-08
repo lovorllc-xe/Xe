@@ -1,0 +1,63 @@
+// search: binary search helpers over sorted intlist and strlist values.
+uses intlist
+uses strlist
+
+module search
+begin
+    // First index whose value is >= target.
+    fn lower_bound(list: *intlist.List, target: int): int
+    begin
+        var low: int := 0
+        var high: int := intlist.len(list)
+        while low < high {
+            var middle: int := low + (high - low) / 2
+            if intlist.get(list, middle) < target { low := middle + 1 }
+            else { high := middle }
+        }
+        return low
+    end
+
+    // First index whose value is > target.
+    fn upper_bound(list: *intlist.List, target: int): int
+    begin
+        var low: int := 0
+        var high: int := intlist.len(list)
+        while low < high {
+            var middle: int := low + (high - low) / 2
+            if intlist.get(list, middle) <= target { low := middle + 1 }
+            else { high := middle }
+        }
+        return low
+    end
+
+    fn binary(list: *intlist.List, target: int): int
+    begin
+        var index: int := lower_bound(list, target)
+        if index < intlist.len(list) && intlist.get(list, index) = target { return index }
+        return -1
+    end
+
+    fn count(list: *intlist.List, target: int): int
+    begin
+        return upper_bound(list, target) - lower_bound(list, target)
+    end
+
+    fn linear(list: *intlist.List, target: int): int
+    begin
+        return intlist.index_of(list, target)
+    end
+
+    fn strings(list: *strlist.List, target: string): int
+    begin
+        var low: int := 0
+        var high: int := strlist.len(list) - 1
+        while low <= high {
+            var middle: int := low + (high - low) / 2
+            var order: int := strlist.compare(strlist.get(list, middle), target)
+            if order = 0 { return middle }
+            if order < 0 { low := middle + 1 }
+            else { high := middle - 1 }
+        }
+        return -1
+    end
+end

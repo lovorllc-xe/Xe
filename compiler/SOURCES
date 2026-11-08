@@ -1,0 +1,13 @@
+token.xe
+lexer.xe
+ast.xe
+memo.xe
+diag.xe
+parser.xe
+checker.xe
+codegen.xe
+optimizer.xe
+runtime.xe
+memory.xe
+logo.xe
+main.xe

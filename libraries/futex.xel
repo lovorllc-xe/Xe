@@ -1,0 +1,30 @@
+// futex: thin wrappers over the Linux futex system call for building blocking primitives.
+module futex
+begin
+    // Sleeps while the 32-bit word at address equals expected.
+    fn wait(address: *void, expected: int): int
+    begin
+        return syscall.invoke6(202, address, 128, expected, 0, 0, 0)
+    end
+
+    fn wait_timeout(address: *void, expected: int, nanoseconds: int): int
+    begin
+        var timeout: *int := alloc(16)
+        *timeout := nanoseconds / 1000000000
+        *(timeout + 1) := nanoseconds % 1000000000
+        var result: int := syscall.invoke6(202, address, 128, expected, timeout, 0, 0)
+        free(timeout)
+        return result
+    end
+
+    // Wakes up to count waiters; returns how many were woken.
+    fn wake(address: *void, count: int): int
+    begin
+        return syscall.invoke6(202, address, 129, count, 0, 0, 0)
+    end
+
+    fn wake_all(address: *void): int
+    begin
+        return wake(address, 2147483647)
+    end
+end

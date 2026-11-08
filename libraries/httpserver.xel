@@ -1,0 +1,126 @@
+// httpserver: a small HTTP/1.1 server. Accept a request, inspect it, send one response.
+//   var server: int := httpserver.listen(8080)
+//   while 1 = 1 { var req: *httpserver.Request := httpserver.next(server) ... httpserver.respond(req, 200, "text/plain", "hi") }
+uses tcp
+uses http
+uses url
+uses strmap
+uses strings
+
+module httpserver
+begin
+    type Request: record
+    begin
+        conn: *tcp.Conn
+        method: string
+        path: string
+        query: *strmap.Map
+        headers: *strmap.Map
+        body: string
+        valid: int
+    end
+
+    fn listen(port: int): int
+    begin
+        return tcp.listen(port, 128)
+    end
+
+    fn port(server: int): int
+    begin
+        return tcp.local_port(server)
+    end
+
+    // Blocks until a client sends a request.
+    fn next(server: int): *httpserver.Request
+    begin
+        var req: *httpserver.Request := alloc(56)
+        req.conn := tcp.accept(server)
+        req.method := ""
+        req.path := ""
+        req.query := strmap.new()
+        req.headers := strmap.new()
+        req.body := ""
+        req.valid := 0
+        if tcp.ok(req.conn) = 0 { return req }
+        var line: string := tcp.read_line(req.conn)
+        var first: int := strings.index_of(line, " ")
+        var second: int := strings.index_from(line, " ", first + 1)
+        if first < 0 || second < 0 { return req }
+        req.method := str.slice(line, 0, first)
+        var target: string := str.slice(line, first + 1, second)
+        var question: int := strings.index_of(target, "?")
+        if question >= 0 {
+            req.query := url.parse_query(str.slice(target, question + 1, str.length(target)))
+            target := str.slice(target, 0, question)
+        }
+        req.path := url.decode(target)
+        var reading: int := 1
+        while reading = 1 {
+            var header: string := tcp.read_line(req.conn)
+            if str.length(header) = 0 { reading := 0 }
+            else {
+                var colon: int := strings.index_of(header, ":")
+                if colon > 0 { strmap.put(req.headers, strings.to_lower(strings.trim(str.slice(header, 0, colon))), strings.trim(str.slice(header, colon + 1, str.length(header)))) }
+            }
+        }
+        var lengthText: string := strmap.get(req.headers, "content-length", "")
+        if str.length(lengthText) > 0 {
+            var length: int := 0
+            var k: int := 0
+            while k < str.length(lengthText) {
+                length := length * 10 + str.char(lengthText, k) - 48
+                k := k + 1
+            }
+            req.body := tcp.read_exact(req.conn, length)
+        }
+        req.valid := 1
+        return req
+    end
+
+    fn header(req: *httpserver.Request, name: string): string
+    begin
+        return strmap.get(req.headers, strings.to_lower(name), "")
+    end
+
+    fn param(req: *httpserver.Request, name: string): string
+    begin
+        return strmap.get(req.query, name, "")
+    end
+
+    fn respond_headers(req: *httpserver.Request, status: int, contentType: string, extraHeaders: string, body: string)
+    begin
+        var text: string := "HTTP/1.1 " + str.number(status) + " " + http.status_text(status) + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + str.number(str.length(body)) + "\r\nConnection: close\r\nServer: xe-httpserver/2.0\r\n" + extraHeaders + "\r\n" + body
+        tcp.send(req.conn, text)
+        tcp.close(req.conn)
+    end
+
+    fn respond(req: *httpserver.Request, status: int, contentType: string, body: string)
+    begin
+        respond_headers(req, status, contentType, "", body)
+    end
+
+    fn text(req: *httpserver.Request, body: string)
+    begin
+        respond(req, 200, "text/plain; charset=utf-8", body)
+    end
+
+    fn json(req: *httpserver.Request, body: string)
+    begin
+        respond(req, 200, "application/json", body)
+    end
+
+    fn not_found(req: *httpserver.Request)
+    begin
+        respond(req, 404, "text/plain; charset=utf-8", "not found\n")
+    end
+
+    fn redirect(req: *httpserver.Request, location: string)
+    begin
+        respond_headers(req, 302, "text/plain", "Location: " + location + "\r\n", "")
+    end
+
+    fn close(server: int)
+    begin
+        tcp.close_server(server)
+    end
+end

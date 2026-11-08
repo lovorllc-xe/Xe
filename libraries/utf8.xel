@@ -1,0 +1,127 @@
+// utf8: decoding, encoding and validating UTF-8 text.
+uses intlist
+
+module utf8
+begin
+    // Number of bytes in the sequence starting with this byte (1 for invalid lead bytes).
+    fn sequence_length(lead: int): int
+    begin
+        if lead < 128 { return 1 }
+        if lead >= 194 && lead <= 223 { return 2 }
+        if lead >= 224 && lead <= 239 { return 3 }
+        if lead >= 240 && lead <= 244 { return 4 }
+        return 1
+    end
+
+    // Decodes the code point at byte offset index; returns 65533 for invalid input.
+    fn decode(text: string, index: int): int
+    begin
+        var size: int := str.length(text)
+        if index < 0 || index >= size { return -1 }
+        var lead: int := str.char(text, index)
+        var length: int := sequence_length(lead)
+        if length = 1 {
+            if lead < 128 { return lead }
+            return 65533
+        }
+        if index + length > size { return 65533 }
+        var value: int := lead & (127 >> length)
+        var offset: int := 1
+        while offset < length {
+            var next: int := str.char(text, index + offset)
+            if (next & 192) != 128 { return 65533 }
+            value := (value << 6) | (next & 63)
+            offset := offset + 1
+        }
+        return value
+    end
+
+    fn width_at(text: string, index: int): int
+    begin
+        var length: int := sequence_length(str.char(text, index))
+        if index + length > str.length(text) { return 1 }
+        return length
+    end
+
+    fn encode(code: int): string
+    begin
+        if code < 128 { return str.fromchar(code) }
+        if code < 2048 { return str.fromchar(192 | (code >> 6)) + str.fromchar(128 | (code & 63)) }
+        if code < 65536 { return str.fromchar(224 | (code >> 12)) + str.fromchar(128 | ((code >> 6) & 63)) + str.fromchar(128 | (code & 63)) }
+        return str.fromchar(240 | (code >> 18)) + str.fromchar(128 | ((code >> 12) & 63)) + str.fromchar(128 | ((code >> 6) & 63)) + str.fromchar(128 | (code & 63))
+    end
+
+    fn count(text: string): int
+    begin
+        var total: int := 0
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            index := index + width_at(text, index)
+            total := total + 1
+        }
+        return total
+    end
+
+    fn runes(text: string): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            intlist.push(out, decode(text, index))
+            index := index + width_at(text, index)
+        }
+        return out
+    end
+
+    fn from_runes(list: *intlist.List): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < intlist.len(list) {
+            text := str.append(text, encode(intlist.get(list, index)))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn valid(text: string): int
+    begin
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var lead: int := str.char(text, index)
+            if lead >= 128 && decode(text, index) = 65533 { return 0 }
+            index := index + width_at(text, index)
+        }
+        return 1
+    end
+
+    // Byte offset of the n-th code point.
+    fn offset(text: string, position: int): int
+    begin
+        var index: int := 0
+        var seen: int := 0
+        var size: int := str.length(text)
+        while index < size && seen < position {
+            index := index + width_at(text, index)
+            seen := seen + 1
+        }
+        return index
+    end
+
+    fn substring(text: string, start: int, count: int): string
+    begin
+        var first: int := offset(text, start)
+        var last: int := first + offset(str.slice(text, first, str.length(text)), count)
+        return str.slice(text, first, last)
+    end
+
+    fn reverse(text: string): string
+    begin
+        var list: *intlist.List := runes(text)
+        intlist.reverse(list)
+        return from_runes(list)
+    end
+end

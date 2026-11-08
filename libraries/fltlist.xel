@@ -1,0 +1,164 @@
+// fltlist: a growable array of flt values with numeric helpers.
+module fltlist
+begin
+    type List: record
+    begin
+        data: *flt
+        size: int
+        capacity: int
+    end
+
+    fn new(): *fltlist.List
+    begin
+        var list: *fltlist.List := alloc(24)
+        list.data := alloc(64)
+        list.size := 0
+        list.capacity := 8
+        return list
+    end
+
+    fn push(list: *fltlist.List, value: flt)
+    begin
+        if list.size >= list.capacity {
+            var room: int := list.capacity * 2
+            var bigger: *flt := alloc(room * 8)
+            runtime.mem.copy(bigger, list.data, list.size * 8)
+            free(list.data)
+            list.data := bigger
+            list.capacity := room
+        }
+        *(list.data + list.size) := value
+        list.size := list.size + 1
+    end
+
+    fn len(list: *fltlist.List): int
+    begin
+        return list.size
+    end
+
+    fn get(list: *fltlist.List, index: int): flt
+    begin
+        if index < 0 || index >= list.size { return 0.0 }
+        return *(list.data + index)
+    end
+
+    fn set(list: *fltlist.List, index: int, value: flt): int
+    begin
+        if index < 0 || index >= list.size { return 0 }
+        *(list.data + index) := value
+        return 1
+    end
+
+    fn pop(list: *fltlist.List): flt
+    begin
+        if list.size = 0 { return 0.0 }
+        list.size := list.size - 1
+        return *(list.data + list.size)
+    end
+
+    fn clear(list: *fltlist.List)
+    begin
+        list.size := 0
+    end
+
+    fn sum(list: *fltlist.List): flt
+    begin
+        var total: flt := 0.0
+        var index: int := 0
+        while index < list.size {
+            total := total + *(list.data + index)
+            index := index + 1
+        }
+        return total
+    end
+
+    fn mean(list: *fltlist.List): flt
+    begin
+        if list.size = 0 { return 0.0 }
+        return sum(list) / list.size
+    end
+
+    fn min(list: *fltlist.List): flt
+    begin
+        if list.size = 0 { return 0.0 }
+        var best: flt := *list.data
+        var index: int := 1
+        while index < list.size {
+            if *(list.data + index) < best { best := *(list.data + index) }
+            index := index + 1
+        }
+        return best
+    end
+
+    fn max(list: *fltlist.List): flt
+    begin
+        if list.size = 0 { return 0.0 }
+        var best: flt := *list.data
+        var index: int := 1
+        while index < list.size {
+            if *(list.data + index) > best { best := *(list.data + index) }
+            index := index + 1
+        }
+        return best
+    end
+
+    fn sort(list: *fltlist.List)
+    begin
+        var outer: int := 1
+        while outer < list.size {
+            var value: flt := *(list.data + outer)
+            var inner: int := outer - 1
+            var moving: int := 1
+            while moving = 1 {
+                if inner < 0 { moving := 0 }
+                else {
+                    if *(list.data + inner) > value {
+                        *(list.data + inner + 1) := *(list.data + inner)
+                        inner := inner - 1
+                    }
+                    else { moving := 0 }
+                }
+            }
+            *(list.data + inner + 1) := value
+            outer := outer + 1
+        }
+    end
+
+    fn scale(list: *fltlist.List, factor: flt)
+    begin
+        var index: int := 0
+        while index < list.size {
+            *(list.data + index) := *(list.data + index) * factor
+            index := index + 1
+        }
+    end
+
+    fn dot(left: *fltlist.List, right: *fltlist.List): flt
+    begin
+        var total: flt := 0.0
+        var index: int := 0
+        while index < left.size && index < right.size {
+            total := total + *(left.data + index) * *(right.data + index)
+            index := index + 1
+        }
+        return total
+    end
+
+    fn join(list: *fltlist.List, separator: string, decimals: int): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < list.size {
+            if index > 0 { text := str.append(text, separator) }
+            text := str.append(text, flt.format(*(list.data + index), decimals))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn release(list: *fltlist.List)
+    begin
+        free(list.data)
+        free(list)
+    end
+end

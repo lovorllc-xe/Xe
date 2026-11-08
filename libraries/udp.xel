@@ -1,0 +1,68 @@
+// udp: IPv4 datagram sockets.
+uses ip
+uses cstr
+
+module udp
+begin
+    fn socket(): int
+    begin
+        return syscall.invoke3(41, 2, 2, 0)
+    end
+
+    fn bind(fd: int, port: int): int
+    begin
+        var local: *void := ip.sockaddr(0, port)
+        var result: int := syscall.invoke3(49, fd, local, 16)
+        free(local)
+        return result = 0
+    end
+
+    fn local_port(fd: int): int
+    begin
+        var raw: *void := alloc(16)
+        var size: *int := alloc(8)
+        *size := 16
+        syscall.invoke3(51, fd, raw, size)
+        var port: int := ip.sockaddr_port(raw)
+        free(raw)
+        free(size)
+        return port
+    end
+
+    fn send_to(fd: int, address: string, port: int, text: string): int
+    begin
+        var target: *void := ip.sockaddr(ip.parse(address), port)
+        var sent: int := syscall.invoke6(44, fd, cstr.pointer(text), str.length(text), 0, target, 16)
+        free(target)
+        return sent
+    end
+
+    fn receive(fd: int, limit: int): string
+    begin
+        var buffer: *void := alloc(limit + 1)
+        var got: int := syscall.invoke6(45, fd, buffer, limit, 0, 0, 0)
+        var text: string := ""
+        if got > 0 { text := cstr.from_bytes(buffer, got) }
+        free(buffer)
+        return text
+    end
+
+    // Waits up to timeout milliseconds for data; 1 if readable.
+    fn wait_readable(fd: int, timeout: int): int
+    begin
+        var poll: *void := alloc(8)
+        runtime.hw.write32(poll, fd)
+        runtime.hw.write8(poll + 4, 1)
+        runtime.hw.write8(poll + 5, 0)
+        runtime.hw.write8(poll + 6, 0)
+        runtime.hw.write8(poll + 7, 0)
+        var result: int := syscall.invoke3(7, poll, 1, timeout)
+        free(poll)
+        return result > 0
+    end
+
+    fn close(fd: int)
+    begin
+        syscall.invoke3(3, fd, 0, 0)
+    end
+end

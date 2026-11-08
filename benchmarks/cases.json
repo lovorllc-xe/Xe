@@ -1,0 +1,1675 @@
+[
+ {
+  "id": "sumsq-1",
+  "family": "sumsq",
+  "n": 1,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-4",
+  "family": "sumsq",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-18",
+  "family": "sumsq",
+  "n": 18,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-78",
+  "family": "sumsq",
+  "n": 78,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-331",
+  "family": "sumsq",
+  "n": 331,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-1414",
+  "family": "sumsq",
+  "n": 1414,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-6034",
+  "family": "sumsq",
+  "n": 6034,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-25747",
+  "family": "sumsq",
+  "n": 25747,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-109856",
+  "family": "sumsq",
+  "n": 109856,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-468735",
+  "family": "sumsq",
+  "n": 468735,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sumsq-2000000",
+  "family": "sumsq",
+  "n": 2000000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "fib-3",
+  "family": "fib",
+  "n": 3,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-4",
+  "family": "fib",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-5",
+  "family": "fib",
+  "n": 5,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-6",
+  "family": "fib",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-7",
+  "family": "fib",
+  "n": 7,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-9",
+  "family": "fib",
+  "n": 9,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-11",
+  "family": "fib",
+  "n": 11,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-14",
+  "family": "fib",
+  "n": 14,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-17",
+  "family": "fib",
+  "n": 17,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-22",
+  "family": "fib",
+  "n": 22,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "fib-27",
+  "family": "fib",
+  "n": 27,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-2",
+  "family": "collatz",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-5",
+  "family": "collatz",
+  "n": 5,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-13",
+  "family": "collatz",
+  "n": 13,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-34",
+  "family": "collatz",
+  "n": 34,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-87",
+  "family": "collatz",
+  "n": 87,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-224",
+  "family": "collatz",
+  "n": 224,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-574",
+  "family": "collatz",
+  "n": 574,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "collatz-1475",
+  "family": "collatz",
+  "n": 1475,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "collatz-3789",
+  "family": "collatz",
+  "n": 3789,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "collatz-9733",
+  "family": "collatz",
+  "n": 9733,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "collatz-25000",
+  "family": "collatz",
+  "n": 25000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sieve-2",
+  "family": "sieve",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sieve-7",
+  "family": "sieve",
+  "n": 7,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sieve-28",
+  "family": "sieve",
+  "n": 28,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sieve-102",
+  "family": "sieve",
+  "n": 102,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sieve-381",
+  "family": "sieve",
+  "n": 381,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sieve-1414",
+  "family": "sieve",
+  "n": 1414,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sieve-5253",
+  "family": "sieve",
+  "n": 5253,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sieve-19512",
+  "family": "sieve",
+  "n": 19512,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sieve-72478",
+  "family": "sieve",
+  "n": 72478,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sieve-269217",
+  "family": "sieve",
+  "n": 269217,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sieve-1000000",
+  "family": "sieve",
+  "n": 1000000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "matmul-2",
+  "family": "matmul",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-3",
+  "family": "matmul",
+  "n": 3,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-4",
+  "family": "matmul",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-6",
+  "family": "matmul",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-9",
+  "family": "matmul",
+  "n": 9,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-13",
+  "family": "matmul",
+  "n": 13,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-18",
+  "family": "matmul",
+  "n": 18,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-26",
+  "family": "matmul",
+  "n": 26,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-38",
+  "family": "matmul",
+  "n": 38,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-55",
+  "family": "matmul",
+  "n": 55,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "matmul-80",
+  "family": "matmul",
+  "n": 80,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-2",
+  "family": "mandel",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-3",
+  "family": "mandel",
+  "n": 3,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-4",
+  "family": "mandel",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-6",
+  "family": "mandel",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-10",
+  "family": "mandel",
+  "n": 10,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-14",
+  "family": "mandel",
+  "n": 14,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-21",
+  "family": "mandel",
+  "n": 21,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-31",
+  "family": "mandel",
+  "n": 31,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-46",
+  "family": "mandel",
+  "n": 46,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-68",
+  "family": "mandel",
+  "n": 68,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "mandel-100",
+  "family": "mandel",
+  "n": 100,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-4",
+  "family": "sort",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-8",
+  "family": "sort",
+  "n": 8,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-14",
+  "family": "sort",
+  "n": 14,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-28",
+  "family": "sort",
+  "n": 28,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-53",
+  "family": "sort",
+  "n": 53,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-100",
+  "family": "sort",
+  "n": 100,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-190",
+  "family": "sort",
+  "n": 190,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-362",
+  "family": "sort",
+  "n": 362,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-690",
+  "family": "sort",
+  "n": 690,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "sort-1313",
+  "family": "sort",
+  "n": 1313,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "sort-2500",
+  "family": "sort",
+  "n": 2500,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-4",
+  "family": "hashtab",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-12",
+  "family": "hashtab",
+  "n": 12,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-35",
+  "family": "hashtab",
+  "n": 35,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-103",
+  "family": "hashtab",
+  "n": 103,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-303",
+  "family": "hashtab",
+  "n": 303,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-894",
+  "family": "hashtab",
+  "n": 894,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-2639",
+  "family": "hashtab",
+  "n": 2639,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-7786",
+  "family": "hashtab",
+  "n": 7786,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-22974",
+  "family": "hashtab",
+  "n": 22974,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-67785",
+  "family": "hashtab",
+  "n": 67785,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "hashtab-200000",
+  "family": "hashtab",
+  "n": 200000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-2",
+  "family": "gcdsum",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-6",
+  "family": "gcdsum",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-17",
+  "family": "gcdsum",
+  "n": 17,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-51",
+  "family": "gcdsum",
+  "n": 51,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-152",
+  "family": "gcdsum",
+  "n": 152,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-447",
+  "family": "gcdsum",
+  "n": 447,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-1320",
+  "family": "gcdsum",
+  "n": 1320,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-3893",
+  "family": "gcdsum",
+  "n": 3893,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-11487",
+  "family": "gcdsum",
+  "n": 11487,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-33892",
+  "family": "gcdsum",
+  "n": 33892,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "gcdsum-100000",
+  "family": "gcdsum",
+  "n": 100000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "lcg-1",
+  "family": "lcg",
+  "n": 1,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "lcg-4",
+  "family": "lcg",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "lcg-18",
+  "family": "lcg",
+  "n": 18,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "lcg-78",
+  "family": "lcg",
+  "n": 78,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "lcg-331",
+  "family": "lcg",
+  "n": 331,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "lcg-1414",
+  "family": "lcg",
+  "n": 1414,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "lcg-6034",
+  "family": "lcg",
+  "n": 6034,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "lcg-25747",
+  "family": "lcg",
+  "n": 25747,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "lcg-109856",
+  "family": "lcg",
+  "n": 109856,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "lcg-468735",
+  "family": "lcg",
+  "n": 468735,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "lcg-2000000",
+  "family": "lcg",
+  "n": 2000000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-2",
+  "family": "binsearch",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-6",
+  "family": "binsearch",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-17",
+  "family": "binsearch",
+  "n": 17,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-51",
+  "family": "binsearch",
+  "n": 51,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-152",
+  "family": "binsearch",
+  "n": 152,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-447",
+  "family": "binsearch",
+  "n": 447,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-1320",
+  "family": "binsearch",
+  "n": 1320,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-3893",
+  "family": "binsearch",
+  "n": 3893,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-11487",
+  "family": "binsearch",
+  "n": 11487,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-33892",
+  "family": "binsearch",
+  "n": 33892,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "binsearch-100000",
+  "family": "binsearch",
+  "n": 100000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "prefix-2",
+  "family": "prefix",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "prefix-8",
+  "family": "prefix",
+  "n": 8,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "prefix-32",
+  "family": "prefix",
+  "n": 32,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "prefix-126",
+  "family": "prefix",
+  "n": 126,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "prefix-502",
+  "family": "prefix",
+  "n": 502,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "prefix-2000",
+  "family": "prefix",
+  "n": 2000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "prefix-7962",
+  "family": "prefix",
+  "n": 7962,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "prefix-31698",
+  "family": "prefix",
+  "n": 31698,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "prefix-126191",
+  "family": "prefix",
+  "n": 126191,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "prefix-502377",
+  "family": "prefix",
+  "n": 502377,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "prefix-2000000",
+  "family": "prefix",
+  "n": 2000000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-2",
+  "family": "popcnt",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-6",
+  "family": "popcnt",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-20",
+  "family": "popcnt",
+  "n": 20,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-63",
+  "family": "popcnt",
+  "n": 63,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-200",
+  "family": "popcnt",
+  "n": 200,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-632",
+  "family": "popcnt",
+  "n": 632,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-2000",
+  "family": "popcnt",
+  "n": 2000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-6325",
+  "family": "popcnt",
+  "n": 6325,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-20000",
+  "family": "popcnt",
+  "n": 20000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-63246",
+  "family": "popcnt",
+  "n": 63246,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "popcnt-200000",
+  "family": "popcnt",
+  "n": 200000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "editdist-2",
+  "family": "editdist",
+  "n": 2,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-3",
+  "family": "editdist",
+  "n": 3,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-6",
+  "family": "editdist",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-10",
+  "family": "editdist",
+  "n": 10,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-17",
+  "family": "editdist",
+  "n": 17,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-28",
+  "family": "editdist",
+  "n": 28,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-48",
+  "family": "editdist",
+  "n": 48,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-82",
+  "family": "editdist",
+  "n": 82,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-139",
+  "family": "editdist",
+  "n": 139,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-235",
+  "family": "editdist",
+  "n": 235,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "editdist-400",
+  "family": "editdist",
+  "n": 400,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "queens-4",
+  "family": "queens",
+  "n": 4,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "queens-5",
+  "family": "queens",
+  "n": 5,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "queens-6",
+  "family": "queens",
+  "n": 6,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "queens-7",
+  "family": "queens",
+  "n": 7,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "queens-8",
+  "family": "queens",
+  "n": 8,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "queens-9",
+  "family": "queens",
+  "n": 9,
+  "kind": "micro",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-1",
+  "family": "strbuild",
+  "n": 1,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-4",
+  "family": "strbuild",
+  "n": 4,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-14",
+  "family": "strbuild",
+  "n": 14,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-51",
+  "family": "strbuild",
+  "n": 51,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-190",
+  "family": "strbuild",
+  "n": 190,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-707",
+  "family": "strbuild",
+  "n": 707,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-2627",
+  "family": "strbuild",
+  "n": 2627,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-9756",
+  "family": "strbuild",
+  "n": 9756,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-36239",
+  "family": "strbuild",
+  "n": 36239,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-134609",
+  "family": "strbuild",
+  "n": 134609,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "strbuild-500000",
+  "family": "strbuild",
+  "n": 500000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-1",
+  "family": "listalloc",
+  "n": 1,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-3",
+  "family": "listalloc",
+  "n": 3,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-11",
+  "family": "listalloc",
+  "n": 11,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-39",
+  "family": "listalloc",
+  "n": 39,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-132",
+  "family": "listalloc",
+  "n": 132,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-447",
+  "family": "listalloc",
+  "n": 447,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-1516",
+  "family": "listalloc",
+  "n": 1516,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-5137",
+  "family": "listalloc",
+  "n": 5137,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-17411",
+  "family": "listalloc",
+  "n": 17411,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-59010",
+  "family": "listalloc",
+  "n": 59010,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "listalloc-200000",
+  "family": "listalloc",
+  "n": 200000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-1",
+  "family": "churn",
+  "n": 1,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-4",
+  "family": "churn",
+  "n": 4,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-12",
+  "family": "churn",
+  "n": 12,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-44",
+  "family": "churn",
+  "n": 44,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-155",
+  "family": "churn",
+  "n": 155,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-548",
+  "family": "churn",
+  "n": 548,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-1933",
+  "family": "churn",
+  "n": 1933,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-6823",
+  "family": "churn",
+  "n": 6823,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-24082",
+  "family": "churn",
+  "n": 24082,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-84998",
+  "family": "churn",
+  "n": 84998,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "churn-300000",
+  "family": "churn",
+  "n": 300000,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-1",
+  "family": "treebuild",
+  "n": 1,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-2",
+  "family": "treebuild",
+  "n": 2,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-3",
+  "family": "treebuild",
+  "n": 3,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-4",
+  "family": "treebuild",
+  "n": 4,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-5",
+  "family": "treebuild",
+  "n": 5,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-7",
+  "family": "treebuild",
+  "n": 7,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-9",
+  "family": "treebuild",
+  "n": 9,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-11",
+  "family": "treebuild",
+  "n": 11,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "treebuild-15",
+  "family": "treebuild",
+  "n": 15,
+  "kind": "kernel",
+  "threaded": false
+ },
+ {
+  "id": "tsum-1",
+  "family": "tsum",
+  "n": 1,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-4",
+  "family": "tsum",
+  "n": 4,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-18",
+  "family": "tsum",
+  "n": 18,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-78",
+  "family": "tsum",
+  "n": 78,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-331",
+  "family": "tsum",
+  "n": 331,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-1414",
+  "family": "tsum",
+  "n": 1414,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-6034",
+  "family": "tsum",
+  "n": 6034,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-25747",
+  "family": "tsum",
+  "n": 25747,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-109856",
+  "family": "tsum",
+  "n": 109856,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-468735",
+  "family": "tsum",
+  "n": 468735,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tsum-2000000",
+  "family": "tsum",
+  "n": 2000000,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-1",
+  "family": "tprime",
+  "n": 1,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-3",
+  "family": "tprime",
+  "n": 3,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-8",
+  "family": "tprime",
+  "n": 8,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-24",
+  "family": "tprime",
+  "n": 24,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-69",
+  "family": "tprime",
+  "n": 69,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-200",
+  "family": "tprime",
+  "n": 200,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-577",
+  "family": "tprime",
+  "n": 577,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-1665",
+  "family": "tprime",
+  "n": 1665,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-4804",
+  "family": "tprime",
+  "n": 4804,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-13863",
+  "family": "tprime",
+  "n": 13863,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tprime-40000",
+  "family": "tprime",
+  "n": 40000,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-1",
+  "family": "tlcg",
+  "n": 1,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-4",
+  "family": "tlcg",
+  "n": 4,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-18",
+  "family": "tlcg",
+  "n": 18,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-78",
+  "family": "tlcg",
+  "n": 78,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-331",
+  "family": "tlcg",
+  "n": 331,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-1414",
+  "family": "tlcg",
+  "n": 1414,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-6034",
+  "family": "tlcg",
+  "n": 6034,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-25747",
+  "family": "tlcg",
+  "n": 25747,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-109856",
+  "family": "tlcg",
+  "n": 109856,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-468735",
+  "family": "tlcg",
+  "n": 468735,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "tlcg-2000000",
+  "family": "tlcg",
+  "n": 2000000,
+  "kind": "threads",
+  "threaded": true
+ },
+ {
+  "id": "mono-1",
+  "family": "mono",
+  "n": 1,
+  "kind": "monolithic",
+  "threaded": false
+ },
+ {
+  "id": "mono-3",
+  "family": "mono",
+  "n": 3,
+  "kind": "monolithic",
+  "threaded": false
+ },
+ {
+  "id": "mono-10",
+  "family": "mono",
+  "n": 10,
+  "kind": "monolithic",
+  "threaded": false
+ },
+ {
+  "id": "mono-30",
+  "family": "mono",
+  "n": 30,
+  "kind": "monolithic",
+  "threaded": false
+ }
+]

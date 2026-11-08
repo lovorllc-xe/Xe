@@ -1,0 +1,1441 @@
+XE 2.0.0
+
+WHAT CHANGED IN 2.0.0
+=====================
+Syntax is unchanged. The compiler, runtime and library set changed:
+
+ - The compiler builds itself from bootstrap/xe-seed.s.gz using only as, ld
+   and gzip (scripts/bootstrap.sh). The C++ code in src/ is legacy.
+ - Diagnostics print file:line:col, the source line and a caret.
+ - New allocator and conservative mark-and-sweep garbage collector:
+   runtime.gc.collect(), runtime.gc.enable(flag), runtime.gc.stats(which); the
+   heapstats library wraps them. The collector never runs while threads are
+   active. free(0) is a no-op; double frees are ignored.
+ - Record fields auto-dereference through pointers: node.next works for a
+   *Node. Use @p to turn a pointer into an int (null check: @p = 0).
+ - Names that match builtins (new, delete, read, write, free) cannot be used
+   unqualified for module functions; call them as module.new().
+ - xe --version / -v / -V prints the colored logo.
+ - 155 libraries; see docs/libraries.md.
+ - Parenthesised names such as (n) * 8 now parse correctly.
+
+A first description, complete language tutorial, and library reference
+======================================================================
+
+PART I — FIRST DESCRIPTION
+==========================
+
+1. What Xe is
+-------------
+
+Xe is a statically checked programming language with a small syntax, records,
+fixed-size arrays, pointers, explicit memory management, and a native-code
+compiler. The installed self-hosted compiler currently targets Linux x86-64
+for general-purpose executable builds. It emits native assembly and links it
+with the system assembler and linker. The compiler itself can be built from
+its Xe source after a small C++ bootstrap build.
+
+Xe source files end in .xe. Importable source libraries end in .xel. A normal
+program starts at fn main(): int. The returned integer becomes the process
+exit status; zero conventionally means success.
+
+Xe is still evolving. The standard library is compact and several libraries
+are Linux-specific. The library catalog below describes the code currently
+present in this repository; it does not promise HTTP/2, databases, TLS, GUI,
+async/await, or other facilities that have not been implemented.
+
+2. Install and use
+------------------
+
+On Linux x86-64, install from the repository or a Linux release bundle:
+
+    ./install/install.sh
+    xe --version
+    xe --help
+
+Build a source file to a native executable and run it:
+
+    xe --build hello.xe -o hello.xee
+    ./hello.xee
+
+The output extension .xee is a naming convention. The result is a normal
+native executable; the shell executes it with ./hello.xee. Xe does not have
+an interpreter command such as xe --run.
+
+The platform bundles provide compiler installation scripts, but the current
+general executable backend is Linux x86-64. macOS and Windows packages
+currently build the compiler command-line program; they do not provide the
+same complete native runtime target as Linux.
+
+PART II — FULL TUTORIAL
+=======================
+
+3. Your first Xe program
+------------------------
+
+Create hello.xe:
+
+    fn main(): int
+    begin
+        writeln("Hello, Xe!")
+        return 0
+    end
+
+Build and run:
+
+    xe --build hello.xe -o hello.xee
+    ./hello.xee
+
+A function body starts with begin and ends with end. The outermost function
+body uses these words; small control-flow bodies use braces. A file can contain
+helper functions before or after main.
+
+4. Source layout, names, and statements
+---------------------------------------
+
+A newline normally ends a statement. Indentation is for people; it does not
+decide where a block starts or ends. Use // for a line comment:
+
+    // This is a comment.
+    var total: int := 10
+
+Names may contain letters, digits, and underscores. Dotted names are used for
+modules, fields, and multi-part function names:
+
+    math.sqrt(value)
+    point.x
+    string_utils.to_int(text)
+
+A semicolon is a line-continuation marker. It suppresses the following
+newline, joining the next physical line to the same statement. It is not a
+statement terminator and is not required at the end of a line.
+
+    var total: int := 20 + ;
+        22
+
+This declares total with value 42. Use continuation sparingly, for example
+when a long expression or argument list reads better across lines.
+
+Strings use double quotes. The lexer handles newline, tab, carriage return,
+backslash, and quote escapes. Xe strings are byte-oriented, zero-terminated
+runtime strings; str.length and str.char count bytes, not Unicode characters.
+A literal embedded zero byte is not a general-purpose binary-string facility.
+
+5. Printing and input
+---------------------
+
+write and writeln accept multiple values. write prints them consecutively;
+writeln prints the same values and then one newline. You do not need a
+separate write call for every fragment:
+
+    var name: string := "Mira"
+    var score: int := 17
+
+    write("Player: ", name, " | score: ")
+    writeln(score)
+    writeln("x = ", 4, ", y = ", 9, ", sum = ", 13)
+
+Values can be integers, floats, strings, or pointers. Convert a number to
+text with str.number when building a string with +:
+
+    writeln("score = " + str.number(score))
+
+read(variable) reads an int or flt. readln(variable) reads a string line.
+Both require a variable, not an arbitrary expression:
+
+    var age: int := 0
+    var note: string := ""
+    write("Age: ")
+    read(age)
+    write("Note: ")
+    readln(note)
+    writeln("You entered ", age, " and ", note)
+
+The io module provides equivalent convenience functions; see the standard
+library reference. Input behavior at end-of-file and error handling depend on
+the runtime and target.
+
+6. Values, types, declarations, and constants
+---------------------------------------------
+
+The principal types are:
+
+    int        signed 64-bit integer
+    flt        64-bit floating-point number
+    string     runtime text string
+    void       no returned value
+    *T         pointer to a value of type T
+    [N]T       fixed-size array of N values of type T
+
+Examples:
+
+    var count: int := 3
+    var ratio: flt := 0.75
+    var message: string := "ready"
+    var address: *int
+    var scores: [4]int
+    var matrix: [2][3]flt
+
+var creates a mutable local. := assigns or updates it. A declaration without
+an initializer receives the type's default value. const creates an immutable
+local binding and must have an initializer:
+
+    const max_attempts: int := 5
+
+Type aliases give a type another name:
+
+    type UserId: int
+    var owner: UserId := 42
+
+Records group named fields. Declare the record at module or file scope, then
+declare a value and assign fields:
+
+    type Point: record
+    begin
+        x: int
+        y: int
+    end
+
+    var origin: Point
+    origin.x := 0
+    origin.y := 0
+    writeln(origin.x, ", ", origin.y)
+
+Records may nest. A pointer to a record uses (*pointer).field:
+
+    var point_ptr: *Point := alloc(16)
+    (*point_ptr).x := 7
+    (*point_ptr).y := 8
+    free(point_ptr)
+
+Fixed arrays store elements inline. Indexes start at zero. Slices use a
+half-open range: [first:finish] includes first and stops before finish.
+
+    var values: [4]int
+    values[0] := 10
+    values[1] := 20
+    values[2] := 30
+    values[3] := 40
+    var first_two: [2]int := values[0:2]
+
+The compiler checks array indexes and slices where the array length is known.
+An array is not a dynamically growing vector. Use collections.Vector or
+collections.IntVector for the dynamic/bounded containers described later.
+
+7. Expressions and operators
+----------------------------
+
+Use := for assignment. Use = for equality. The lexer also accepts == as an
+equality spelling, but this guide uses = consistently. Comparisons produce
+integer truth values: 1 for true and 0 for false.
+
+    var same: int := 5 = 5
+    var different: int := 5 != 4
+
+Operators, from lower to higher precedence:
+
+    ||                         logical OR
+    &&                         logical AND
+    |  ^  &                    bitwise OR, XOR, AND
+    =  !=                      equality and inequality
+    <  >  <=  >=               comparisons
+    <<  >>                     bit shifts
+    +  -                       addition and subtraction
+    *  /  %                    multiplication, division, remainder
+    -  !  ~  *  &  @  #        unary operators
+
+Parentheses control grouping. Integer division with two int operands yields an
+int. An expression involving a flt yields a flt where the operator supports
+that combination.
+
+    var answer: int := (2 + 3) * 4
+    var fraction: flt := 7.5 / 2.0
+    var ok: int := answer >= 20 && fraction > 3.0
+
+The unary operators are:
+
+    -x        numeric negation
+    !x        logical not; result is 0 or 1
+    ~x        bitwise complement of an int
+    *p        dereference a typed pointer
+    &x        address of a local, array element, or function
+    @p        convert an addressable pointer to an integer address
+    #p        low-level hardware-value read; unsafe and target-dependent
+
+Use bitops.xel for named bit operations if that makes code clearer. The single
+& token is also binary bitwise AND between integers; && is logical AND.
+
+8. Conditions, loops, switch, and scopes
+----------------------------------------
+
+Write if conditions in parentheses, then put the body in braces. This is the
+canonical syntax and is required by the regular parser:
+
+    if (score >= 10) {
+        writeln("passed")
+    } else {
+        writeln("try again")
+    }
+
+while repeats while its condition is true:
+
+    var index: int := 0
+    while index < 3 {
+        writeln(index)
+        index := index + 1
+    }
+
+The C++ bootstrap parser also recognizes for (condition) { ... } as a
+condition-controlled loop, similar to while. The installed self-hosted compiler
+currently supports while but does not parse for, so use while in portable Xe
+programs. Xe does not currently provide C-style for(init; condition; step),
+break, or continue statements.
+
+switch selects one matching case, or default if no case matches. Execution
+leaves the switch after its selected arm:
+
+    switch answer begin
+        case 42
+            writeln("the answer")
+        case 0
+            writeln("zero")
+        default
+            writeln("another value")
+    end
+
+Blocks create local scopes. A local declared in a block is only available
+inside that block. Nested blocks can shadow an outer variable, but duplicate
+names in one scope are errors.
+
+9. Functions, modules, files, and libraries
+-------------------------------------------
+
+Functions declare typed parameters and, optionally, a result type:
+
+    fn add(left: int, right: int): int
+    begin
+        return left + right
+    end
+
+A function without a result type returns void. A non-void function returns a
+value with return. main conventionally returns an int process status.
+
+A module groups names into a dotted namespace:
+
+    module geometry
+    begin
+        fn area(width: int, height: int): int
+        begin
+            return width * height
+        end
+    end
+
+    fn main(): int
+    begin
+        writeln(geometry.area(5, 4))
+        return 0
+    end
+
+A top-level uses declaration imports a .xel source module:
+
+    uses math
+    uses string_utils
+
+    fn main(): int
+    begin
+        writeln(math.sqrt(81.0))
+        writeln(string_utils.trim("  Xe  "))
+        return 0
+    end
+
+A module named math in libraries/math.xel is called as math.function(...).
+Dependencies declared by a library with uses are loaded recursively. The
+self-hosted compiler searches for known standard libraries in libraries/;
+other imports are resolved beside the importing file or in a directory passed
+with --library-path.
+
+The source modules in std/ are built in automatically for normal compiler
+builds. io and mem are available without uses io or uses mem. The .xel
+libraries are explicit imports. Imported source is combined into the current
+build; Xe does not currently create separate reusable compiled library
+artifacts.
+
+You can pass multiple .xe files to one build. Put a declaration in one file
+and call it from another:
+
+    xe --build main.xe helpers.xe -o app.xee
+
+10. Memory, pointers, and cleanup
+---------------------------------
+
+alloc(bytes) requests raw memory and returns a pointer. free(pointer) releases
+a manually allocated block. new/delete are aliases. aligned_alloc(size,
+alignment) and alloc.aligned(size, alignment) request aligned memory; alignment
+must be a power of two and at least the platform's pointer alignment.
+
+    var cell: *int := alloc(8)
+    *cell := 73
+    writeln(*cell)
+    free(cell)
+
+Use the address-of operator to pass a local by pointer:
+
+    fn increment(value: *int): void
+    begin
+        *value := *value + 1
+    end
+
+    var number: int := 5
+    increment(&number)
+
+A gc.begin block creates a temporary allocation region. Allocations made
+inside it are released when the region ends. Do not return or retain a pointer
+to region-owned memory after closing the region:
+
+    gc.begin {
+        var temporary: *int := alloc(8)
+        *temporary := 99
+        writeln(*temporary)
+    }
+    gc.end
+
+defer schedules a procedure call for the end of the current lexical scope.
+Deferred calls run in reverse order and also run when a function returns:
+
+    fn work(): int
+    begin
+        var resource: *void := alloc(64)
+        defer free(resource)
+        return 0
+    end
+
+Use defer for deterministic cleanup. The GC region is not a tracing collector
+and does not make escaping pointers safe.
+
+11. Strings, conversion, and building text
+------------------------------------------
+
+Strings join with +. The str built-ins operate on bytes:
+
+    str.length(text)                 byte count before the zero terminator
+    str.char(text, index)            byte value at index
+    str.slice(text, first, finish)   copy half-open byte range
+    str.find(text, search)           first index, or -1 when absent
+    str.equal(left, right)            integer equality result
+    str.number(value)                int to decimal text
+    str.fromchar(byte)                one-byte string
+    str.builder(initial)              create a mutable text builder
+    str.append(builder, text)         append and return the builder
+
+Use str.builder and str.append to construct large strings without repeatedly
+copying the whole accumulated result:
+
+    var output: string := str.builder("items:")
+    output := str.append(output, " ")
+    output := str.append(output, str.number(3))
+    writeln(output)
+
+Float helpers:
+
+    flt.format(value, decimals)       fixed-decimal text
+    flt.toint(value)                  convert toward zero
+
+12. Inline assembly
+-------------------
+
+asm introduces raw target-specific assembly. Use it only when you understand
+the target instruction set, calling convention, register usage, and active
+assembler syntax:
+
+    fn pause_cpu(): int
+    begin
+        asm {
+            nop
+        }
+        return 0
+    end
+
+Assembly blocks are passed to native output. They are not portable Xe code.
+A compiler cannot type-check the meaning or memory effects of instructions
+inside the block.
+
+13. Standard modules: io and mem
+-------------------------------
+
+These modules are available automatically in ordinary compiler builds.
+
+io functions:
+
+    io.print.text(value: string)
+        Print text without a newline.
+
+    io.print.line(value: string)
+        Print text with a newline.
+
+    io.input.integer(): int
+        Read an integer.
+
+    io.input.float(): flt
+        Read a floating-point value.
+
+    io.input.line(): string
+        Read a line of text.
+
+mem functions:
+
+    mem.allocate(bytes: int): *void
+        Allocate raw memory; equivalent to alloc.
+
+    mem.release(pointer: *void): void
+        Free raw memory; equivalent to free.
+
+14. All .xel libraries and their functions
+------------------------------------------
+
+Every module below is imported with uses module_name. Functions are called
+module_name.function_name(...). Unless specified, an int return value is a
+success flag, index, count, checksum, process result, or platform return code;
+read each description.
+
+14.1 algorithms
+~~~~~~~~~~~~~~~
+
+Requires collections.
+
+    algorithms.sort.integers(*collections.IntVector): int
+        In-place insertion sort; returns 1.
+
+    algorithms.find.integer(*collections.IntVector, target: int): int
+        Linear search; returns index or -1.
+
+    algorithms.sum.integers(*collections.IntVector): int
+        Sum all stored integers.
+
+14.2 bitops
+~~~~~~~~~~~
+
+    bitops.shift_left(value: int, bits: int): int
+    bitops.shift_right(value: int, bits: int)
+    bitops.and(value: int, mask: int): int
+    bitops.or(value: int, mask: int): int
+    bitops.xor(value: int, mask: int): int
+    bitops.complement(value: int): int
+    bitops.not(value: int): int
+
+The shifts and masks operate on integer bit patterns. bitops.not is a bitwise
+complement alias, not logical negation.
+
+14.3 cli
+~~~~~~~~
+
+    cli.count(): int
+        Count command-line arguments, excluding the executable path.
+
+    cli.get(index: int): string
+        Get a zero-based argument; invalid indexes return "".
+
+    cli.command(): string
+        Return the first argument if it does not begin with '-'; otherwise "".
+
+    cli.has_flag(name: string): int
+        Return 1 if the exact argument is present.
+
+    cli.has_option(name: string): int
+        Find name or name=value.
+
+    cli.option(name: string, fallback: string): string
+        Read --name value or --name=value; otherwise return fallback.
+
+    cli.option_bool(name: string, fallback: int): int
+        Parse true/false, 1/0, yes/no, or on/off; a bare option means true.
+
+This is a small argument helper, not a full command framework. It does not
+generate shell completions or validate unknown options.
+
+14.4 collections
+~~~~~~~~~~~~~~~~
+
+Types:
+
+    collections.Vector
+        Dynamically growing array of opaque pointers.
+
+    collections.Map
+        String-keyed map of opaque pointers; fixed 128-slot capacity.
+
+    collections.IntVector
+    collections.IntStack
+        Fixed capacity of 128 integers each.
+
+Functions:
+
+    collections.vector.create(initial_capacity: int): *Vector
+    collections.vector.push(*Vector, element: *void): int
+    collections.vector.get(*Vector, index: int): *void
+    collections.vector.get.string(*Vector, index: int): *string
+    collections.vector.free(*Vector): void
+
+    collections.map.create(): *Map
+    collections.map.put(*Map, key: string, value: *void): int
+    collections.map.get(*Map, key: string): *void
+    collections.map.count(*Map): int
+    collections.map.key_at(*Map, index: int): string
+    collections.map.value_at(*Map, index: int): *void
+    collections.map.free(*Map): void
+
+    collections.int.vector.push(*IntVector, value: int): int
+    collections.int.vector.try.get(*IntVector, index: int, output: *int): int
+    collections.int.vector.try.set(*IntVector, index: int, value: int): int
+    collections.int.vector.count(*IntVector): int
+
+    collections.stack.push(*IntStack, value: int): int
+    collections.stack.try.pop(*IntStack, output: *int): int
+    collections.stack.count(*IntStack): int
+
+A vector grows geometrically. Its free function frees its own storage, not
+pointer values stored inside it. Map keys are copied; values are not owned.
+Map enumeration order is hash-table slot order. The integer vector and stack
+are inline bounded records; initialize them as local variables before use.
+The map cannot grow past 128 distinct keys.
+
+14.5 compression and crypto
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    compression.compress_rle(data: string): string
+        Encode repeated bytes as count/value byte pairs; a count is at most 255.
+
+    compression.decompress_rle(data: string): string
+        Decode those pairs; malformed odd-length input or zero counts return "".
+
+    compression.crc_verify(data: string, checksum: int): int
+        Compare a CRC-32 checksum; returns 1 on equality.
+
+    crypto.crc32(data: string): int
+        Compute reflected IEEE CRC-32.
+
+CRC-32 detects accidental changes. It is not encryption, a cryptographic hash,
+or a message-authentication code. Xe strings are zero-terminated text, so use
+these routines with care for data containing zero bytes.
+
+14.6 fs
+~~~~~~~
+
+Linux x86-64 file helpers:
+
+    fs.write_all(fd: int, content: string): int
+        Write the complete string to an open file descriptor.
+
+    fs.read_file(path: string): string
+        Read a file as text.
+
+    fs.write_file(path: string, content: string): int
+        Create or truncate and write a file.
+
+    fs.append_file(path: string, content: string): int
+        Append to a file.
+
+    fs.file_exists(path: string): int
+    fs.remove_file(path: string): int
+    fs.file_size(path: string): int
+        Returns -1 on open failure.
+
+    fs.make_directory(path: string): int
+        Create a directory using mode 0755.
+
+These functions use Linux syscalls and return low-level success/error values.
+They do not provide path normalization, recursive directory creation, file
+watching, or portable filesystem semantics.
+
+14.7 json and serde
+~~~~~~~~~~~~~~~~~~~
+
+json functions:
+
+    json.quote(text: string): string
+    json.stringify(*collections.Map): string
+    json.put_raw(*collections.Map, key: string, encoded_value: string): int
+    json.get_raw(*collections.Map, key: string): string
+    json.stringify_array(*collections.Vector): string
+    json.parse(text: string): *collections.Map
+    json.get_array(text: string): *collections.Vector
+
+Map and vector payloads are pointers to strings containing encoded JSON
+values. Use put_raw to store an encoded value such as 12, true, null, or a
+quoted string. JSON parsing supports objects, arrays, strings and common
+backslash escapes, booleans, null, and numeric text. Numeric values are kept
+as strings. Invalid top-level input returns an empty collection. Unicode
+\uXXXX decoding and a typed JSON value model are not implemented.
+
+The following low-level parser helpers are also present in json.xel. They are
+implementation building blocks; prefer the top-level parse/get_array helpers:
+
+    json.skip_space(source: string, position: *int): void
+    json.parse_string(source: string, position: *int): string
+    json.hex_digit(value: int): int
+    json.expect(source: string, position: *int, byte: int): int
+    json.parse_map_inner(source: string, position: *int): *collections.Map
+    json.parse_array_inner(source: string, position: *int): *collections.Vector
+    json.parse_value(source: string, position: *int, depth: int): string
+    json.valid_number(token: string): int
+
+serde is a thin JSON facade over json:
+
+    serde.json.quote(text: string): string
+    serde.json.parse_object(text: string): *collections.Map
+    serde.json.parse_array(text: string): *collections.Vector
+    serde.json.stringify_object(*collections.Map): string
+    serde.json.stringify_array(*collections.Vector): string
+    serde.json.get_raw(*collections.Map, key: string): string
+    serde.json.put_raw(*collections.Map, key: string, encoded_value: string): int
+
+serde does not currently add MessagePack, Protobuf, TOML, or YAML.
+
+14.8 log
+~~~~~~~~
+
+    log.level_trace(): int       TRACE level, value 0
+    log.level_debug(): int       DEBUG level, value 10
+    log.level_info(): int        INFO level, value 20
+    log.level_warn(): int        WARN level, value 30
+    log.level_error(): int       ERROR level, value 40
+    log.level_name(level: int): string
+    log.write(level: int, message: string): void
+    log.write_filtered(minimum: int, level: int, message: string): void
+    log.trace(message: string): void
+    log.debug(message: string): void
+    log.info(message: string): void
+    log.warn(message: string): void
+    log.error(message: string): void
+    log.write_json(level: int, message: string): void
+
+write_json emits one JSON object per line with a whole-second Unix timestamp.
+The module is synchronous console output; it has no spans, context propagation,
+or file rotation.
+
+14.9 math and math_ext
+~~~~~~~~~~~~~~~~~~~~~~
+
+    math.abs_int(value: int): int
+    math.abs_flt(value: flt): flt
+    math.pow(base: flt, exponent: int): flt
+    math.sqrt(value: flt): flt
+    math.clamp(value: int, minimum: int, maximum: int): int
+
+math.sqrt uses Newton iteration and returns 0 for nonpositive input.
+math.clamp swaps reversed endpoints.
+
+    math_ext.reduce_angle(angle: flt): flt
+    math_ext.sin(angle: flt): flt
+    math_ext.cos(angle: flt): flt
+    math_ext.tan(angle: flt): flt
+    math_ext.trunc(value: flt): int
+    math_ext.floor(value: flt): int
+    math_ext.ceil(value: flt): int
+    math_ext.random_range(minimum: int, maximum: int): int
+
+Trigonometric routines use Xe polynomial approximations. random_range is
+time-seeded and non-cryptographic. floor and ceil adjust truncation toward
+zero. This is a compact scalar module, not a hardware math or tensor library.
+
+14.10 net
+~~~~~~~~~
+
+Linux IPv4 socket wrappers:
+
+    net.socket(domain: int, socket_type: int, protocol: int): int
+    net.parse.ipv4(ip: string): int
+    net.make.address(port: int, packed_address: int): *void
+    net.connect(fd: int, ip: string, port: int): int
+    net.bind(fd: int, port: int): int
+    net.listen(fd: int, backlog: int): int
+    net.accept(fd: int): int
+
+These wrap Linux x86-64 socket calls. They are low-level IPv4 primitives, not
+an HTTP client/server, TLS, DNS resolver, or WebSocket implementation.
+accept can block until a peer connects. Close returned descriptors with
+syscall.io.close or an appropriate syscall.
+
+14.11 process
+~~~~~~~~~~~~~
+
+    process.exec(command: string): int
+        Start /bin/sh -c command and return its process id.
+
+    process.wait_pid(pid: int): int
+        Wait for the process and return its status.
+
+    process.get_env(key: string): string
+    process.pipe_create(fds: *int): int
+        Store read and write descriptors in fds[0] and fds[1].
+
+exec runs a shell command. Do not pass untrusted text into it. These functions
+are Linux-specific.
+
+14.12 string_utils
+~~~~~~~~~~~~~~~~~~
+
+    string_utils.is.space(byte: int): int
+    string_utils.trim(text: string): string
+    string_utils.add.part(*collections.Vector, text: string): int
+    string_utils.split(text: string, delimiter: string): *collections.Vector
+    string_utils.join(*collections.Vector, delimiter: string): string
+    string_utils.free.parts(*collections.Vector): void
+    string_utils.to_int(text: string): int
+
+split allocates each part; release the result with free.parts. Empty or
+malformed integer input returns zero.
+
+14.13 sys and syscall
+~~~~~~~~~~~~~~~~~~~~~
+
+sys memory, hardware, process, and buffer helpers:
+
+    sys.mem.copy(destination: *void, source: *void, bytes: int): void
+    sys.mem.set(destination: *void, value: int, bytes: int): void
+    sys.mem.compare(first: *void, second: *void, bytes: int): int
+    sys.hw.read_8(address: *void): int
+    sys.hw.write_8(address: *void, value: int): void
+    sys.hw.read_32(address: *void): int
+    sys.hw.write_32(address: *void, value: int): void
+    sys.proc.pid(): int
+    sys.proc.fork(): int
+    sys.proc.exit(code: int): void
+    sys.allocate_buffer(capacity: int): *sys.MemBuffer
+    sys.free_buffer(*sys.MemBuffer): void
+
+sys.proc.fork and sys.proc.exit change process control; use them only when
+you understand their effects. Hardware access can fault if the address is
+invalid or prohibited. allocate_buffer returns a record with address, size,
+and capacity fields.
+
+Raw Linux syscall and descriptor helpers:
+
+    syscall.raw.invoke3(number, a1, a2, a3: int): int
+    syscall.raw.invoke6(number, a1, a2, a3, a4, a5, a6: int): int
+    syscall.io.open(path: string, flags: int, mode: int): int
+    syscall.io.read(fd: int, buffer: *void, count: int): int
+    syscall.io.write(fd: int, buffer: *void, count: int): int
+    syscall.io.write.string(fd: int, value: string): int
+    syscall.io.close(fd: int): int
+
+Linux syscalls return negative error numbers on failure. Their numeric IDs,
+flags, and structures are Linux ABI details, not portable Xe APIs.
+
+14.14 terminal
+~~~~~~~~~~~~~~
+
+    terminal.write_text(text: string): int
+    terminal.set_color(ansi_code: int): void
+    terminal.clear_screen(): void
+    terminal.move_cursor(row: int, column: int): void
+    terminal.read_key_raw(): int
+
+The output functions use ANSI escape sequences. read_key_raw temporarily puts
+the Linux terminal in raw mode, waits for one byte, and restores the prior
+terminal state. It can block and expects an interactive terminal.
+
+14.15 test
+~~~~~~~~~~
+
+    test.assert_true(name: string, condition: int): int
+    test.assert_false(name: string, condition: int): int
+    test.assert_int(name: string, actual: int, expected: int): int
+    test.assert_string(name: string, actual: string, expected: string): int
+    test.summary(passed: int, failed: int): int
+
+Assertions print PASS or FAIL and return 1 or 0. The caller counts results.
+This is a helper module, not an automatic test discovery framework.
+
+14.16 threading
+~~~~~~~~~~~~~~~
+
+    threading.create_thread(entry_func: *void, arg: *void): int
+    threading.join_thread(thread_id: int): int
+    threading.mutex_init(): *void
+    threading.mutex_lock(lock: *void): void
+    threading.mutex_unlock(lock: *void): void
+    threading.mutex_free(lock: *void): void
+
+A worker entry has signature fn worker(argument: *void): int. The thread
+functions use Linux clone-based runtime support; this is not a portable thread
+pool. A mutex is a spin lock that periodically yields. Keep shared data valid
+until every worker is joined.
+
+14.17 time
+~~~~~~~~~~
+
+    time.now_milliseconds(): int
+    time.now_seconds(): int
+    time.sleep_ms(milliseconds: int): void
+    time.clock_ticks(): int
+
+now_* use wall-clock time. clock_ticks returns monotonic nanoseconds and is
+suitable for elapsed-time measurements. These wrappers use Linux syscalls.
+
+15. Runtime built-ins
+---------------------
+
+These are compiler/runtime names, so they do not need a uses line.
+
+Output and input:
+
+    write(values...)
+    writeln(values...)
+    read(int_or_float_variable)
+    readln(string_variable)
+
+Memory:
+
+    alloc(bytes)                 new(bytes)
+    free(pointer)                delete(pointer)
+    aligned_alloc(size, align)   alloc.aligned(size, align)
+    gc.begin { ... } gc.end
+    defer procedure_call
+
+Strings, numbers, files, processes, arguments, and threads:
+
+    str.length, str.char, str.slice, str.find, str.equal
+    str.number, str.fromchar, str.builder, str.append
+    flt.format, flt.toint
+    arg.count, arg.get
+    env.get
+    file.read, file.write
+    process.run, process.spawn, process.wait
+    thread.start, thread.join
+
+Pointer, memory, hardware, and atomic operations:
+
+    runtime.pointer.read(pointer_slot)
+    runtime.pointer.write(pointer_slot, pointer_value)
+    runtime.pointer.cast.string(pointer)
+    runtime.pointer.free(pointer)
+    runtime.pointer.is_null(pointer)
+    runtime.mem.copy(destination, source, byte_count)
+    runtime.mem.set(destination, byte_value, byte_count)
+    runtime.mem.compare(first, second, byte_count)
+    runtime.hw.read8(address), runtime.hw.write8(address, value)
+    runtime.hw.read32(address), runtime.hw.write32(address, value)
+    atomic.load(address)
+    atomic.store(address, value)
+    atomic.compare_exchange(address, expected, desired)
+    syscall.invoke3(number, a1, a2, a3)
+    syscall.invoke6(number, a1, a2, a3, a4, a5, a6)
+
+The runtime.* and syscall.* operations are low-level. Use them only with valid
+pointers, sizes, calling conventions, and Linux ABI values. atomic operations
+act on aligned integer storage. PE and bare-metal output have a smaller
+freestanding subset and do not support ordinary runtime I/O, dynamic
+allocation, or GC.
+
+16. Build commands and diagnostics
+----------------------------------
+
+Common commands:
+
+    xe --help
+    xe --version
+    xe --build source.xe -o source.xee
+    xe --emit-asm source.xe -o source.s
+    xe --build-nasm source.xe -o source.xee
+    xe --emit-nasm source.xe -o source.asm
+    xe --emit-pe source.xe -o source.asm
+    xe --build-pe source.xe -o source.exe
+    xe --emit-baremetal source.xe -o source.s
+    xe --build-baremetal source.xe -o source.bin
+    xe --emit-baremetal-nasm source.xe -o source.asm
+
+The general executable mode is Linux x86-64. NASM output needs NASM. PE
+output needs NASM, llvm-dlltool, and lld-link. Bare-metal output needs the
+relevant assembler/linker/objcopy tools. PE and bare-metal currently accept
+only a freestanding subset.
+
+Builds print result, warning count, error count, and elapsed time. The compiler
+does not currently emit general language warnings. The normal Xe build path
+uses the native assembly backend; building the compiler from source has a
+separate bootstrap step.
+
+17. Known limits and practical guidance
+---------------------------------------
+
+- General executable output targets Linux x86-64.
+- The source libraries are mostly Linux-specific where they use syscalls.
+- The JSON module stores encoded values as strings and does not decode Unicode
+  escapes into full Unicode text.
+- The collections map is limited to 128 entries; IntVector and IntStack to
+  128 integers.
+- There is no general FFI, SQLite driver, HTTP framework, TLS stack, GUI
+  toolkit, async runtime, regex engine, or GPU backend in this repository.
+- CRC-32 is an error-detection checksum, not secure cryptography.
+- Native hardware, pointer, raw syscall, process, and terminal functions can
+  crash, block, or alter process behavior when used incorrectly.
+- The compiler uses scalar Xe code generation for general loops. It does not
+  automatically vectorize arbitrary loops.
+
+When a task depends on an operating-system-specific function, check that
+library's section and test on the target machine. Prefer simple wrappers over
+scattering raw syscall numbers through an application.
+
+PART III — WHAT YOU SHOULD BE ABLE TO BUILD
+===========================================
+
+After learning this guide, you should be able to define functions and records,
+use variables and constants, write conditions and loops, work with arrays and
+strings, import libraries, parse command-line options, read and write files,
+manage pointers, use collections, report logs and assertions, measure time,
+and call the Linux facilities that Xe currently exposes.
+
+The program below is a deliberately broad API tour. It puts the language
+features and library functions in one source file. Most ordinary examples run
+by default. Operations that can block, fork a process, read a raw key, or
+terminate the process are behind explicit command-line flags. It is intended
+for Linux x86-64 and is a tutorial, not a recommended application design.
+
+Save as xe_tour.xe and build it with the regular command:
+
+    xe --build xe_tour.xe -o xe_tour.xee
+    ./xe_tour.xee
+
+The tour creates a temporary file under /tmp and removes it when done.
+
+~~~xe
+uses algorithms
+uses bitops
+uses cli
+uses collections
+uses compression
+uses crypto
+uses fs
+uses json
+uses log
+uses math
+uses math_ext
+uses net
+uses process
+uses serde
+uses string_utils
+uses sys
+uses syscall
+uses terminal
+uses test
+uses threading
+uses time
+
+type ItemCount: int
+
+type DemoPoint: record
+begin
+    x: int
+    y: int
+end
+
+fn tour.worker(argument: *void): int
+begin
+    return 7
+end
+
+fn tour.fork_demo(): void
+begin
+    var child: int := sys.proc.fork()
+    if (child = 0) { sys.proc.exit(0) }
+end
+
+fn main(): int
+begin
+    // Continuation semicolon joins these physical lines into one expression.
+    const target: ItemCount := 40 + ;
+        2
+
+    var point: DemoPoint
+    point.x := target
+    point.y := 8
+
+    var numbers: [4]int
+    numbers[0] := 5
+    numbers[1] := 4
+    numbers[2] := 3
+    numbers[3] := 2
+    var first_three: [3]int := numbers[0:3]
+
+    writeln("Xe tour: ", point.x, " + ", point.y, " = ", point.x + point.y)
+    write("A single write call can print ", ;
+        "several values: ", point.x, ", ", point.y, "\n")
+
+    // if/else, while, nested conditions, and switch.
+    var index: int := 0
+    var total: int := 0
+    while index < 4 {
+        if (numbers[index] > 2) {
+            total := total + numbers[index]
+        } else {
+            total := total + 1
+        }
+        index := index + 1
+    }
+    switch total begin
+        case 15
+            log.info("switch selected 15")
+        default
+            log.warn("unexpected sum")
+    end
+
+    // Functions, float arithmetic, formatting, and string built-ins.
+    var root: flt := math.sqrt(81.0)
+    var power: flt := math.pow(2.0, 5)
+    var angle: flt := 0.5
+    var trig: flt := math_ext.sin(angle) + math_ext.cos(angle) + math_ext.tan(angle)
+    var reduced: flt := math_ext.reduce_angle(angle)
+    var abs_value: int := math.abs_int(-9)
+    var abs_ratio: flt := math.abs_flt(-2.5)
+    var bounded: int := math.clamp(100, 0, 10)
+    var integer_part: int := math_ext.trunc(3.8)
+    var floor_value: int := math_ext.floor(-3.2)
+    var ceil_value: int := math_ext.ceil(3.2)
+    var random_value: int := math_ext.random_range(1, 6)
+    var formatted: string := flt.format(root, 2)
+    var converted: int := flt.toint(4.75)
+    var text: string := str.builder("root=")
+    text := str.append(text, formatted)
+    text := str.append(text, ", total=")
+    text := str.append(text, str.number(total))
+    var length: int := str.length(text)
+    var first_byte: int := str.char(text, 0)
+    var prefix: string := str.slice(text, 0, 4)
+    var found: int := str.find(text, "total")
+    var equal_text: int := str.equal(prefix, "root")
+    var one_char: string := str.fromchar(88)
+    writeln(text, " bytes=", length, " first=", first_byte, " found=", found)
+    writeln("root=", root, " power=", power, " trig=", trig, " reduced=", reduced)
+    writeln("math helpers=", abs_value, ", ", abs_ratio, ", ", bounded, ", ",
+        integer_part, ", ", floor_value, ", ", ceil_value, ", ", random_value,
+        ", ", converted, ", ", equal_text, ", ", one_char)
+
+    // CLI argument access and option helpers.
+    var argument_count: int := cli.count()
+    var first_argument: string := cli.get(0)
+    var command_name: string := cli.command()
+    var verbose: int := cli.has_flag("--verbose")
+    var has_output: int := cli.has_option("--output")
+    var output_name: string := cli.option("--output", "tour.txt")
+    var enabled: int := cli.option_bool("--enabled", 0)
+    writeln("args=", argument_count, " first=", first_argument,
+        " command=", command_name, " verbose=", verbose,
+        " has-output=", has_output, " output=", output_name, " enabled=", enabled)
+
+    // Basic text and JSON logging.
+    log.trace("trace")
+    log.debug("debug")
+    log.info("info")
+    log.warn("warning")
+    log.error("error")
+    log.write(log.level_info(), "direct level write")
+    log.write_filtered(log.level_warn(), log.level_debug(), "filtered out")
+    log.write_filtered(log.level_warn(), log.level_error(), "passes the filter")
+    var info_name: string := log.level_name(log.level_info())
+    var trace_level: int := log.level_trace()
+    var debug_level: int := log.level_debug()
+    var warn_level: int := log.level_warn()
+    var error_level: int := log.level_error()
+    log.write_json(log.level_info(), "JSON line")
+    writeln("log names: ", info_name, " levels=", trace_level, ", ",
+        debug_level, ", ", warn_level, ", ", error_level)
+
+    // Standard output wrappers, plus optional interactive input.
+    io.print.text("io.print.text ")
+    io.print.line("and io.print.line")
+    if (cli.has_flag("--interactive") != 0) {
+        write("integer: ")
+        var input_int: int := io.input.integer()
+        write("float: ")
+        var input_float: flt := io.input.float()
+        write("line: ")
+        var input_text: string := io.input.line()
+        writeln(input_int, " ", input_float, " ", input_text)
+    }
+
+    // Collection types and APIs.
+    var vector: *collections.Vector := collections.vector.create(1)
+    var vector_text: *string := alloc(16)
+    *vector_text := "vector value"
+    collections.vector.push(vector, vector_text)
+    var vector_value: *void := collections.vector.get(vector, 0)
+    var vector_string: *string := collections.vector.get.string(vector, 0)
+    writeln("vector=", *vector_string, " ptr-null=", runtime.pointer.is_null(vector_value))
+    free(vector_text)
+    collections.vector.free(vector)
+
+    var map: *collections.Map := collections.map.create()
+    var map_text: string := "Xe"
+    collections.map.put(map, "language", &map_text)
+    var map_value: *void := collections.map.get(map, "language")
+    var map_key: string := collections.map.key_at(map, 0)
+    var map_item: *void := collections.map.value_at(map, 0)
+    var map_count: int := collections.map.count(map)
+    writeln("map ", map_key, "=", *runtime.pointer.cast.string(map_item),
+        " count=", map_count, " found=", runtime.pointer.is_null(map_value) = 0)
+    collections.map.free(map)
+
+    var integers: collections.IntVector
+    collections.int.vector.push(&integers, 9)
+    collections.int.vector.push(&integers, 2)
+    collections.int.vector.push(&integers, 5)
+    var read_integer: int := 0
+    collections.int.vector.try.get(&integers, 0, &read_integer)
+    collections.int.vector.try.set(&integers, 0, 7)
+    var integer_count: int := collections.int.vector.count(&integers)
+    algorithms.sort.integers(&integers)
+    var search_index: int := algorithms.find.integer(&integers, 5)
+    var integer_sum: int := algorithms.sum.integers(&integers)
+    writeln("sorted count=", integer_count, " first=", integers.values[0],
+        " search=", search_index, " sum=", integer_sum)
+
+    var stack: collections.IntStack
+    collections.stack.push(&stack, 11)
+    collections.stack.push(&stack, 22)
+    var popped: int := 0
+    collections.stack.try.pop(&stack, &popped)
+    writeln("stack count=", collections.stack.count(&stack), " popped=", popped,
+        " prior=", read_integer, " array-slice=", first_three[0])
+
+    // Bit operations.
+    var shifted: int := bitops.shift_left(3, 2)
+    var unshifted: int := bitops.shift_right(shifted, 1)
+    var bit_and: int := bitops.and(7, 3)
+    var bit_or: int := bitops.or(4, 1)
+    var bit_xor: int := bitops.xor(7, 3)
+    var bit_not: int := bitops.complement(0)
+    var bit_not_alias: int := bitops.not(1)
+    writeln("bits=", shifted, ", ", unshifted, ", ", bit_and, ", ",
+        bit_or, ", ", bit_xor, ", ", bit_not, ", ", bit_not_alias)
+
+    // Text utility functions. split allocates parts; free.parts releases them.
+    var trimmed: string := string_utils.trim("   Xe language   ")
+    var whitespace: int := string_utils.is.space(32)
+    var parts: *collections.Vector := string_utils.split("red,green,blue", ",")
+    var joined: string := string_utils.join(parts, " | ")
+    var manual_parts: *collections.Vector := collections.vector.create(1)
+    string_utils.add.part(manual_parts, "manual part")
+    collections.vector.free(manual_parts)
+    var parsed_integer: int := string_utils.to_int("  -123 ")
+    writeln(trimmed, " whitespace=", whitespace, " parts=", joined,
+        " parsed=", parsed_integer)
+    string_utils.free.parts(parts)
+
+    // JSON, raw JSON values, arrays, and the serde facade.
+    var json_map: *collections.Map := json.parse("{\"name\":\"Xe\",\"n\":3}")
+    var raw_name: string := json.get_raw(json_map, "name")
+    json.put_raw(json_map, "active", "true")
+    var json_text: string := json.stringify(json_map)
+    var quoted: string := json.quote("quoted \"word\"")
+    var json_array: *collections.Vector := json.get_array("[1,\"two\",false]")
+    var array_text: string := json.stringify_array(json_array)
+    var serde_map: *collections.Map := serde.json.parse_object("{\"ok\":true}")
+    var serde_array: *collections.Vector := serde.json.parse_array("[5,6]")
+    var serde_raw: string := serde.json.get_raw(serde_map, "ok")
+    serde.json.put_raw(serde_map, "count", "2")
+    var serde_object_text: string := serde.json.stringify_object(serde_map)
+    var serde_array_text: string := serde.json.stringify_array(serde_array)
+    var serde_quoted: string := serde.json.quote("facade")
+    writeln("json ", raw_name, " ", json_text, " ", array_text, " ", quoted)
+    writeln("serde ", serde_raw, " ", serde_object_text, " ",
+        serde_array_text, " ", serde_quoted)
+    collections.map.free(json_map)
+    collections.map.free(serde_map)
+    collections.vector.free(json_array)
+    collections.vector.free(serde_array)
+
+    // Low-level JSON parsing helpers, normally used through parse/get_array.
+    var json_position: int := 0
+    json.skip_space("  7", &json_position)
+    var parsed_token: string := json.parse_value("42", &json_position, 0)
+    var number_ok: int := json.valid_number("12.5e2")
+    var digit: int := json.hex_digit(15)
+    var expect_position: int := 0
+    var brace_ok: int := json.expect("{", &expect_position, 123)
+    var string_position: int := 0
+    var parsed_string: string := json.parse_string("\"Xe\"", &string_position)
+    var map_position: int := 0
+    var inner_map: *collections.Map := json.parse_map_inner("{\"x\":1}", &map_position)
+    var array_position: int := 0
+    var inner_array: *collections.Vector := json.parse_array_inner("[1,2]", &array_position)
+    writeln("json helpers ", parsed_token, " ", number_ok, " ", digit,
+        " ", brace_ok, " ", parsed_string)
+    collections.map.free(inner_map)
+    collections.vector.free(inner_array)
+
+    // Checksums and run-length compression.
+    var checksum: int := crypto.crc32("Xe")
+    var packed: string := compression.compress_rle("aaabbc")
+    var unpacked: string := compression.decompress_rle(packed)
+    var checksum_ok: int := compression.crc_verify("Xe", checksum)
+    writeln("crc=", checksum, " verified=", checksum_ok, " rle=", unpacked)
+
+    // File and descriptor examples. This program owns and removes demo_path.
+    var demo_path: string := "/tmp/xe-tour-" + str.number(sys.proc.pid()) + ".txt"
+    file.write(demo_path, "created by file.write\n")
+    fs.write_file(demo_path, "created by fs.write_file\n")
+    fs.append_file(demo_path, "appended\n")
+    var contents: string := file.read(demo_path)
+    var fs_contents: string := fs.read_file(demo_path)
+    var exists: int := fs.file_exists(demo_path)
+    var size: int := fs.file_size(demo_path)
+    var write_ok: int := fs.write_all(1, "fs.write_all wrote this line\n")
+    var mkdir_result: int := fs.make_directory("/tmp")
+    writeln("file exists=", exists, " size=", size, " content=", contents,
+        " fs-read=", fs_contents, " write=", write_ok, " mkdir(/tmp)=", mkdir_result)
+    fs.remove_file(demo_path)
+
+    var scratch: *void := alloc(64)
+    var aligned: *void := aligned_alloc(64, 16)
+    var aligned_alias: *void := alloc.aligned(64, 16)
+    var managed: *void := mem.allocate(16)
+    var new_block: *void := new(16)
+    runtime.mem.set(scratch, 65, 8)
+    runtime.mem.copy(aligned, scratch, 8)
+    var memory_order: int := runtime.mem.compare(scratch, aligned, 8)
+    sys.mem.set(aligned_alias, 66, 8)
+    sys.mem.copy(managed, aligned_alias, 8)
+    var sys_order: int := sys.mem.compare(managed, aligned_alias, 8)
+    sys.hw.write_8(scratch, 65)
+    sys.hw.write_32(scratch, 1234)
+    var byte_value: int := sys.hw.read_8(scratch)
+    var word_value: int := sys.hw.read_32(scratch)
+    runtime.hw.write8(scratch, 65)
+    var runtime_byte: int := runtime.hw.read8(scratch)
+    runtime.hw.write32(scratch, 1234)
+    var runtime_word: int := runtime.hw.read32(scratch)
+    var raw_address: int := @scratch
+    var hardware_value: int := #scratch
+    var pointer_slot: *void := alloc(8)
+    runtime.pointer.write(pointer_slot, scratch)
+    var pointer_copy: *void := runtime.pointer.read(pointer_slot)
+    var text_value: string := "pointer cast"
+    var text_pointer: *string := runtime.pointer.cast.string(&text_value)
+    var not_null: int := runtime.pointer.is_null(pointer_copy)
+    writeln("memory compare=", memory_order, ", ", sys_order,
+        " byte=", byte_value, " word=", word_value,
+        " runtime hw=", runtime_byte, ",", runtime_word,
+        " address=", raw_address, " hw=", hardware_value,
+        " null=", not_null, " text=", *text_pointer)
+    runtime.pointer.free(pointer_slot)
+    free(scratch)
+    free(aligned)
+    free(aligned_alias)
+    mem.release(managed)
+    delete(new_block)
+
+    var buffer: *sys.MemBuffer := sys.allocate_buffer(32)
+    (*buffer).size := 1
+    sys.free_buffer(buffer)
+
+    // Explicit cleanup at scope exit and a region-owned allocation.
+    var deferred_block: *void := alloc(8)
+    defer free(deferred_block)
+    gc.begin {
+        var region_block: *void := alloc(16)
+        runtime.mem.set(region_block, 0, 16)
+        writeln("inside gc region, null=", runtime.pointer.is_null(region_block))
+    }
+    gc.end
+
+    // Atomics, mutex, and a worker thread.
+    var atomic_value: int := 0
+    atomic.store(&atomic_value, 1)
+    var atomic_before: int := atomic.load(&atomic_value)
+    var exchanged: int := atomic.compare_exchange(&atomic_value, 1, 2)
+    var lock: *void := threading.mutex_init()
+    threading.mutex_lock(lock)
+    atomic.store(&atomic_value, atomic_before + exchanged)
+    threading.mutex_unlock(lock)
+    threading.mutex_free(lock)
+    var thread_id: int := threading.create_thread(&tour.worker, 0)
+    var thread_result: int := -1
+    if (thread_id >= 0) {
+        thread_result := threading.join_thread(thread_id)
+    }
+    writeln("atomic=", atomic.load(&atomic_value), " exchange=", exchanged,
+        " thread=", thread_id, " result=", thread_result)
+
+    // Time APIs.
+    var seconds: int := time.now_seconds()
+    var milliseconds: int := time.now_milliseconds()
+    var before_ticks: int := time.clock_ticks()
+    time.sleep_ms(1)
+    var after_ticks: int := time.clock_ticks()
+    writeln("clock seconds=", seconds, " ms=", milliseconds,
+        " elapsed ns=", after_ticks - before_ticks)
+
+    // Linux syscall wrappers and process helpers.
+    var pid: int := process.exec("true")
+    var child_status: int := process.wait_pid(pid)
+    var path_env: string := process.get_env("PATH")
+    var pipe_fds: [2]int
+    var pipe_ok: int := process.pipe_create(&pipe_fds)
+    var raw_pid: int := syscall.raw.invoke3(39, 0, 0, 0)
+    var raw_pid6: int := syscall.raw.invoke6(39, 0, 0, 0, 0, 0, 0)
+    var null_fd: int := syscall.io.open("/dev/null", 2, 0)
+    var null_read: int := syscall.io.read(null_fd, scratch, 1)
+    var null_write: int := syscall.io.write(null_fd, scratch, 1)
+    var null_text_write: int := syscall.io.write.string(null_fd, "discarded")
+    syscall.io.close(null_fd)
+    if (pipe_ok >= 0) {
+        syscall.io.close(pipe_fds[0])
+        syscall.io.close(pipe_fds[1])
+    }
+    var command_status: int := process.run("true")
+    var env_value: string := env.get("PATH")
+    writeln("pid=", pid, " status=", child_status, " env=", str.length(path_env),
+        "/", str.length(env_value), " pipe=", pipe_ok, " syscalls=", raw_pid,
+        "/", raw_pid6, " io=", null_read, ",", null_write, ",", null_text_write,
+        " command=", command_status)
+
+    // Linux IPv4 socket helpers. bind port zero requests an ephemeral port.
+    var socket_fd: int := net.socket(2, 1, 0)
+    var ip_value: int := net.parse.ipv4("127.0.0.1")
+    var address: *void := net.make.address(0, ip_value)
+    free(address)
+    var bind_result: int := net.bind(socket_fd, 0)
+    var listen_result: int := net.listen(socket_fd, 1)
+    var invalid_connect: int := net.connect(socket_fd, "not-an-ip", 80)
+    var invalid_accept: int := net.accept(-1)
+    syscall.io.close(socket_fd)
+    writeln("socket=", socket_fd, " bind=", bind_result, " listen=", listen_result,
+        " invalid connect=", invalid_connect, " invalid accept=", invalid_accept)
+
+    // Terminal output is safe on a normal terminal. Raw input and screen
+    // control are opt-in because raw input blocks and screen control changes
+    // what the user sees.
+    terminal.write_text("terminal.write_text works\n")
+    terminal.set_color(32)
+    terminal.write_text("green text\n")
+    terminal.set_color(0)
+    if (cli.has_flag("--terminal-demo") != 0) {
+        terminal.clear_screen()
+        terminal.move_cursor(1, 1)
+        var key: int := terminal.read_key_raw()
+        writeln("key byte=", key)
+    }
+
+    // Assertions count their own returned results.
+    var passed: int := 0
+    var failed: int := 0
+    if (test.assert_true("truth", 1) = 1) { passed := passed + 1 }
+    else { failed := failed + 1 }
+    if (test.assert_false("falsehood", 0) = 1) { passed := passed + 1 }
+    else { failed := failed + 1 }
+    if (test.assert_int("integer equality", 3, 3) = 1) { passed := passed + 1 }
+    else { failed := failed + 1 }
+    if (test.assert_string("string equality", "Xe", "Xe") = 1) { passed := passed + 1 }
+    else { failed := failed + 1 }
+    var tests_ok: int := test.summary(passed, failed)
+
+    // Optional fork: the child exits immediately. This is disabled by default.
+    if (cli.has_flag("--demo-fork") != 0) { tour.fork_demo() }
+
+    // Optional immediate process exit. This flag deliberately exits before
+    // the normal end of main; do not pass it unless that is what you want.
+    if (cli.has_flag("--exit-now") != 0) { sys.proc.exit(0) }
+
+    writeln("complete; test summary status=", tests_ok)
+    return 0
+end
+~~~

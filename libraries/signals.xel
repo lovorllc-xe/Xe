@@ -1,0 +1,76 @@
+// signals: send signals and choose default/ignore dispositions (SIGPIPE, SIGINT, ...).
+module signals
+begin
+    fn sighup(): int
+    begin
+        return 1
+    end
+
+    fn sigint(): int
+    begin
+        return 2
+    end
+
+    fn sigkill(): int
+    begin
+        return 9
+    end
+
+    fn sigpipe(): int
+    begin
+        return 13
+    end
+
+    fn sigterm(): int
+    begin
+        return 15
+    end
+
+    fn sigchld(): int
+    begin
+        return 17
+    end
+
+    fn set_disposition(signal: int, handler: int): int
+    begin
+        var action: *int := alloc(32)
+        *action := handler
+        *(action + 1) := 0
+        *(action + 2) := 0
+        *(action + 3) := 0
+        var result: int := syscall.invoke6(13, signal, action, 0, 8, 0, 0)
+        free(action)
+        return result = 0
+    end
+
+    fn ignore(signal: int): int
+    begin
+        return set_disposition(signal, 1)
+    end
+
+    fn restore_default(signal: int): int
+    begin
+        return set_disposition(signal, 0)
+    end
+
+    // Ignore SIGPIPE so writes to closed sockets return an error instead of killing the process.
+    fn ignore_broken_pipes(): int
+    begin
+        return ignore(13)
+    end
+
+    fn send(pid: int, signal: int): int
+    begin
+        return syscall.invoke3(62, pid, signal, 0) = 0
+    end
+
+    fn alive(pid: int): int
+    begin
+        return syscall.invoke3(62, pid, 0, 0) = 0
+    end
+
+    fn alarm(seconds: int): int
+    begin
+        return syscall.invoke3(37, seconds, 0, 0)
+    end
+end

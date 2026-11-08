@@ -1,0 +1,85 @@
+// html: escaping, unescaping, tag stripping and a small element builder.
+uses strings
+
+module html
+begin
+    fn escape(text: string): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            if c = 38 { out := str.append(out, "&amp;") }
+            else {
+                if c = 60 { out := str.append(out, "&lt;") }
+                else {
+                    if c = 62 { out := str.append(out, "&gt;") }
+                    else {
+                        if c = 34 { out := str.append(out, "&quot;") }
+                        else {
+                            if c = 39 { out := str.append(out, "&#39;") }
+                            else { out := str.append(out, str.fromchar(c)) }
+                        }
+                    }
+                }
+            }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn unescape(text: string): string
+    begin
+        var out: string := strings.replace(text, "&lt;", "<")
+        out := strings.replace(out, "&gt;", ">")
+        out := strings.replace(out, "&quot;", str.fromchar(34))
+        out := strings.replace(out, "&#39;", str.fromchar(39))
+        out := strings.replace(out, "&nbsp;", " ")
+        return strings.replace(out, "&amp;", "&")
+    end
+
+    fn strip_tags(text: string): string
+    begin
+        var out: string := str.builder("")
+        var inside: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            if c = 60 { inside := 1 }
+            else {
+                if c = 62 { inside := 0 }
+                else {
+                    if inside = 0 { out := str.append(out, str.fromchar(c)) }
+                }
+            }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn element(tag: string, content: string): string
+    begin
+        return "<" + tag + ">" + escape(content) + "</" + tag + ">"
+    end
+
+    fn element_raw(tag: string, attributes: string, inner: string): string
+    begin
+        if str.length(attributes) > 0 { return "<" + tag + " " + attributes + ">" + inner + "</" + tag + ">" }
+        return "<" + tag + ">" + inner + "</" + tag + ">"
+    end
+
+    fn attribute(name: string, value: string): string
+    begin
+        return name + "=" + str.fromchar(34) + escape(value) + str.fromchar(34)
+    end
+
+    fn link(href: string, text: string): string
+    begin
+        return element_raw("a", attribute("href", href), escape(text))
+    end
+
+    fn page(title: string, body: string): string
+    begin
+        return "<!DOCTYPE html>\n<html>\n<head><meta charset=" + str.fromchar(34) + "utf-8" + str.fromchar(34) + "><title>" + escape(title) + "</title></head>\n<body>\n" + body + "\n</body>\n</html>\n"
+    end
+end

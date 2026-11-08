@@ -1,0 +1,180 @@
+// slog: structured logging (logfmt or JSON lines) with levels and timestamps.
+uses strlist
+uses datetime
+uses strings
+
+module slog
+begin
+    type Logger: record
+    begin
+        level: int
+        json: int
+        fields: *strlist.List
+        output: int
+        timestamps: int
+    end
+
+    fn new(): *slog.Logger
+    begin
+        var logger: *slog.Logger := alloc(40)
+        logger.level := 1
+        logger.json := 0
+        logger.fields := strlist.new()
+        logger.output := 2
+        logger.timestamps := 1
+        return logger
+    end
+
+    fn debug_level(): int
+    begin
+        return 0
+    end
+
+    fn info_level(): int
+    begin
+        return 1
+    end
+
+    fn warn_level(): int
+    begin
+        return 2
+    end
+
+    fn error_level(): int
+    begin
+        return 3
+    end
+
+    fn set_level(logger: *slog.Logger, level: int)
+    begin
+        logger.level := level
+    end
+
+    fn use_json(logger: *slog.Logger, on: int)
+    begin
+        logger.json := on
+    end
+
+    fn use_stdout(logger: *slog.Logger)
+    begin
+        logger.output := 1
+    end
+
+    fn without_time(logger: *slog.Logger)
+    begin
+        logger.timestamps := 0
+    end
+
+    // Returns a child logger that always adds key=value.
+    fn with(logger: *slog.Logger, key: string, value: string): *slog.Logger
+    begin
+        var child: *slog.Logger := alloc(40)
+        child.level := logger.level
+        child.json := logger.json
+        child.output := logger.output
+        child.timestamps := logger.timestamps
+        child.fields := strlist.new()
+        var index: int := 0
+        while index < strlist.len(logger.fields) {
+            strlist.push(child.fields, strlist.get(logger.fields, index))
+            index := index + 1
+        }
+        strlist.push(child.fields, key)
+        strlist.push(child.fields, value)
+        return child
+    end
+
+    fn level_name(level: int): string
+    begin
+        if level = 0 { return "debug" }
+        if level = 1 { return "info" }
+        if level = 2 { return "warn" }
+        return "error"
+    end
+
+    fn quote_logfmt(value: string): string
+    begin
+        if strings.contains(value, " ") = 1 || strings.contains(value, "=") = 1 || str.length(value) = 0 { return str.fromchar(34) + strings.replace(value, str.fromchar(34), "\\" + str.fromchar(34)) + str.fromchar(34) }
+        return value
+    end
+
+    fn quote_json(value: string): string
+    begin
+        var out: string := strings.replace(value, "\\", "\\\\")
+        out := strings.replace(out, str.fromchar(34), "\\" + str.fromchar(34))
+        out := strings.replace(out, "\n", "\\n")
+        return str.fromchar(34) + out + str.fromchar(34)
+    end
+
+    fn format(logger: *slog.Logger, level: int, message: string, extra: *strlist.List): string
+    begin
+        var keys: *strlist.List := strlist.new()
+        if logger.timestamps = 1 {
+            strlist.push(keys, "time")
+            strlist.push(keys, datetime.iso(datetime.now()))
+        }
+        strlist.push(keys, "level")
+        strlist.push(keys, level_name(level))
+        strlist.push(keys, "msg")
+        strlist.push(keys, message)
+        var index: int := 0
+        while index < strlist.len(logger.fields) {
+            strlist.push(keys, strlist.get(logger.fields, index))
+            index := index + 1
+        }
+        index := 0
+        while index < strlist.len(extra) {
+            strlist.push(keys, strlist.get(extra, index))
+            index := index + 1
+        }
+        var out: string := str.builder("")
+        if logger.json = 1 { out := str.append(out, "{") }
+        index := 0
+        while index + 1 < strlist.len(keys) {
+            if index > 0 {
+                if logger.json = 1 { out := str.append(out, ",") }
+                else { out := str.append(out, " ") }
+            }
+            if logger.json = 1 { out := str.append(out, quote_json(strlist.get(keys, index)) + ":" + quote_json(strlist.get(keys, index + 1))) }
+            else { out := str.append(out, strlist.get(keys, index) + "=" + quote_logfmt(strlist.get(keys, index + 1))) }
+            index := index + 2
+        }
+        if logger.json = 1 { out := str.append(out, "}") }
+        return out
+    end
+
+    fn log(logger: *slog.Logger, level: int, message: string, extra: *strlist.List)
+    begin
+        if level < logger.level { return }
+        var line: string := format(logger, level, message, extra) + "\n"
+        syscall.invoke3(1, logger.output, line, str.length(line))
+    end
+
+    fn info(logger: *slog.Logger, message: string)
+    begin
+        log(logger, 1, message, strlist.new())
+    end
+
+    fn debug(logger: *slog.Logger, message: string)
+    begin
+        log(logger, 0, message, strlist.new())
+    end
+
+    fn warn(logger: *slog.Logger, message: string)
+    begin
+        log(logger, 2, message, strlist.new())
+    end
+
+    fn error(logger: *slog.Logger, message: string)
+    begin
+        log(logger, 3, message, strlist.new())
+    end
+
+    fn info_kv(logger: *slog.Logger, message: string, key: string, value: string)
+    begin
+        var extra: *strlist.List := strlist.new()
+        strlist.push(extra, key)
+        strlist.push(extra, value)
+        log(logger, 1, message, extra)
+    end
+end

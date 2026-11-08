@@ -1,0 +1,162 @@
+// tar: create and read POSIX ustar archives in memory.
+uses bytes
+uses strlist
+uses ptrlist
+
+module tar
+begin
+    type Archive: record
+    begin
+        names: *strlist.List
+        contents: *strlist.List
+    end
+
+    fn new(): *tar.Archive
+    begin
+        var a: *tar.Archive := alloc(16)
+        a.names := strlist.new()
+        a.contents := strlist.new()
+        return a
+    end
+
+    fn add(a: *tar.Archive, name: string, content: string)
+    begin
+        strlist.push(a.names, name)
+        strlist.push(a.contents, content)
+    end
+
+    fn count(a: *tar.Archive): int
+    begin
+        return strlist.len(a.names)
+    end
+
+    fn octal(value: int, width: int): string
+    begin
+        var out: string := ""
+        var v: int := value
+        if v = 0 { out := "0" }
+        while v > 0 {
+            out := str.fromchar(48 + v % 8) + out
+            v := v / 8
+        }
+        while str.length(out) < width { out := "0" + out }
+        return out
+    end
+
+    fn put_string(header: *bytes.Buffer, offset: int, text: string, width: int)
+    begin
+        var i: int := 0
+        while i < width && i < str.length(text) {
+            bytes.set(header, offset + i, str.char(text, i))
+            i := i + 1
+        }
+    end
+
+    fn build(a: *tar.Archive): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        var i: int := 0
+        while i < count(a) {
+            var content: string := strlist.get(a.contents, i)
+            var header: *bytes.Buffer := bytes.new()
+            var z: int := 0
+            while z < 512 {
+                bytes.push(header, 0)
+                z := z + 1
+            }
+            put_string(header, 0, strlist.get(a.names, i), 100)
+            put_string(header, 100, "0000644", 7)
+            put_string(header, 108, "0000000", 7)
+            put_string(header, 116, "0000000", 7)
+            put_string(header, 124, octal(str.length(content), 11), 11)
+            put_string(header, 136, "00000000000", 11)
+            put_string(header, 148, "        ", 8)
+            bytes.set(header, 156, 48)
+            put_string(header, 257, "ustar", 5)
+            put_string(header, 263, "00", 2)
+            var sum: int := 0
+            z := 0
+            while z < 512 {
+                sum := sum + bytes.get(header, z)
+                z := z + 1
+            }
+            put_string(header, 148, octal(sum, 6), 6)
+            bytes.set(header, 154, 0)
+            bytes.set(header, 155, 32)
+            z := 0
+            while z < 512 {
+                bytes.push(out, bytes.get(header, z))
+                z := z + 1
+            }
+            z := 0
+            while z < str.length(content) {
+                bytes.push(out, str.char(content, z))
+                z := z + 1
+            }
+            while out.size % 512 != 0 { bytes.push(out, 0) }
+            i := i + 1
+        }
+        var pad: int := 0
+        while pad < 1024 {
+            bytes.push(out, 0)
+            pad := pad + 1
+        }
+        return out
+    end
+
+    fn field(data: *bytes.Buffer, offset: int, width: int): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < width && bytes.get(data, offset + i) != 0 {
+            out := str.append(out, str.fromchar(bytes.get(data, offset + i)))
+            i := i + 1
+        }
+        return out
+    end
+
+    fn parse_octal(text: string): int
+    begin
+        var v: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c >= 48 && c <= 55 { v := v * 8 + c - 48 }
+            i := i + 1
+        }
+        return v
+    end
+
+    // Reads regular files from an archive buffer; stops at the first empty header.
+    fn parse(data: *bytes.Buffer): *tar.Archive
+    begin
+        var a: *tar.Archive := tar.new()
+        var position: int := 0
+        while position + 512 <= data.size && bytes.get(data, position) != 0 {
+            var name: string := field(data, position, 100)
+            var size: int := parse_octal(field(data, position + 124, 12))
+            var kind: int := bytes.get(data, position + 156)
+            position := position + 512
+            if kind = 0 || kind = 48 { add(a, name, bytes.slice_string(data, position, position + size)) }
+            position := position + (size + 511) / 512 * 512
+        }
+        return a
+    end
+
+    fn name_at(a: *tar.Archive, index: int): string
+    begin
+        return strlist.get(a.names, index)
+    end
+
+    fn content_at(a: *tar.Archive, index: int): string
+    begin
+        return strlist.get(a.contents, index)
+    end
+
+    fn find(a: *tar.Archive, name: string): string
+    begin
+        var index: int := strlist.index_of(a.names, name)
+        if index < 0 { return "" }
+        return strlist.get(a.contents, index)
+    end
+end

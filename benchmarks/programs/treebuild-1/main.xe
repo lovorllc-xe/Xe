@@ -1,0 +1,66 @@
+type Tree: record
+begin
+    left: *Tree
+    right: *Tree
+end
+
+fn treemake(depth: int): *Tree
+begin
+    var node: *Tree := alloc(16)
+    var none: *Tree
+    node.left := none
+    node.right := none
+    if depth > 0 {
+        node.left := treemake(depth - 1)
+        node.right := treemake(depth - 1)
+    }
+    return node
+end
+
+fn treecount(node: *Tree): int
+begin
+    var left: *Tree := node.left
+    if @left = 0 { return 1 }
+    return 1 + treecount(node.left) + treecount(node.right)
+end
+
+fn treefree(node: *Tree)
+begin
+    var left: *Tree := node.left
+    if @left != 0 {
+        treefree(node.left)
+        treefree(node.right)
+    }
+    free(node)
+end
+
+fn treebuild(n: int): int
+begin
+    var total: int := 0
+    var round: int := 0
+    while round < 4 {
+        var root: *Tree := treemake(n)
+        total := total + treecount(root)
+        treefree(root)
+        round := round + 1
+    }
+    return total
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(treebuild(n))
+    return 0
+end

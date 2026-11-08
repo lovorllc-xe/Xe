@@ -1,0 +1,81 @@
+// complex: complex numbers with arithmetic, polar form and exponentials.
+uses mathx
+
+module complex
+begin
+    type Complex: record
+    begin
+        re: flt
+        im: flt
+    end
+
+    fn make(re: flt, im: flt): complex.Complex
+    begin
+        var result: complex.Complex
+        result.re := re
+        result.im := im
+        return result
+    end
+
+    fn add(a: complex.Complex, b: complex.Complex): complex.Complex
+    begin
+        return make(a.re + b.re, a.im + b.im)
+    end
+
+    fn sub(a: complex.Complex, b: complex.Complex): complex.Complex
+    begin
+        return make(a.re - b.re, a.im - b.im)
+    end
+
+    fn mul(a: complex.Complex, b: complex.Complex): complex.Complex
+    begin
+        return make(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
+    end
+
+    fn div(a: complex.Complex, b: complex.Complex): complex.Complex
+    begin
+        var scale: flt := b.re * b.re + b.im * b.im
+        return make((a.re * b.re + a.im * b.im) / scale, (a.im * b.re - a.re * b.im) / scale)
+    end
+
+    fn conj(a: complex.Complex): complex.Complex
+    begin
+        return make(a.re, -a.im)
+    end
+
+    fn abs(a: complex.Complex): flt
+    begin
+        return mathx.hypot(a.re, a.im)
+    end
+
+    fn arg(a: complex.Complex): flt
+    begin
+        return mathx.atan2(a.im, a.re)
+    end
+
+    fn polar(radius: flt, angle: flt): complex.Complex
+    begin
+        return make(radius * mathx.cos(angle), radius * mathx.sin(angle))
+    end
+
+    fn exp(a: complex.Complex): complex.Complex
+    begin
+        return polar(mathx.exp(a.re), a.im)
+    end
+
+    fn scale(a: complex.Complex, factor: flt): complex.Complex
+    begin
+        return make(a.re * factor, a.im * factor)
+    end
+
+    fn sqrt(a: complex.Complex): complex.Complex
+    begin
+        return polar(mathx.sqrt(abs(a)), arg(a) / 2.0)
+    end
+
+    fn to_string(a: complex.Complex, decimals: int): string
+    begin
+        if a.im < 0.0 { return flt.format(a.re, decimals) + "-" + flt.format(-a.im, decimals) + "i" }
+        return flt.format(a.re, decimals) + "+" + flt.format(a.im, decimals) + "i"
+    end
+end

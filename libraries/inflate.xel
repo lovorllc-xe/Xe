@@ -1,0 +1,309 @@
+// inflate: DEFLATE decompression (RFC 1951) with zlib (RFC 1950) and gzip (RFC 1952) wrappers.
+uses bytes
+
+module inflate
+begin
+    type State: record
+    begin
+        input: *bytes.Buffer
+        position: int
+        bitBuffer: int
+        bitCount: int
+        output: *bytes.Buffer
+        error: int
+    end
+
+    fn bits(s: *inflate.State, count: int): int
+    begin
+        var value: int := s.bitBuffer
+        while s.bitCount < count {
+            if s.position >= s.input.size {
+                s.error := 1
+                return 0
+            }
+            value := value | (bytes.get(s.input, s.position) << s.bitCount)
+            s.position := s.position + 1
+            s.bitCount := s.bitCount + 8
+        }
+        s.bitBuffer := value >> count
+        s.bitCount := s.bitCount - count
+        return value & ((1 << count) - 1)
+    end
+
+    // Huffman table: counts[0..15], symbols[...]
+    fn decode(s: *inflate.State, counts: *int, symbols: *int): int
+    begin
+        var code: int := 0
+        var first: int := 0
+        var index: int := 0
+        var length: int := 1
+        while length <= 15 {
+            code := code | bits(s, 1)
+            var count: int := *(counts + length)
+            if code - count < first { return *(symbols + index + code - first) }
+            index := index + count
+            first := (first + count) << 1
+            code := code << 1
+            length := length + 1
+        }
+        s.error := 1
+        return -1
+    end
+
+    fn build(counts: *int, symbols: *int, lengths: *int, n: int)
+    begin
+        var length: int := 0
+        while length < 16 {
+            *(counts + length) := 0
+            length := length + 1
+        }
+        var symbol: int := 0
+        while symbol < n {
+            *(counts + *(lengths + symbol)) := *(counts + *(lengths + symbol)) + 1
+            symbol := symbol + 1
+        }
+        var offsets: *int := alloc(16 * 8)
+        *(offsets + 1) := 0
+        length := 1
+        while length < 15 {
+            *(offsets + length + 1) := *(offsets + length) + *(counts + length)
+            length := length + 1
+        }
+        symbol := 0
+        while symbol < n {
+            if *(lengths + symbol) != 0 {
+                *(symbols + *(offsets + *(lengths + symbol))) := symbol
+                *(offsets + *(lengths + symbol)) := *(offsets + *(lengths + symbol)) + 1
+            }
+            symbol := symbol + 1
+        }
+        free(offsets)
+    end
+
+    fn table_value(table: string, index: int): int
+    begin
+        var start: int := 0
+        var item: int := 0
+        var cursor: int := 0
+        while cursor <= str.length(table) {
+            if cursor = str.length(table) || str.char(table, cursor) = 44 {
+                if item = index {
+                    var value: int := 0
+                    var k: int := start
+                    while k < cursor {
+                        value := value * 10 + str.char(table, k) - 48
+                        k := k + 1
+                    }
+                    return value
+                }
+                item := item + 1
+                start := cursor + 1
+            }
+            cursor := cursor + 1
+        }
+        return 0
+    end
+
+    fn codes(s: *inflate.State, lencount: *int, lensym: *int, distcount: *int, distsym: *int): int
+    begin
+        var lengthBase: string := "3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258"
+        var lengthExtra: string := "0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0"
+        var distBase: string := "1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577"
+        var distExtra: string := "0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13"
+        var going: int := 1
+        while going = 1 {
+            var symbol: int := decode(s, lencount, lensym)
+            if s.error = 1 || symbol < 0 { return 0 }
+            if symbol < 256 { bytes.push(s.output, symbol) }
+            else {
+                if symbol = 256 { going := 0 }
+                else {
+                    var li: int := symbol - 257
+                    if li >= 29 { return 0 }
+                    var length: int := table_value(lengthBase, li) + bits(s, table_value(lengthExtra, li))
+                    var di: int := decode(s, distcount, distsym)
+                    if di < 0 || di >= 30 { return 0 }
+                    var distance: int := table_value(distBase, di) + bits(s, table_value(distExtra, di))
+                    if distance > s.output.size { return 0 }
+                    var k: int := 0
+                    while k < length {
+                        bytes.push(s.output, bytes.get(s.output, s.output.size - distance))
+                        k := k + 1
+                    }
+                }
+            }
+        }
+        return 1
+    end
+
+    fn fixed(s: *inflate.State): int
+    begin
+        var lengths: *int := alloc(320 * 8)
+        var symbol: int := 0
+        while symbol < 288 {
+            var l: int := 8
+            if symbol >= 144 && symbol < 256 { l := 9 }
+            if symbol >= 256 && symbol < 280 { l := 7 }
+            *(lengths + symbol) := l
+            symbol := symbol + 1
+        }
+        var lencount: *int := alloc(16 * 8)
+        var lensym: *int := alloc(288 * 8)
+        build(lencount, lensym, lengths, 288)
+        symbol := 0
+        while symbol < 30 {
+            *(lengths + symbol) := 5
+            symbol := symbol + 1
+        }
+        var distcount: *int := alloc(16 * 8)
+        var distsym: *int := alloc(30 * 8)
+        build(distcount, distsym, lengths, 30)
+        var result: int := codes(s, lencount, lensym, distcount, distsym)
+        free(lengths)
+        free(lencount)
+        free(lensym)
+        free(distcount)
+        free(distsym)
+        return result
+    end
+
+    fn dynamic(s: *inflate.State): int
+    begin
+        var nlen: int := bits(s, 5) + 257
+        var ndist: int := bits(s, 5) + 1
+        var ncode: int := bits(s, 4) + 4
+        var order: string := "16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15"
+        var lengths: *int := alloc(320 * 8)
+        runtime.mem.set(lengths, 0, 320 * 8)
+        var index: int := 0
+        while index < ncode {
+            *(lengths + table_value(order, index)) := bits(s, 3)
+            index := index + 1
+        }
+        var lencount: *int := alloc(16 * 8)
+        var lensym: *int := alloc(320 * 8)
+        build(lencount, lensym, lengths, 19)
+        index := 0
+        runtime.mem.set(lengths, 0, 320 * 8)
+        while index < nlen + ndist {
+            var symbol: int := decode(s, lencount, lensym)
+            if symbol < 0 { return 0 }
+            if symbol < 16 {
+                *(lengths + index) := symbol
+                index := index + 1
+            }
+            else {
+                var repeat: int := 0
+                var value: int := 0
+                if symbol = 16 {
+                    if index = 0 { return 0 }
+                    value := *(lengths + index - 1)
+                    repeat := 3 + bits(s, 2)
+                }
+                if symbol = 17 { repeat := 3 + bits(s, 3) }
+                if symbol = 18 { repeat := 11 + bits(s, 7) }
+                while repeat > 0 && index < nlen + ndist {
+                    *(lengths + index) := value
+                    index := index + 1
+                    repeat := repeat - 1
+                }
+            }
+        }
+        var litcount: *int := alloc(16 * 8)
+        var litsym: *int := alloc(320 * 8)
+        build(litcount, litsym, lengths, nlen)
+        var distcount: *int := alloc(16 * 8)
+        var distsym: *int := alloc(32 * 8)
+        build(distcount, distsym, lengths + nlen, ndist)
+        var result: int := codes(s, litcount, litsym, distcount, distsym)
+        free(lengths)
+        free(lencount)
+        free(lensym)
+        free(litcount)
+        free(litsym)
+        free(distcount)
+        free(distsym)
+        return result
+    end
+
+    // Raw DEFLATE stream starting at offset. Returns an empty buffer on error.
+    fn raw(input: *bytes.Buffer, offset: int): *bytes.Buffer
+    begin
+        var s: *inflate.State := alloc(48)
+        s.input := input
+        s.position := offset
+        s.bitBuffer := 0
+        s.bitCount := 0
+        s.output := bytes.new()
+        s.error := 0
+        var last: int := 0
+        while last = 0 && s.error = 0 {
+            last := bits(s, 1)
+            var kind: int := bits(s, 2)
+            if kind = 0 {
+                s.bitBuffer := 0
+                s.bitCount := 0
+                var length: int := bytes.get(input, s.position) | (bytes.get(input, s.position + 1) << 8)
+                s.position := s.position + 4
+                var k: int := 0
+                while k < length {
+                    bytes.push(s.output, bytes.get(input, s.position + k))
+                    k := k + 1
+                }
+                s.position := s.position + length
+            }
+            else {
+                if kind = 1 {
+                    if fixed(s) = 0 { s.error := 1 }
+                }
+                else {
+                    if kind = 2 {
+                        if dynamic(s) = 0 { s.error := 1 }
+                    }
+                    else { s.error := 1 }
+                }
+            }
+        }
+        if s.error = 1 { return bytes.new() }
+        return s.output
+    end
+
+    fn zlib(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        return raw(input, 2)
+    end
+
+    fn gzip(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        if input.size < 18 || bytes.get(input, 0) != 31 || bytes.get(input, 1) != 139 { return bytes.new() }
+        var flags: int := bytes.get(input, 3)
+        var position: int := 10
+        if (flags & 4) != 0 { position := position + 2 + bytes.read_le_at(input, position, 2) }
+        if (flags & 8) != 0 {
+            while bytes.get(input, position) != 0 { position := position + 1 }
+            position := position + 1
+        }
+        if (flags & 16) != 0 {
+            while bytes.get(input, position) != 0 { position := position + 1 }
+            position := position + 1
+        }
+        if (flags & 2) != 0 { position := position + 2 }
+        return raw(input, position)
+    end
+
+    fn gzip_file(path: string): string
+    begin
+        var fd: int := syscall.invoke3(2, path, 0, 0)
+        if fd < 0 { return "" }
+        var data: *bytes.Buffer := bytes.new()
+        var going: int := 1
+        while going = 1 {
+            bytes.reserve(data, data.size + 65536)
+            var got: int := syscall.invoke3(0, fd, data.data + data.size, 65536)
+            if got <= 0 { going := 0 }
+            else { data.size := data.size + got }
+        }
+        syscall.invoke3(3, fd, 0, 0)
+        return bytes.to_string(gzip(data))
+    end
+end

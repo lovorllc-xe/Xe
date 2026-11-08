@@ -1,0 +1,119 @@
+// duration: parse and format durations such as "1h30m", "250ms", "2.5s" (nanosecond ints).
+module duration
+begin
+    fn nanosecond(): int
+    begin
+        return 1
+    end
+
+    fn microsecond(): int
+    begin
+        return 1000
+    end
+
+    fn millisecond(): int
+    begin
+        return 1000000
+    end
+
+    fn second(): int
+    begin
+        return 1000000000
+    end
+
+    fn minute(): int
+    begin
+        return 60000000000
+    end
+
+    fn hour(): int
+    begin
+        return 3600000000000
+    end
+
+    fn day(): int
+    begin
+        return 86400000000000
+    end
+
+    // Returns -1 on syntax errors.
+    fn parse(text: string): int
+    begin
+        var total: int := 0
+        var index: int := 0
+        var size: int := str.length(text)
+        var negative: int := 0
+        if size > 0 && str.char(text, 0) = 45 {
+            negative := 1
+            index := 1
+        }
+        if index >= size { return -1 }
+        while index < size {
+            var whole: int := 0
+            var fraction: flt := 0.0
+            var scale: flt := 0.1
+            var digits: int := 0
+            while index < size && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+                whole := whole * 10 + str.char(text, index) - 48
+                index := index + 1
+                digits := digits + 1
+            }
+            if index < size && str.char(text, index) = 46 {
+                index := index + 1
+                while index < size && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+                    fraction := fraction + scale * (str.char(text, index) - 48)
+                    scale := scale * 0.1
+                    index := index + 1
+                    digits := digits + 1
+                }
+            }
+            if digits = 0 { return -1 }
+            var start: int := index
+            while index < size && (str.char(text, index) < 48 || str.char(text, index) > 57) && str.char(text, index) != 46 { index := index + 1 }
+            var unit: string := str.slice(text, start, index)
+            var factor: int := 0
+            if unit = "ns" { factor := 1 }
+            if unit = "us" || unit = str.fromchar(194) + str.fromchar(181) + "s" { factor := 1000 }
+            if unit = "ms" { factor := 1000000 }
+            if unit = "s" { factor := 1000000000 }
+            if unit = "m" { factor := 60000000000 }
+            if unit = "h" { factor := 3600000000000 }
+            if unit = "d" { factor := 86400000000000 }
+            if factor = 0 { return -1 }
+            total := total + whole * factor + flt.toint(fraction * factor)
+        }
+        if negative = 1 { return -total }
+        return total
+    end
+
+    fn format(value: int): string
+    begin
+        if value = 0 { return "0s" }
+        var n: int := value
+        var out: string := ""
+        if n < 0 {
+            out := "-"
+            n := -n
+        }
+        if n < 1000 { return out + str.number(n) + "ns" }
+        if n < 1000000 { return out + flt.format(n / 1000.0, 3) + "us" }
+        if n < 1000000000 { return out + flt.format(n / 1000000.0, 3) + "ms" }
+        var hours: int := n / 3600000000000
+        var minutes: int := (n % 3600000000000) / 60000000000
+        var seconds: flt := (n % 60000000000) / 1000000000.0
+        if hours > 0 { out := out + str.number(hours) + "h" }
+        if minutes > 0 { out := out + str.number(minutes) + "m" }
+        if seconds > 0.0 || (hours = 0 && minutes = 0) { out := out + flt.format(seconds, 3) + "s" }
+        return out
+    end
+
+    fn seconds(value: int): flt
+    begin
+        return value / 1000000000.0
+    end
+
+    fn milliseconds(value: int): int
+    begin
+        return value / 1000000
+    end
+end

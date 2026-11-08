@@ -1,0 +1,92 @@
+uses mathx
+uses numeric
+uses random
+uses stats
+uses sort
+uses search
+uses bigint
+uses rational
+uses complex
+uses geometry
+uses matrix
+uses linalg
+uses interp
+uses hashing
+uses intlist
+uses fltlist
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    failed := failed + expect("exp/ln", mathx.approx(mathx.ln(mathx.exp(3.7)), 3.7, 0.000000000001))
+    failed := failed + expect("sin", mathx.approx(mathx.sin(mathx.pi() / 6.0), 0.5, 0.000000000001))
+    failed := failed + expect("atan2", mathx.approx(mathx.atan2(1.0, -1.0), 3.0 * mathx.pi() / 4.0, 0.000000000001))
+    failed := failed + expect("pow", mathx.approx(mathx.pow(2.0, 10.0), 1024.0, 0.0000000001) && mathx.approx(mathx.pow(9.0, 0.5), 3.0, 0.0000000001))
+    failed := failed + expect("round", mathx.round(2.5) = 3.0 && mathx.round(-2.5) = -3.0 && mathx.floor(-1.5) = -2.0)
+    failed := failed + expect("prime", numeric.is_prime(1000003) = 1 && numeric.is_prime(1000001) = 0 && numeric.is_prime(998244353) = 1)
+    failed := failed + expect("primes", intlist.len(numeric.primes(100)) = 25)
+    failed := failed + expect("factorize", intlist.join(numeric.factorize(360), "*") = "2*2*2*3*3*5")
+    failed := failed + expect("modpow", numeric.modpow(2, 100, 1000000007) = 976371285)
+    failed := failed + expect("binomial", numeric.binomial(30, 15) = 155117520 && numeric.isqrt(99) = 9)
+    var rng: *random.Rng := random.new(7)
+    var data: *intlist.List := intlist.new()
+    var i: int := 0
+    while i < 5000 {
+        intlist.push(data, random.range(rng, -1000, 1000))
+        i := i + 1
+    }
+    var copy1: *intlist.List := intlist.copy(data)
+    var copy2: *intlist.List := intlist.copy(data)
+    var copy3: *intlist.List := intlist.copy(data)
+    sort.merge(copy1)
+    sort.heap(copy2)
+    sort.radix(copy3)
+    intlist.sort(data)
+    failed := failed + expect("sorts agree", intlist.equal(data, copy1) = 1 && intlist.equal(data, copy2) = 1 && intlist.equal(data, copy3) = 1 && sort.is_sorted(data) = 1)
+    var position: int := search.lower_bound(data, 0)
+    failed := failed + expect("lower bound", intlist.get(data, position) >= 0 && intlist.get(data, position - 1) < 0)
+    var values: *fltlist.List := fltlist.new()
+    fltlist.push(values, 2.0)
+    fltlist.push(values, 4.0)
+    fltlist.push(values, 4.0)
+    fltlist.push(values, 4.0)
+    fltlist.push(values, 5.0)
+    fltlist.push(values, 5.0)
+    fltlist.push(values, 7.0)
+    fltlist.push(values, 9.0)
+    failed := failed + expect("stats", stats.mean(values) = 5.0 && stats.median(values) = 4.5 && mathx.approx(stats.population_variance(values), 4.0, 0.000000001))
+    var f: *bigint.Big := bigint.factorial(30)
+    failed := failed + expect("bigint factorial", bigint.to_string(f) = "265252859812191058636308480000000")
+    var big: *bigint.Big := bigint.from_string("-123456789012345678901234567890")
+    failed := failed + expect("bigint add", bigint.to_string(bigint.add(big, bigint.from_string("123456789012345678901234567891"))) = "1")
+    failed := failed + expect("bigint pow", bigint.to_string(bigint.pow(bigint.from_int(2), 100)) = "1267650600228229401496703205376")
+    failed := failed + expect("bigint div", bigint.to_string(bigint.div_small(bigint.pow(bigint.from_int(10), 20), 7)) = "14285714285714285714")
+    var r: rational.Ratio := rational.add(rational.make(1, 3), rational.make(1, 6))
+    failed := failed + expect("rational", rational.to_string(r) = "1/2")
+    var c: complex.Complex := complex.mul(complex.make(1.0, 2.0), complex.make(3.0, -1.0))
+    failed := failed + expect("complex", complex.to_string(c, 1) = "5.0+5.0i")
+    var unit: geometry.Vec2 := geometry.rotate(geometry.vec(1.0, 0.0), mathx.pi() / 2.0)
+    failed := failed + expect("geometry rotate", mathx.abs(unit.x) < 0.000000001 && mathx.approx(unit.y, 1.0, 0.000000001))
+    var m: *matrix.Matrix := matrix.new(2, 2)
+    matrix.set(m, 0, 0, 4.0)
+    matrix.set(m, 0, 1, 7.0)
+    matrix.set(m, 1, 0, 2.0)
+    matrix.set(m, 1, 1, 6.0)
+    failed := failed + expect("determinant", mathx.approx(matrix.determinant(m), 10.0, 0.000000001))
+    var product: *matrix.Matrix := matrix.mul(m, matrix.inverse(m))
+    failed := failed + expect("inverse", mathx.approx(matrix.get(product, 0, 0), 1.0, 0.000000001) && mathx.abs(matrix.get(product, 0, 1)) < 0.000000001)
+    failed := failed + expect("cross", fltlist.join(linalg.cross3(linalg.vector(1.0, 0.0, 0.0), linalg.vector(0.0, 1.0, 0.0)), ",", 1) = "0.0,0.0,1.0")
+    failed := failed + expect("interp", interp.remap(5.0, 0.0, 10.0, 100.0, 200.0) = 150.0)
+    failed := failed + expect("murmur3", hashing.murmur3("hello", 0) = 613153351 && hashing.fnv1a32("a") = 3826002220)
+    if failed = 0 { writeln("math ok") }
+    return failed
+end
