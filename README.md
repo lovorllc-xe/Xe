@@ -1,6 +1,6 @@
 # Xe
 
-**Xe 2.0.0** is a statically checked systems and application language that
+**Xe 2.1.0** is a statically checked systems and application language that
 compiles straight to native Linux x86-64 executables. The compiler is written
 in Xe and **builds itself**: a checked-in assembly seed plus GNU `as` and `ld`
 are all you need — no C or C++ compiler.
@@ -20,7 +20,7 @@ begin
 end
 ```
 
-## What is new in 2.0
+## What is new in 2.x
 
 - **Self-hosted bootstrap.** `scripts/bootstrap.sh` assembles
   `bootstrap/xe-seed.s.gz`, rebuilds the compiler twice and checks that both
@@ -65,8 +65,8 @@ end
 ### From the release tarball (no compiler needed)
 
 ```sh
-tar xzf xe-2.0.0-linux-x86_64.tar.gz
-cd xe-2.0.0-linux-x86_64
+tar xzf xe-2.1.0-linux-x86_64.tar.gz
+cd xe-2.1.0-linux-x86_64
 ./install.sh                 # ~/.local     (or: sudo ./install.sh → /usr/local)
 xe --version
 ```

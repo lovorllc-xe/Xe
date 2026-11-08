@@ -5,7 +5,7 @@ description: Write, debug, and review code in the Xe programming language (.xe s
 
 # Xe language
 
-Xe 2.0.0 is a small statically checked language. The self-hosted compiler (`compiler/*.xe`) compiles it to native Linux x86-64 executables and builds itself from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip`. The installed `xe` is a native binary at `<prefix>/bin/xe`; it finds `std/` and `libraries/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 155 libraries ship in `libraries/` (index: `docs/libraries.md`). Diagnostics print `file:line:col` with a source excerpt.
+Xe 2.1.0 is a small statically checked language. The self-hosted compiler (`compiler/*.xe`) compiles it to native Linux x86-64 executables and builds itself from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip`. The installed `xe` is a native binary at `<prefix>/bin/xe`; it finds `std/` and `libraries/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 155 libraries ship in `libraries/` (index: `docs/libraries.md`). Diagnostics print `file:line:col` with a source excerpt.
 
 **Trust the compiler, not the docs.** `docs/documentation.txt` is a useful API catalog, but some of its syntax claims are wrong for the self-hosted compiler (see "Gotchas"). When unsure, build a tiny probe program. That takes about 20 ms.
 

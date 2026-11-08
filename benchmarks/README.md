@@ -13,7 +13,7 @@ once in `kernels.py` and transpiled to Xe, C++, Go, Rust and Python so every
 language runs the same algorithm; N comes from `argv` so nothing is constant-folded,
 and all languages must print the same checksum (0 mismatches in the last run).
 
-Toolchains: Xe 2.0.0, `g++ -O3`, `go build`, `rustc -C opt-level=3`, CPython 3.14.
+Toolchains: Xe 2.1.0, `g++ -O3`, `go build`, `rustc -C opt-level=3`, CPython 3.14.
 Compile time = mean of 3 builds (Python = `py_compile`, interpreter start included).
 Execution time = mean of 30 runs of the whole process (fork, exec, run, exit),
 so the smallest cases mostly measure process start-up. The GUI shows ns, µs, ms and s.

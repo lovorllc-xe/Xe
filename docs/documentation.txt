@@ -1,6 +1,6 @@
-XE 2.0.0
+XE 2.1.0
 
-WHAT CHANGED IN 2.0.0
+WHAT CHANGED IN 2.0.0 AND 2.1.0 (graphics, GUI, Vulkan, apps)
 =====================
 Syntax is unchanged. The compiler, runtime and library set changed:
 

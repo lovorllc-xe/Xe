@@ -1,4 +1,4 @@
-# Xe syntax reference (self-hosted compiler, 2.0.0)
+# Xe syntax reference (self-hosted compiler, 2.1.0)
 
 The source of truth is `compiler/lexer.xe`, `compiler/parser.xe`, and `compiler/checker.xe`. The C++ bootstrap in `src/` accepts a slightly different dialect (for example `for (cond) {}`). Don't rely on that dialect in user programs.
 
