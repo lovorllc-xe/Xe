@@ -1,0 +1,111 @@
+// sysinfo: CPU count, memory, load average and uptime from the kernel and /proc.
+uses strings
+uses strlist
+
+module sysinfo
+begin
+    fn cpu_count(): int
+    begin
+        var mask: *void := alloc(128)
+        runtime.mem.set(mask, 0, 128)
+        var got: int := syscall.invoke3(204, 0, 128, mask)
+        var total: int := 0
+        if got > 0 {
+            var index: int := 0
+            while index < got {
+                var byte: int := runtime.hw.read8(mask + index)
+                while byte != 0 {
+                    total := total + (byte & 1)
+                    byte := byte >> 1
+                }
+                index := index + 1
+            }
+        }
+        free(mask)
+        if total < 1 { total := 1 }
+        return total
+    end
+
+    fn meminfo_kb(field: string): int
+    begin
+        var lines: *strlist.List := strlist.lines(file.read("/proc/meminfo"))
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strlist.get(lines, index)
+            if strings.starts_with(line, field + ":") = 1 {
+                var digits: string := strings.trim(strings.trim_suffix(strings.trim(str.slice(line, str.length(field) + 1, str.length(line))), "kB"))
+                var value: int := 0
+                var k: int := 0
+                while k < str.length(digits) && str.char(digits, k) >= 48 && str.char(digits, k) <= 57 {
+                    value := value * 10 + str.char(digits, k) - 48
+                    k := k + 1
+                }
+                return value
+            }
+            index := index + 1
+        }
+        return 0
+    end
+
+    fn memory_total(): int
+    begin
+        return meminfo_kb("MemTotal") * 1024
+    end
+
+    fn memory_available(): int
+    begin
+        return meminfo_kb("MemAvailable") * 1024
+    end
+
+    fn uptime_seconds(): flt
+    begin
+        var text: string := file.read("/proc/uptime")
+        var value: flt := 0.0
+        var index: int := 0
+        while index < str.length(text) && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+            value := value * 10.0 + (str.char(text, index) - 48)
+            index := index + 1
+        }
+        return value
+    end
+
+    fn load_average(): string
+    begin
+        var text: string := file.read("/proc/loadavg")
+        var parts: *strlist.List := strlist.split(strings.trim(text), " ")
+        return strlist.get(parts, 0) + " " + strlist.get(parts, 1) + " " + strlist.get(parts, 2)
+    end
+
+    fn process_memory(): int
+    begin
+        var lines: *strlist.List := strlist.lines(file.read("/proc/self/status"))
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strlist.get(lines, index)
+            if strings.starts_with(line, "VmRSS:") = 1 {
+                var digits: string := strings.trim(strings.trim_suffix(strings.trim(str.slice(line, 6, str.length(line))), "kB"))
+                var value: int := 0
+                var k: int := 0
+                while k < str.length(digits) && str.char(digits, k) >= 48 && str.char(digits, k) <= 57 {
+                    value := value * 10 + str.char(digits, k) - 48
+                    k := k + 1
+                }
+                return value * 1024
+            }
+            index := index + 1
+        }
+        return 0
+    end
+
+    fn cpu_model(): string
+    begin
+        var lines: *strlist.List := strlist.lines(file.read("/proc/cpuinfo"))
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strlist.get(lines, index)
+            if strings.starts_with(line, "model name") = 1 { return strings.trim(strings.after(line, ":")) }
+            index := index + 1
+        }
+        return ""
+    end
+end

@@ -1,23 +1,23 @@
 module checker
 begin
-    fn functionSignature(source: string, pool: *[524288]int, functionId: int, finish: int): int
+    fn functionSignature(source: string, pool: *[12582912]int, functionId: int, finish: int): int
     begin
         var opening: [4]int := parser.significant(source, finish, 1)
-        if opening[0] != 40 { return 0 }
+        if opening[0] != 40 { return diag.report(source, pool, opening[1], "expected '(' after the function name") }
         var item: [4]int := parser.significant(source, opening[2], opening[3])
         var parameters: int := 0
         while item[0] != 41 && item[0] != token.endKind() {
             var name: [4]int := item
             var colon: [4]int := parser.significant(source, name[2], name[3])
             var typeStart: [4]int := parser.significant(source, colon[2], colon[3])
-            if name[0] != token.nameKind() || colon[0] != 58 { return 0 }
+            if name[0] != token.nameKind() || colon[0] != 58 { return diag.report(source, pool, name[1], "expected a parameter in the form 'name: type'") }
             var typeFinish: [4]int := typeStart
             while typeFinish[0] != 44 && typeFinish[0] != 41 && typeFinish[0] != token.endKind() {
                 typeFinish := parser.significant(source, typeFinish[2], typeFinish[3])
             }
-            if str.length(codegen.typeTextForFunction(source, pool, functionId, typeStart[1], typeFinish[1], typeStart[3])) = 0 { return 0 }
+            if str.length(codegen.typeTextForFunction(source, pool, functionId, typeStart[1], typeFinish[1], typeStart[3])) = 0 { return diag.report(source, pool, typeStart[1], "unknown parameter type " + diag.quoted(source, typeStart[1], typeFinish[1])) }
             parameters := parameters + 1
-            if parameters > 32 { return 0 }
+            if parameters > 32 { return diag.report(source, pool, name[1], "too many parameters (limit 32)") }
             item := typeFinish
             if item[0] = 44 { item := parser.significant(source, item[2], item[3]) }
             else { if item[0] != 41 { return 0 } }
@@ -30,27 +30,351 @@ begin
             while str.slice(source, body[1], body[2]) != "begin" && body[0] != token.endKind() {
                 body := parser.significant(source, body[2], body[3])
             }
-            if body[0] = token.endKind() { return 0 }
-            if body[1] <= result[1] || str.length(codegen.typeTextForFunction(source, pool, functionId, result[1], body[1], result[3])) = 0 { return 0 }
+            if body[0] = token.endKind() { return diag.report(source, pool, result[1], "expected 'begin' after the result type") }
+            if body[1] <= result[1] || str.length(codegen.typeTextForFunction(source, pool, functionId, result[1], body[1], result[3])) = 0 { return diag.report(source, pool, result[1], "unknown result type " + diag.quoted(source, result[1], body[1])) }
         }
         else { body := colon }
-        if str.slice(source, body[1], body[2]) != "begin" { return 0 }
+        if str.slice(source, body[1], body[2]) != "begin" { return diag.report(source, pool, body[1], "expected 'begin' or ': ResultType' after the parameter list") }
         return 1
     end
 
-    fn failStatement(source: string, pool: *[524288]int, statement: int, kind: int): int
+
+    fn typeLabel(type: string): string
     begin
+        if str.length(type) = 0 { return "an invalid value" }
+        if type = "*" { return "'*void'" }
+        if type = "str" { return "'string'" }
+        return "'" + type + "'"
+    end
+
+    fn operatorText(operation: int): string
+    begin
+        if operation = 43 { return "+" }
+        if operation = 45 { return "-" }
+        if operation = 42 { return "*" }
+        if operation = 47 { return "/" }
+        if operation = 37 { return "%" }
+        if operation = 256 { return "=" }
+        if operation = 257 { return "!=" }
+        if operation = 60 { return "<" }
+        if operation = 62 { return ">" }
+        if operation = 258 { return "<=" }
+        if operation = 259 { return ">=" }
+        if operation = 260 { return "&&" }
+        if operation = 261 { return "||" }
+        if operation = 38 { return "&" }
+        if operation = 124 { return "|" }
+        if operation = 94 { return "^" }
+        if operation = 263 { return "<<" }
+        if operation = 264 { return ">>" }
+        if operation = 33 { return "!" }
+        if operation = 126 { return "~" }
+        if operation = 64 { return "@" }
+        if operation = 35 { return "#" }
+        return str.fromchar(operation)
+    end
+
+    fn nameHint(name: string): string
+    begin
+        if name = "break" || name = "continue" { return "; Xe has no '" + name + "', so leave the loop with a flag variable or return" }
+        if name = "null" || name = "nil" || name = "NULL" || name = "nullptr" { return "; use 0 for a null pointer" }
+        if name = "True" || name = "False" { return "; Xe spells these 'true' and 'false'" }
+        if name = "print" || name = "println" || name = "printf" { return "; use write(...) or writeln(...)" }
+        if name = "len" || name = "length" || name = "strlen" { return "; use str.length(text) for strings" }
+        return ""
+    end
+
+    fn expressionStart(pool: *[12582912]int, id: int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.binaryKind() || kind = ast.memberKind() || kind = ast.indexKind() || kind = ast.sliceKind() { return expressionStart(pool, ast.read(pool, id, 3)) }
+        return ast.read(pool, id, 1)
+    end
+
+    fn valueType(source: string, pool: *[12582912]int, functionId: int, id: int): string
+    begin
+        var type: string := codegen.expressionType(source, pool, functionId, id)
+        if str.length(type) = 0 && codegen.stringExpressionType(source, pool, functionId, id) = 1 { type := "string" }
+        if str.length(type) = 0 && codegen.arrayExpressionType(source, pool, functionId, id) = 1 { type := codegen.arrayType(source, pool, functionId, id) }
+        if str.length(type) = 0 && id >= 0 && ast.read(pool, id, 0) = ast.indexKind() && str.length(codegen.integerExpression(source, pool, functionId, id)) > 0 { type := "int" }
+        return type
+    end
+
+    fn callArgumentAllowed(source: string, pool: *[12582912]int, name: string, expectedType: string, actualType: string, argument: int, index: int): int
+    begin
+        if codegen.argumentTypeMatches(expectedType, actualType) = 1 { return 1 }
+        if (name = "syscall.invoke3" || name = "syscall.invoke6") && expectedType = "int" && ((str.length(actualType) > 0 && str.char(actualType, 0) = 42) || actualType = "string" || actualType = "str") { return 1 }
+        if str.length(expectedType) > 0 && str.char(expectedType, 0) = 42 && codegen.nullPointerArgument(source, pool, argument) = 1 { return 1 }
+        if (name = "runtime.hw.read8" || name = "runtime.hw.read32" || name = "runtime.hw.write8" || name = "runtime.hw.write32") && index = 0 && actualType = "int" { return 1 }
         return 0
     end
 
-    fn isNullPointerValue(source: string, pool: *[524288]int, expression: int): int
+    // Finds the innermost invalid part of an expression and reports it. Returns 1 when reported.
+    fn explain(source: string, pool: *[12582912]int, functionId: int, id: int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        var start: int := ast.read(pool, id, 1)
+        if kind = ast.nameKind() {
+            var name: string := str.slice(source, start, ast.read(pool, id, 2))
+            if name = "true" || name = "false" { return 0 }
+            if str.length(codegen.expressionType(source, pool, functionId, id)) = 0 && ast.read(pool, id, 11) = -1 {
+                diag.report(source, pool, start, "undefined name '" + name + "'" + nameHint(name))
+                return 1
+            }
+            var dot: int := str.find(name, ".")
+            if dot >= 0 && str.length(codegen.expressionType(source, pool, functionId, id)) = 0 {
+                var root: string := str.slice(name, 0, dot)
+                var rest: string := str.slice(name, dot + 1, str.length(name))
+                var current: string := ""
+                var binding: int := ast.read(pool, id, 11)
+                if binding >= 0 { current := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, binding, 7), ast.read(pool, binding, 8), 1) }
+                if binding <= -2 { current := codegen.functionParameterType(source, pool, functionId, "", -2 - binding) }
+                var walked: string := root
+                while str.length(rest) > 0 && str.length(current) > 0 {
+                    var next: int := str.find(rest, ".")
+                    var field: string := rest
+                    if next >= 0 { field := str.slice(rest, 0, next) }
+                    var recordType: string := current
+                    if str.length(recordType) > 1 && str.char(recordType, 0) = 42 { recordType := str.slice(recordType, 1, str.length(recordType)) }
+                    var fieldType: string := codegen.recordFieldType(source, recordType, field)
+                    if str.length(fieldType) = 0 {
+                        if codegen.recordWordCount(source, recordType) > 0 { diag.report(source, pool, start, "record '" + recordType + "' has no field '" + field + "'") }
+                        else { diag.report(source, pool, start, "'" + walked + "' has type " + typeLabel(current) + ", which has no fields; '." + field + "' needs a record") }
+                        return 1
+                    }
+                    walked := walked + "." + field
+                    current := fieldType
+                    if next < 0 { rest := "" }
+                    else { rest := str.slice(rest, next + 1, str.length(rest)) }
+                }
+            }
+            return 0
+        }
+        if kind = ast.callKind() {
+            var called: int := ast.read(pool, id, 3)
+            if called < 0 { return 0 }
+            var name: string := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2))
+            var argument: int := ast.read(pool, id, 6)
+            var count: int := 0
+            while argument >= 0 {
+                if explain(source, pool, functionId, argument) = 1 { return 1 }
+                count := count + 1
+                argument := ast.read(pool, argument, 5)
+            }
+            if name = "write" || name = "writeln" || name = "read" || name = "readln" { return 0 }
+            var builtin: int := 0
+            var expected: int := codegen.builtinParameterCount(name)
+            var target: int := -1
+            if expected >= 0 { builtin := 1 }
+            else {
+                var cached: int := ast.read(pool, called, 11)
+                if cached > 0 { target := cached - 1 }
+                else { target := codegen.functionNode(source, pool, functionId, name) }
+                if target < 0 {
+                    diag.report(source, pool, ast.read(pool, called, 1), "call to undefined function '" + name + "'" + nameHint(name))
+                    return 1
+                }
+                expected := codegen.functionParameterCountAt(source, pool, target)
+            }
+            if expected >= 0 && expected != count {
+                var plural: string := "s"
+                if expected = 1 { plural := "" }
+                diag.report(source, pool, ast.read(pool, called, 1), "'" + name + "' expects " + str.number(expected) + " argument" + plural + " but " + str.number(count) + " were given")
+                return 1
+            }
+            argument := ast.read(pool, id, 6)
+            var index: int := 0
+            while argument >= 0 && expected >= 0 {
+                var expectedType: string := ""
+                if builtin = 1 { expectedType := codegen.builtinParameterType(name, index) }
+                else { expectedType := codegen.functionParameterTypeAt(source, pool, target, index) }
+                var actualType: string := valueType(source, pool, functionId, argument)
+                if str.length(expectedType) > 0 && callArgumentAllowed(source, pool, name, expectedType, actualType, argument, index) = 0 {
+                    var wanted: string := typeLabel(expectedType)
+                    if expectedType = "numeric" { wanted := "'int' or 'flt'" }
+                    diag.report(source, pool, expressionStart(pool, argument), "argument " + str.number(index + 1) + " of '" + name + "' must be " + wanted + ", but this is " + typeLabel(actualType))
+                    return 1
+                }
+                argument := ast.read(pool, argument, 5)
+                index := index + 1
+            }
+            return 0
+        }
+        if kind = ast.unaryKind() {
+            var operand: int := ast.read(pool, id, 3)
+            if explain(source, pool, functionId, operand) = 1 { return 1 }
+            var operation: int := ast.read(pool, id, 10)
+            if str.length(codegen.expressionType(source, pool, functionId, id)) = 0 && operation != 38 {
+                var operandType: string := valueType(source, pool, functionId, operand)
+                if str.length(operandType) = 0 { return 0 }
+                if operation = 42 { diag.report(source, pool, start, "'*' dereferences a pointer, but this value has type " + typeLabel(operandType)) }
+                else { diag.report(source, pool, start, "operator '" + operatorText(operation) + "' cannot be applied to " + typeLabel(operandType)) }
+                return 1
+            }
+            return 0
+        }
+        if kind = ast.binaryKind() {
+            var left: int := ast.read(pool, id, 3)
+            var right: int := ast.read(pool, id, 4)
+            if explain(source, pool, functionId, left) = 1 { return 1 }
+            if explain(source, pool, functionId, right) = 1 { return 1 }
+            if str.length(codegen.expressionType(source, pool, functionId, id)) = 0 {
+                var leftType: string := valueType(source, pool, functionId, left)
+                var rightType: string := valueType(source, pool, functionId, right)
+                if str.length(leftType) = 0 || str.length(rightType) = 0 { return 0 }
+                var operation: int := ast.read(pool, id, 10)
+                var hint: string := ""
+                if operation = 43 && ((leftType = "string" && (rightType = "int" || rightType = "flt")) || (rightType = "string" && (leftType = "int" || leftType = "flt"))) { hint := "; convert the number first with str.number(...) or flt.format(...)" }
+                if operation = 37 && (leftType = "flt" || rightType = "flt") { hint := "; '%' works only on int values" }
+                diag.report(source, pool, expressionStart(pool, id), "operator '" + operatorText(operation) + "' cannot be applied to " + typeLabel(leftType) + " and " + typeLabel(rightType) + hint)
+                return 1
+            }
+            return 0
+        }
+        if kind = ast.memberKind() {
+            var base: int := ast.read(pool, id, 3)
+            if explain(source, pool, functionId, base) = 1 { return 1 }
+            if str.length(codegen.expressionType(source, pool, functionId, id)) = 0 {
+                var baseType: string := valueType(source, pool, functionId, base)
+                var field: string := str.slice(source, ast.read(pool, id, 7), ast.read(pool, id, 8))
+                if str.length(baseType) = 0 { return 0 }
+                if codegen.recordWordCount(source, baseType) > 0 { diag.report(source, pool, ast.read(pool, id, 7), "record '" + baseType + "' has no field '" + field + "'") }
+                else { diag.report(source, pool, ast.read(pool, id, 7), "'." + field + "' needs a record value, but this value has type " + typeLabel(baseType)) }
+                return 1
+            }
+            return 0
+        }
+        if kind = ast.indexKind() || kind = ast.sliceKind() {
+            var base: int := ast.read(pool, id, 3)
+            var index: int := ast.read(pool, id, 4)
+            if explain(source, pool, functionId, base) = 1 { return 1 }
+            if index >= 0 && explain(source, pool, functionId, index) = 1 { return 1 }
+            if kind = ast.sliceKind() && ast.read(pool, id, 6) >= 0 && explain(source, pool, functionId, ast.read(pool, id, 6)) = 1 { return 1 }
+            var baseType: string := valueType(source, pool, functionId, base)
+            if str.length(baseType) > 0 && str.char(baseType, 0) != 91 {
+                diag.report(source, pool, expressionStart(pool, id), "cannot index a value of type " + typeLabel(baseType) + "; only fixed arrays can be indexed")
+                return 1
+            }
+            if index >= 0 {
+                var indexType: string := valueType(source, pool, functionId, index)
+                if str.length(indexType) > 0 && indexType != "int" {
+                    diag.report(source, pool, expressionStart(pool, index), "array index must be 'int', but this is " + typeLabel(indexType))
+                    return 1
+                }
+            }
+            return 0
+        }
+        return 0
+    end
+
+    fn mismatch(source: string, pool: *[12582912]int, offset: int, what: string, expected: string, actual: string): int
+    begin
+        var hint: string := ""
+        if expected = "flt" && actual = "int" { hint := "; write a flt literal with a decimal point, such as 3.0" }
+        if (expected = "string" || expected = "str") && (actual = "int" || actual = "flt") { hint := "; convert it with str.number(...) or flt.format(...)" }
+        if expected = "int" && actual = "flt" { hint := "; convert it with flt.toint(...)" }
+        return diag.report(source, pool, offset, what + " has type " + typeLabel(expected) + ", but the value has type " + typeLabel(actual) + hint)
+    end
+
+    fn failStatement(source: string, pool: *[12582912]int, statement: int, kind: int): int
+    begin
+        if diag.hasReported(pool) != 0 { return 0 }
+        var functionId: int := ast.read(pool, statement, 9)
+        var offset: int := ast.read(pool, statement, 1)
+        if kind = ast.variableKind() {
+            var name: string := str.slice(source, ast.read(pool, statement, 3), ast.read(pool, statement, 4))
+            var value: int := ast.read(pool, statement, 6)
+            var type: string := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
+            if ast.read(pool, statement, 10) % 65536 >= 32768 && value < 0 { return diag.report(source, pool, offset, "constant '" + name + "' needs an initializer") }
+            if str.length(type) = 0 {
+                var typeStart: [4]int := parser.significant(source, ast.read(pool, statement, 7), 1)
+                return diag.report(source, pool, typeStart[1], "unknown type " + diag.quoted(source, typeStart[1], typeStart[2]) + " for '" + name + "'")
+            }
+            if explain(source, pool, functionId, value) = 1 { return 0 }
+            var actual: string := valueType(source, pool, functionId, value)
+            if value >= 0 && actual != type && str.length(actual) > 0 { return mismatch(source, pool, expressionStart(pool, value), "'" + name + "'", type, actual) }
+            return diag.report(source, pool, offset, "this initializer for '" + name + "' is not supported")
+        }
+        if kind = ast.assignKind() {
+            var target: int := ast.read(pool, statement, 3)
+            var value: int := ast.read(pool, statement, 4)
+            if explain(source, pool, functionId, target) = 1 { return 0 }
+            if explain(source, pool, functionId, value) = 1 { return 0 }
+            var targetType: string := valueType(source, pool, functionId, target)
+            var actual: string := valueType(source, pool, functionId, value)
+            if str.length(targetType) = 0 { return diag.report(source, pool, offset, "the left side of ':=' cannot be assigned to") }
+            if codegen.argumentTypeMatches(targetType, actual) = 0 && str.length(actual) > 0 { return mismatch(source, pool, expressionStart(pool, value), "the target", targetType, actual) }
+            if str.length(targetType) > 0 && str.char(targetType, 0) = 42 { return diag.report(source, pool, expressionStart(pool, value), "a pointer allocated inside a gc region cannot be stored in a variable that outlives the region") }
+            return diag.report(source, pool, offset, "this assignment is not supported")
+        }
+        if kind = ast.returnKind() {
+            var value: int := ast.read(pool, statement, 6)
+            var functionName: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
+            var resultType: string := codegen.functionResultType(source, pool, functionId, functionName)
+            if value < 0 { return diag.report(source, pool, offset, "function '" + functionName + "' must return a value of type " + typeLabel(resultType)) }
+            if resultType = "void" { return diag.report(source, pool, expressionStart(pool, value), "function '" + functionName + "' has no result type, so it cannot return a value") }
+            if explain(source, pool, functionId, value) = 1 { return 0 }
+            var actual: string := valueType(source, pool, functionId, value)
+            if codegen.argumentTypeMatches(resultType, actual) = 0 && str.length(actual) > 0 { return mismatch(source, pool, expressionStart(pool, value), "the result of '" + functionName + "'", resultType, actual) }
+            if str.length(resultType) > 0 && str.char(resultType, 0) = 42 { return diag.report(source, pool, expressionStart(pool, value), "a pointer allocated inside a gc region cannot be returned from it") }
+            return diag.report(source, pool, offset, "this return value is not supported")
+        }
+        if kind = ast.expressionKind() || kind = ast.deferKind() {
+            var expression: int := ast.read(pool, statement, 6)
+            if expression < 0 { return diag.report(source, pool, offset, "expected an expression") }
+            if explain(source, pool, functionId, expression) = 1 { return 0 }
+            if ast.read(pool, expression, 0) = ast.callKind() {
+                var called: int := ast.read(pool, expression, 3)
+                var name: string := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2))
+                if name = "write" || name = "writeln" {
+                    var argument: int := ast.read(pool, expression, 6)
+                    while argument >= 0 {
+                        if str.length(codegen.writeArgumentCode(source, pool, functionId, "write", argument, offset)) = 0 { return diag.report(source, pool, expressionStart(pool, argument), "cannot print a value of type " + typeLabel(valueType(source, pool, functionId, argument))) }
+                        argument := ast.read(pool, argument, 5)
+                    }
+                }
+                if name = "read" || name = "readln" { return diag.report(source, pool, offset, "'" + name + "' needs exactly one variable of type int, flt or string") }
+                return diag.report(source, pool, offset, "this call is not supported")
+            }
+            return diag.report(source, pool, offset, "this expression does nothing as a statement; did you mean ':=' to assign?")
+        }
+        if kind = ast.branchKind() || kind = ast.loopKind() || kind = ast.switchKind() {
+            var condition: int := ast.read(pool, statement, 3)
+            if explain(source, pool, functionId, condition) = 1 { return 0 }
+            var conditionType: string := valueType(source, pool, functionId, condition)
+            if conditionType != "int" {
+                if kind = ast.switchKind() { return diag.report(source, pool, expressionStart(pool, condition), "switch value must be 'int', but it has type " + typeLabel(conditionType)) }
+                return diag.report(source, pool, expressionStart(pool, condition), "condition must be 'int', but it has type " + typeLabel(conditionType))
+            }
+            if kind = ast.switchKind() {
+                var arm: int := ast.read(pool, statement, 6)
+                var defaults: int := 0
+                while arm >= 0 {
+                    if ast.read(pool, arm, 10) = 1 {
+                        defaults := defaults + 1
+                        if defaults > 1 { return diag.report(source, pool, ast.read(pool, arm, 1), "switch has more than one 'default'") }
+                    }
+                    else {
+                        if codegen.integerValue(source, pool, ast.read(pool, arm, 3))[0] = 0 { return diag.report(source, pool, ast.read(pool, arm, 1), "case labels must be integer constants") }
+                    }
+                    arm := ast.read(pool, arm, 5)
+                }
+            }
+            return 0
+        }
+        return diag.report(source, pool, offset, "this statement is not supported")
+    end
+
+    fn isNullPointerValue(source: string, pool: *[12582912]int, expression: int): int
     begin
         if expression < 0 { return 0 }
         if ast.read(pool, expression, 0) = ast.literalKind() && ast.read(pool, expression, 10) = token.numberKind() && str.slice(source, ast.read(pool, expression, 1), ast.read(pool, expression, 2)) = "0" { return 1 }
         return 0
     end
 
-    fn assignmentRootName(pool: *[524288]int, expression: int): int
+    fn assignmentRootName(pool: *[12582912]int, expression: int): int
     begin
         if expression < 0 { return -1 }
         var kind: int := ast.read(pool, expression, 0)
@@ -81,7 +405,7 @@ begin
         return 1
     end
 
-    fn sameFunctionName(source: string, pool: *[524288]int, left: int, right: int): int
+    fn sameFunctionName(source: string, pool: *[12582912]int, left: int, right: int): int
     begin
         var leftModule: int := ast.read(pool, left, 9)
         var rightModule: int := ast.read(pool, right, 9)
@@ -93,7 +417,7 @@ begin
         return 0
     end
 
-    fn parameterIndex(source: string, pool: *[524288]int, functionId: int, wantedFirst: int, wantedFinish: int): int
+    fn parameterIndex(source: string, pool: *[12582912]int, functionId: int, wantedFirst: int, wantedFinish: int): int
     begin
         if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return -1 }
         var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
@@ -111,7 +435,7 @@ begin
         return -1
     end
 
-    fn parametersUnique(source: string, pool: *[524288]int, functionId: int): int
+    fn parametersUnique(source: string, pool: *[12582912]int, functionId: int): int
     begin
         if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return 1 }
         var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
@@ -138,7 +462,7 @@ begin
         return parameter[0] = 41
     end
 
-    fn pointerRegionDepth(source: string, pool: *[524288]int, functionId: int, expression: int, currentDepth: int): int
+    fn pointerRegionDepth(source: string, pool: *[12582912]int, functionId: int, expression: int, currentDepth: int): int
     begin
         if expression < 0 { return 0 }
         var kind: int := ast.read(pool, expression, 0)
@@ -160,7 +484,7 @@ begin
         return 0
     end
 
-    fn expressionIsParameter(source: string, pool: *[524288]int, expression: int, parameterName: string): int
+    fn expressionIsParameter(source: string, pool: *[12582912]int, expression: int, parameterName: string): int
     begin
         if expression < 0 { return 0 }
         var kind: int := ast.read(pool, expression, 0)
@@ -176,9 +500,17 @@ begin
         return 0
     end
 
-    fn callMayRetainParameter(source: string, pool: *[524288]int, callerId: int, calledName: string, parameterIndex: int): int
+    // Builtins that only read or write through a pointer and never keep it.
+    fn neverRetains(name: string): int
     begin
-        if calledName = "alloc" || calledName = "free" || calledName = "write" || calledName = "writeln" || calledName = "read" || calledName = "readln" || str.find(calledName, "str.") = 0 || str.find(calledName, "file.") = 0 || str.find(calledName, "arg.") = 0 || calledName = "process.run" || calledName = "flt.format" { return 0 }
+        if name = "alloc" || name = "free" || name = "write" || name = "writeln" || name = "read" || name = "readln" || name = "process.run" || name = "flt.format" || name = "new" || name = "delete" { return 1 }
+        if str.find(name, "str.") = 0 || str.find(name, "file.") = 0 || str.find(name, "arg.") = 0 || str.find(name, "runtime.hw.") = 0 || str.find(name, "runtime.mem.") = 0 || str.find(name, "atomic.") = 0 { return 1 }
+        return 0
+    end
+
+    fn callMayRetainParameter(source: string, pool: *[12582912]int, callerId: int, calledName: string, parameterIndex: int): int
+    begin
+        if neverRetains(calledName) = 1 { return 0 }
         var lookup: string := calledName
         if str.find(lookup, ".") < 0 {
             var module: string := codegen.functionModule(source, pool, callerId)
@@ -222,7 +554,7 @@ begin
                     if called >= 0 { nestedName := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2)) }
                     var argument: int := ast.read(pool, statement, 6)
                     while argument >= 0 {
-                        if expressionIsParameter(source, pool, argument, parameterName) = 1 && nestedName != "alloc" && nestedName != "free" && nestedName != "write" && nestedName != "writeln" && nestedName != "read" && nestedName != "readln" && str.find(nestedName, "str.") != 0 && str.find(nestedName, "file.") != 0 && str.find(nestedName, "arg.") != 0 && nestedName != "process.run" && nestedName != "flt.format" { return 1 }
+                        if expressionIsParameter(source, pool, argument, parameterName) = 1 && neverRetains(nestedName) = 0 { return 1 }
                         argument := ast.read(pool, argument, 5)
                     }
                 }
@@ -232,7 +564,7 @@ begin
         return 0
     end
 
-    fn bindExpression(source: string, pool: *[524288]int, functionId: int, expression: int, symbols: *[4096]int, symbolCount: *int, regionDepth: int): int
+    fn bindExpression(source: string, pool: *[12582912]int, functionId: int, expression: int, symbols: *[4096]int, symbolCount: *int, regionDepth: int): int
     begin
         if expression < 0 { return 1 }
         var kind: int := ast.read(pool, expression, 0)
@@ -272,12 +604,19 @@ begin
                 return 1
             }
             ast.write(pool, expression, 11, -1)
-            return 0
+            var missing: string := str.slice(source, nameFirst, rootFinish)
+            return diag.report(source, pool, nameFirst, "undefined name '" + missing + "'" + nameHint(missing))
         }
         if kind = ast.callKind() {
             var calleeNode: int := ast.read(pool, expression, 3)
             if calleeNode >= 0 {
                 var name: string := str.slice(source, ast.read(pool, calleeNode, 1), ast.read(pool, calleeNode, 2))
+                if name = "new" || name = "read" || name = "write" || name = "writeln" || name = "readln" || name = "free" || name = "alloc" || name = "delete" {
+                    var ownModule: string := codegen.functionModule(source, pool, functionId)
+                    if str.length(ownModule) > 0 && codegen.functionNode(source, pool, functionId, ownModule + name) >= 0 && codegen.functionModule(source, pool, codegen.functionNode(source, pool, functionId, ownModule + name)) = ownModule {
+                        return diag.report(source, pool, ast.read(pool, calleeNode, 1), "'" + name + "' here calls the builtin, not " + ownModule + name + "; write '" + ownModule + name + "(...)' to call the module function")
+                    }
+                }
                 if codegen.builtinParameterCount(name) < 0 && name != "write" && name != "writeln" && name != "read" && name != "readln" {
                     var resolvedFunction: int := codegen.functionNode(source, pool, functionId, name)
                     if resolvedFunction >= 0 { ast.write(pool, calleeNode, 11, resolvedFunction + 1) }
@@ -297,7 +636,7 @@ begin
                 argument := ast.read(pool, expression, 6)
                 while argument >= 0 {
                     var argumentType: string := codegen.expressionType(source, pool, functionId, argument)
-                    if str.length(argumentType) > 0 && str.char(argumentType, 0) = 42 && pointerRegionDepth(source, pool, functionId, argument, regionDepth) > 0 && callMayRetainParameter(source, pool, functionId, name, argumentIndex) != 0 { return 0 }
+                    if str.length(argumentType) > 0 && str.char(argumentType, 0) = 42 && pointerRegionDepth(source, pool, functionId, argument, regionDepth) > 0 && callMayRetainParameter(source, pool, functionId, name, argumentIndex) != 0 { return diag.report(source, pool, expressionStart(pool, argument), "a pointer allocated inside a gc region is passed to '" + name + "', which may keep it after the region ends") }
                     argument := ast.read(pool, argument, 5)
                     argumentIndex := argumentIndex + 1
                 }
@@ -315,7 +654,7 @@ begin
         return 1
     end
 
-    fn bindBlock(source: string, pool: *[524288]int, functionId: int, blockId: int, symbols: *[4096]int, symbolCount: *int, offsetWords: *int, nodeCount: int, regionDepth: int): int
+    fn bindBlock(source: string, pool: *[12582912]int, functionId: int, blockId: int, symbols: *[4096]int, symbolCount: *int, offsetWords: *int, nodeCount: int, regionDepth: int): int
     begin
         if blockId < 0 || blockId >= nodeCount || ast.read(pool, blockId, 0) != ast.blockKind() { return 0 }
         var savedCount: int := *symbolCount
@@ -324,7 +663,7 @@ begin
         return result
     end
 
-    fn bindStatements(source: string, pool: *[524288]int, functionId: int, first: int, symbols: *[4096]int, symbolCount: *int, offsetWords: *int, nodeCount: int, regionDepth: int): int
+    fn bindStatements(source: string, pool: *[12582912]int, functionId: int, first: int, symbols: *[4096]int, symbolCount: *int, offsetWords: *int, nodeCount: int, regionDepth: int): int
     begin
         var statement: int := first
         var visited: int := 0
@@ -338,7 +677,7 @@ begin
                 var duplicate: int := scopeBase
                 while duplicate < *symbolCount {
                     var previous: int := (*symbols)[duplicate]
-                    if spanEquals(source, ast.read(pool, previous, 3), ast.read(pool, previous, 4), ast.read(pool, statement, 3), ast.read(pool, statement, 4)) = 1 { return 0 }
+                    if spanEquals(source, ast.read(pool, previous, 3), ast.read(pool, previous, 4), ast.read(pool, statement, 3), ast.read(pool, statement, 4)) = 1 { return diag.report(source, pool, ast.read(pool, statement, 3), "'" + str.slice(source, ast.read(pool, statement, 3), ast.read(pool, statement, 4)) + "' is already declared in this scope") }
                     duplicate := duplicate + 1
                 }
                 var type: string := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
@@ -352,7 +691,7 @@ begin
                 }
                 *offsetWords := *offsetWords + codegen.typeWords(source, type)
                 ast.write(pool, statement, 11, *offsetWords * 8)
-                if *symbolCount >= 4096 { return 0 }
+                if *symbolCount >= 4096 { return diag.report(source, pool, ast.read(pool, statement, 1), "too many local variables in one function (limit 4096)") }
                 (*symbols)[*symbolCount] := statement
                 *symbolCount := *symbolCount + 1
             }
@@ -362,7 +701,7 @@ begin
                     var rootName: int := assignmentRootName(pool, ast.read(pool, statement, 3))
                     if rootName >= 0 {
                         var rootDeclaration: int := ast.read(pool, rootName, 11)
-                        if rootDeclaration >= 0 && ast.read(pool, rootDeclaration, 10) % 65536 >= 32768 { return 0 }
+                        if rootDeclaration >= 0 && ast.read(pool, rootDeclaration, 10) % 65536 >= 32768 { return diag.report(source, pool, ast.read(pool, rootName, 1), "cannot assign to constant '" + str.slice(source, ast.read(pool, rootName, 1), ast.read(pool, rootName, 2)) + "'") }
                     }
                     if bindExpression(source, pool, functionId, ast.read(pool, statement, 4), symbols, symbolCount, regionDepth) = 0 { return 0 }
                     var target: int := ast.read(pool, statement, 3)
@@ -373,7 +712,7 @@ begin
                             if str.length(targetType) > 0 && str.char(targetType, 0) = 42 {
                                 var sourceRegion: int := pointerRegionDepth(source, pool, functionId, ast.read(pool, statement, 4), regionDepth)
                                 var destinationRegion: int := ast.read(pool, declaration, 10) / 65536
-                                if sourceRegion > destinationRegion { return 0 }
+                                if sourceRegion > destinationRegion { return diag.report(source, pool, ast.read(pool, statement, 1), "a pointer allocated inside a gc region cannot be stored in a variable declared outside it") }
                                 var immutable: int := ast.read(pool, declaration, 10) % 65536
                                 immutable := immutable - (immutable % 32768)
                                 ast.write(pool, declaration, 10, destinationRegion * 65536 + sourceRegion + immutable)
@@ -427,7 +766,7 @@ begin
         return statement < 0
     end
 
-    fn bindFunction(source: string, pool: *[524288]int, functionId: int, nodeCount: int): int
+    fn bindFunction(source: string, pool: *[12582912]int, functionId: int, nodeCount: int): int
     begin
         var symbols: [4096]int
         var symbolCount: int := 0
@@ -439,7 +778,7 @@ begin
         return bindStatements(source, pool, functionId, ast.read(pool, functionId, 6), &symbols, &symbolCount, &offsetWords, nodeCount, 0)
     end
 
-    fn integerCodeAvailable(source: string, pool: *[524288]int, functionId: int, expression: int, cache: *[43690]int): int
+    fn integerCodeAvailable(source: string, pool: *[12582912]int, functionId: int, expression: int, cache: *[1048576]int): int
     begin
         if expression < 0 { return 0 }
         var state: int := (*cache)[expression]
@@ -450,7 +789,7 @@ begin
         return result
     end
 
-    fn floatCodeAvailable(source: string, pool: *[524288]int, functionId: int, expression: int, cache: *[43690]int): int
+    fn floatCodeAvailable(source: string, pool: *[12582912]int, functionId: int, expression: int, cache: *[1048576]int): int
     begin
         if expression < 0 { return 0 }
         var state: int := (*cache)[expression]
@@ -461,7 +800,7 @@ begin
         return result
     end
 
-    fn stringCodeAvailable(source: string, pool: *[524288]int, functionId: int, expression: int, cache: *[43690]int): int
+    fn stringCodeAvailable(source: string, pool: *[12582912]int, functionId: int, expression: int, cache: *[1048576]int): int
     begin
         if expression < 0 { return 0 }
         var state: int := (*cache)[expression]
@@ -472,14 +811,14 @@ begin
         return result
     end
 
-    fn validateBlock(source: string, pool: *[524288]int, functionId: int, blockId: int, nodeCount: int, regionDepth: int, cache: *[43690]int): int
+    fn validateBlock(source: string, pool: *[12582912]int, functionId: int, blockId: int, nodeCount: int, regionDepth: int, cache: *[1048576]int): int
     begin
         if blockId < 0 || blockId >= nodeCount || ast.read(pool, blockId, 0) != ast.blockKind() { return 0 }
         if ast.read(pool, blockId, 9) != functionId { return 0 }
         return validateStatements(source, pool, functionId, ast.read(pool, blockId, 6), nodeCount, regionDepth, cache)
     end
 
-    fn validateStatements(source: string, pool: *[524288]int, functionId: int, first: int, nodeCount: int, regionDepth: int, cache: *[43690]int): int
+    fn validateStatements(source: string, pool: *[12582912]int, functionId: int, first: int, nodeCount: int, regionDepth: int, cache: *[1048576]int): int
     begin
         var statement: int := first
         var visited: int := 0
@@ -596,7 +935,7 @@ begin
                             var name: string := str.slice(source, ast.read(pool, target, 1), ast.read(pool, target, 2))
                             var offset: int := codegen.boundLocalOffset(source, pool, functionId, target)
                             var type: string := codegen.boundLocalType(source, pool, functionId, target)
-                            if offset < 0 { return failStatement(source, pool, statement, kind) }
+                            if offset < 0 && str.length(codegen.qualifiedFieldAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
                             var declaration: int := ast.read(pool, target, 11)
                             if str.length(type) > 0 && str.char(type, 0) = 42 && declaration >= 0 && pointerRegionDepth(source, pool, functionId, value, regionDepth) > ast.read(pool, declaration, 10) / 65536 { return failStatement(source, pool, statement, kind) }
                             if str.length(type) > 0 && str.char(type, 0) = 91 {
@@ -731,7 +1070,7 @@ begin
         return 1
     end
 
-    fn alwaysReturnsBlock(pool: *[524288]int, blockId: int, nodeCount: int): int
+    fn alwaysReturnsBlock(pool: *[12582912]int, blockId: int, nodeCount: int): int
     begin
         if blockId < 0 || blockId >= nodeCount { return 0 }
         var statement: int := blockId
@@ -768,7 +1107,7 @@ begin
         return 0
     end
 
-    fn writeCodeForValidation(source: string, pool: *[524288]int, functionId: int, word: string, argument: int, callStart: int): string
+    fn writeCodeForValidation(source: string, pool: *[12582912]int, functionId: int, word: string, argument: int, callStart: int): string
     begin
         return codegen.writeCallCode(source, pool, functionId, word, argument, callStart)
     end
@@ -785,24 +1124,19 @@ begin
         return 1
     end
 
-    fn validate(source: string, pool: *[524288]int, program: [4]int, nodeCount: int): int
+    fn validate(source: string, pool: *[12582912]int, program: [4]int, nodeCount: int): int
     begin
-        if lexer.valid(source) = 0 {
-            return 0
+        if program[0] != 1 || program[1] < 0 || program[2] < 1 || program[3] < 0 || nodeCount < program[2] || nodeCount > 1048576 {
+            return diag.report(source, pool, 0, "could not parse the program")
         }
-        if parser.validate(source) = 0 {
-            return 0
-        }
-        if program[0] != 1 || program[1] < 0 || program[2] < 1 || program[2] > 512 || program[3] < 0 || nodeCount < program[2] || nodeCount > 43690 {
-            return 0
-        }
+        if program[2] > 4096 { return diag.report(source, pool, 0, "too many functions (limit 4096)") }
         var id: int := program[1]
         var visited: int := 0
         var mainFound: int := 0
-        var cache: [43690]int
+        var cache: *[1048576]int := alloc(8388608)
         var cacheIndex: int := 0
         while cacheIndex < nodeCount {
-            cache[cacheIndex] := 0
+            (*cache)[cacheIndex] := 0
             cacheIndex := cacheIndex + 1
         }
         while id >= 0 && visited < program[2] {
@@ -820,30 +1154,33 @@ begin
             var other: int := ast.read(pool, id, 5)
             while other >= 0 {
                 if sameFunctionName(source, pool, other, id) = 1 {
-                    return 0
+                    diag.report(source, pool, ast.read(pool, other, 3), "function '" + codegen.qualifiedFunctionName(source, pool, other) + "' is defined more than once")
+                    return diag.note(source, nameStart, "the first definition is here")
                 }
                 other := ast.read(pool, other, 5)
             }
             if name = "main" {
-                if id != program[3] { return 0 }
+                if id != program[3] { return diag.report(source, pool, nameStart, "'main' is defined more than once") }
                 mainFound := mainFound + 1
                 var signature: int := mainSignature(source, nameFinish)
                 if signature = 0 {
-                    return 0
+                    return diag.report(source, pool, nameStart, "main must be declared exactly as 'fn main(): int'")
                 }
             }
             else {
                 if functionSignature(source, pool, id, nameFinish) = 0 {
-                    return 0
+                    return diag.report(source, pool, nameStart, "invalid signature for function '" + name + "'")
                 }
-                if parametersUnique(source, pool, id) = 0 { return 0 }
+                if parametersUnique(source, pool, id) = 0 { return diag.report(source, pool, nameFinish, "function '" + name + "' has two parameters with the same name") }
             }
             var resultType: string := codegen.functionResultType(source, pool, id, name)
-            if resultType != "void" && alwaysReturnsBlock(pool, ast.read(pool, id, 6), nodeCount) = 0 { return 0 }
+            if resultType != "void" && alwaysReturnsBlock(pool, ast.read(pool, id, 6), nodeCount) = 0 {
+                return diag.report(source, pool, finish - 3, "function '" + name + "' must return a value of type " + typeLabel(resultType) + " on every path; add a 'return' before 'end'")
+            }
             if bindFunction(source, pool, id, nodeCount) = 0 {
                 return 0
             }
-            if validateStatements(source, pool, id, ast.read(pool, id, 6), nodeCount, 0, &cache) = 0 {
+            if validateStatements(source, pool, id, ast.read(pool, id, 6), nodeCount, 0, cache) = 0 {
                 return 0
             }
             id := ast.read(pool, id, 5)

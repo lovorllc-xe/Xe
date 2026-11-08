@@ -1,0 +1,119 @@
+// ngram: character and word n-grams with Jaccard, Dice and cosine similarity.
+uses strlist
+uses strintmap
+uses mathx
+
+module ngram
+begin
+    fn characters(text: string, n: int): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var i: int := 0
+        while i + n <= str.length(text) {
+            strlist.push(out, str.slice(text, i, i + n))
+            i := i + 1
+        }
+        return out
+    end
+
+    fn words(text: string, n: int): *strlist.List
+    begin
+        var parts: *strlist.List := strlist.new()
+        var current: string := str.builder("")
+        var i: int := 0
+        while i <= str.length(text) {
+            var c: int := 32
+            if i < str.length(text) { c := str.char(text, i) }
+            if c = 32 || c = 9 || c = 10 || c = 13 {
+                if str.length(current) > 0 {
+                    strlist.push(parts, current)
+                    current := str.builder("")
+                }
+            }
+            else { current := str.append(current, str.fromchar(c)) }
+            i := i + 1
+        }
+        var out: *strlist.List := strlist.new()
+        var k: int := 0
+        while k + n <= strlist.len(parts) {
+            var gram: string := strlist.get(parts, k)
+            var j: int := 1
+            while j < n {
+                gram := gram + " " + strlist.get(parts, k + j)
+                j := j + 1
+            }
+            strlist.push(out, gram)
+            k := k + 1
+        }
+        return out
+    end
+
+    fn counts(grams: *strlist.List): *strintmap.Map
+    begin
+        var map: *strintmap.Map := strintmap.new()
+        var i: int := 0
+        while i < strlist.len(grams) {
+            strintmap.add(map, strlist.get(grams, i), 1)
+            i := i + 1
+        }
+        return map
+    end
+
+    fn jaccard(a: string, b: string, n: int): flt
+    begin
+        var left: *strintmap.Map := counts(characters(a, n))
+        var right: *strintmap.Map := counts(characters(b, n))
+        var shared: int := 0
+        var slot: int := 0
+        while slot < strintmap.capacity(left) {
+            if strintmap.occupied(left, slot) = 1 && strintmap.has(right, strintmap.key_at(left, slot)) = 1 { shared := shared + 1 }
+            slot := slot + 1
+        }
+        var union: int := strintmap.len(left) + strintmap.len(right) - shared
+        if union = 0 { return 1.0 }
+        return shared / (union * 1.0)
+    end
+
+    fn dice(a: string, b: string, n: int): flt
+    begin
+        var left: *strintmap.Map := counts(characters(a, n))
+        var right: *strintmap.Map := counts(characters(b, n))
+        var shared: int := 0
+        var slot: int := 0
+        while slot < strintmap.capacity(left) {
+            if strintmap.occupied(left, slot) = 1 && strintmap.has(right, strintmap.key_at(left, slot)) = 1 { shared := shared + 1 }
+            slot := slot + 1
+        }
+        var total: int := strintmap.len(left) + strintmap.len(right)
+        if total = 0 { return 1.0 }
+        return 2.0 * shared / (total * 1.0)
+    end
+
+    fn cosine(a: string, b: string, n: int): flt
+    begin
+        var left: *strintmap.Map := counts(characters(a, n))
+        var right: *strintmap.Map := counts(characters(b, n))
+        var dot: int := 0
+        var normLeft: int := 0
+        var slot: int := 0
+        while slot < strintmap.capacity(left) {
+            if strintmap.occupied(left, slot) = 1 {
+                var x: int := strintmap.value_at(left, slot)
+                normLeft := normLeft + x * x
+                dot := dot + x * strintmap.get(right, strintmap.key_at(left, slot), 0)
+            }
+            slot := slot + 1
+        }
+        var normRight: int := 0
+        slot := 0
+        while slot < strintmap.capacity(right) {
+            if strintmap.occupied(right, slot) = 1 {
+                var y: int := strintmap.value_at(right, slot)
+                normRight := normRight + y * y
+            }
+            slot := slot + 1
+        }
+        if normLeft = 0 || normRight = 0 { return 0.0 }
+        return dot / (mathx.sqrt(normLeft * 1.0) * mathx.sqrt(normRight * 1.0))
+    end
+end

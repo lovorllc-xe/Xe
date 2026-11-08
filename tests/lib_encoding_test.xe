@@ -1,0 +1,64 @@
+uses base64
+uses base32
+uses hex
+uses varint
+uses uuid
+uses semver
+uses color
+uses sha256
+uses sha1
+uses md5
+uses hmac
+uses checksum
+uses chacha20
+uses securerandom
+uses bytes
+uses strings
+uses random
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    failed := failed + expect("base64", base64.encode("any carnal pleas") = "YW55IGNhcm5hbCBwbGVhcw==" && base64.decode("YW55IGNhcm5hbCBwbGVhcw==") = "any carnal pleas")
+    failed := failed + expect("base64 url", base64.decode(base64.encode_url("??>>")) = "??>>")
+    failed := failed + expect("base32", base32.encode("foobar") = "MZXW6YTBOI======" && base32.decode("MZXW6YTBOI======") = "foobar")
+    failed := failed + expect("hex", hex.encode("Xe!") = "586521" && hex.decode("586521") = "Xe!" && hex.to_int("ff") = 255)
+    var packed: string := varint.encode(-300)
+    var unpacked: [2]int := varint.decode(packed, 0)
+    failed := failed + expect("varint", unpacked[0] = -300 && unpacked[1] = str.length(packed) && str.length(varint.encode_unsigned(127)) = 1)
+    var id: string := uuid.v4_with(random.new(1))
+    failed := failed + expect("uuid", uuid.valid(id) = 1 && uuid.version(id) = 4 && uuid.valid("nope") = 0)
+    failed := failed + expect("semver", semver.compare_text("1.2.10", "1.2.9") > 0 && semver.compare_text("1.0.0-alpha", "1.0.0") < 0)
+    failed := failed + expect("semver range", semver.satisfies("1.4.2", "^1.2.0") = 1 && semver.satisfies("2.0.0", "^1.2.0") = 0 && semver.satisfies("1.2.9", "~1.2.3") = 1)
+    var red: color.Rgb := color.from_hsv(0.0, 1.0, 1.0)
+    failed := failed + expect("color", color.to_hex(red) = "#ff0000" && color.to_hex(color.from_hex("#1e90ff")) = "#1e90ff" && color.hue(color.from_hex("00ff00")) = 120.0)
+    failed := failed + expect("sha256", sha256.hex("abc") = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    failed := failed + expect("sha256 long", strings.starts_with(sha256.hex(strings.repeat("a", 1000)), "41edece42d63e8d9") = 1)
+    failed := failed + expect("sha1", sha1.hex("The quick brown fox jumps over the lazy dog") = "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12")
+    failed := failed + expect("md5", md5.hex("The quick brown fox jumps over the lazy dog") = "9e107d9d372bb6826bd81d3542a419d6")
+    failed := failed + expect("hmac", hmac.sha256("key", "The quick brown fox jumps over the lazy dog") = "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")
+    failed := failed + expect("pbkdf2", hmac.pbkdf2_sha256("password", "salt", 2, 32) = "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43")
+    failed := failed + expect("crc32", checksum.crc32("123456789") = 3421780262 && checksum.adler32("Wikipedia") = 300286872 && checksum.luhn("4539 1488 0343 6467") = 1)
+    var key: *bytes.Buffer := bytes.new()
+    var i: int := 0
+    while i < 32 {
+        bytes.push(key, i)
+        i := i + 1
+    }
+    var nonce: *bytes.Buffer := bytes.from_string("000000000000")
+    var secret: *bytes.Buffer := chacha20.xor(key, nonce, 1, bytes.from_string("attack at dawn, bring snacks"))
+    var plain: *bytes.Buffer := chacha20.xor(key, nonce, 1, secret)
+    failed := failed + expect("chacha20 roundtrip", bytes.to_string(plain) = "attack at dawn, bring snacks" && bytes.equal(plain, secret) = 0)
+    failed := failed + expect("securerandom", str.length(securerandom.token(16)) = 32 && securerandom.below(10) < 10)
+    if failed = 0 { writeln("encoding ok") }
+    return failed
+end

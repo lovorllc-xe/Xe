@@ -1,0 +1,151 @@
+// scanner: a cursor over a string for hand-written parsers and tokenizers.
+module scanner
+begin
+    type Scanner: record
+    begin
+        text: string
+        position: int
+        size: int
+        line: int
+    end
+
+    fn new(text: string): *scanner.Scanner
+    begin
+        var s: *scanner.Scanner := alloc(32)
+        s.text := text
+        s.position := 0
+        s.size := str.length(text)
+        s.line := 1
+        return s
+    end
+
+    fn done(s: *scanner.Scanner): int
+    begin
+        return s.position >= s.size
+    end
+
+    fn peek(s: *scanner.Scanner): int
+    begin
+        if s.position >= s.size { return -1 }
+        return str.char(s.text, s.position)
+    end
+
+    fn peek_at(s: *scanner.Scanner, offset: int): int
+    begin
+        if s.position + offset >= s.size { return -1 }
+        return str.char(s.text, s.position + offset)
+    end
+
+    fn next(s: *scanner.Scanner): int
+    begin
+        if s.position >= s.size { return -1 }
+        var c: int := str.char(s.text, s.position)
+        s.position := s.position + 1
+        if c = 10 { s.line := s.line + 1 }
+        return c
+    end
+
+    fn skip_space(s: *scanner.Scanner)
+    begin
+        var c: int := peek(s)
+        while c = 32 || c = 9 || c = 10 || c = 13 {
+            next(s)
+            c := peek(s)
+        }
+    end
+
+    fn accept(s: *scanner.Scanner, wanted: string): int
+    begin
+        var size: int := str.length(wanted)
+        if s.position + size > s.size { return 0 }
+        var index: int := 0
+        while index < size {
+            if str.char(s.text, s.position + index) != str.char(wanted, index) { return 0 }
+            index := index + 1
+        }
+        var k: int := 0
+        while k < size {
+            next(s)
+            k := k + 1
+        }
+        return 1
+    end
+
+    fn is_word(c: int): int
+    begin
+        return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c = 95
+    end
+
+    fn word(s: *scanner.Scanner): string
+    begin
+        skip_space(s)
+        var start: int := s.position
+        while s.position < s.size && is_word(str.char(s.text, s.position)) = 1 { s.position := s.position + 1 }
+        return str.slice(s.text, start, s.position)
+    end
+
+    fn integer(s: *scanner.Scanner): int
+    begin
+        skip_space(s)
+        var negative: int := 0
+        if peek(s) = 45 {
+            negative := 1
+            next(s)
+        }
+        var value: int := 0
+        while peek(s) >= 48 && peek(s) <= 57 { value := value * 10 + next(s) - 48 }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn number(s: *scanner.Scanner): flt
+    begin
+        skip_space(s)
+        var negative: int := 0
+        if peek(s) = 45 {
+            negative := 1
+            next(s)
+        }
+        var value: flt := 0.0
+        while peek(s) >= 48 && peek(s) <= 57 { value := value * 10.0 + (next(s) - 48) }
+        if peek(s) = 46 {
+            next(s)
+            var scale: flt := 0.1
+            while peek(s) >= 48 && peek(s) <= 57 {
+                value := value + scale * (next(s) - 48)
+                scale := scale * 0.1
+            }
+        }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn until(s: *scanner.Scanner, stop: int): string
+    begin
+        var start: int := s.position
+        while s.position < s.size && str.char(s.text, s.position) != stop { next(s) }
+        return str.slice(s.text, start, s.position)
+    end
+
+    fn line_text(s: *scanner.Scanner): string
+    begin
+        var text: string := until(s, 10)
+        next(s)
+        return text
+    end
+
+    fn rest(s: *scanner.Scanner): string
+    begin
+        return str.slice(s.text, s.position, s.size)
+    end
+
+    fn position(s: *scanner.Scanner): int
+    begin
+        return s.position
+    end
+
+    fn line(s: *scanner.Scanner): int
+    begin
+        return s.line
+    end
+end

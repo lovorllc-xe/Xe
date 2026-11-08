@@ -1,0 +1,100 @@
+uses deque
+uses heap
+uses bitset
+uses ringbuffer
+uses linkedlist
+uses stack
+uses queue
+uses lru
+uses trie
+uses unionfind
+uses strlist
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var d: *deque.Deque := deque.new()
+    var i: int := 0
+    while i < 100 {
+        deque.push_back(d, i)
+        deque.push_front(d, -i)
+        i := i + 1
+    }
+    failed := failed + expect("deque ends", deque.front(d) = -99 && deque.back(d) = 99 && deque.len(d) = 200)
+    failed := failed + expect("deque pop", deque.pop_front(d) = -99 && deque.pop_back(d) = 99)
+    var h: *heap.Heap := heap.new()
+    heap.push(h, 5, 50)
+    heap.push(h, 1, 10)
+    heap.push(h, 3, 30)
+    heap.push(h, 4, 40)
+    failed := failed + expect("heap order", heap.pop(h) = 10 && heap.pop(h) = 30 && heap.pop(h) = 40 && heap.pop(h) = 50)
+    var bits: *bitset.Bits := bitset.new(1000)
+    bitset.set(bits, 3)
+    bitset.set(bits, 999)
+    bitset.set(bits, 64)
+    bitset.clear(bits, 3)
+    failed := failed + expect("bitset", bitset.get(bits, 999) = 1 && bitset.get(bits, 3) = 0 && bitset.cardinality(bits) = 2)
+    var ring: *ringbuffer.Ring := ringbuffer.new(3)
+    ringbuffer.push(ring, 1)
+    ringbuffer.push(ring, 2)
+    ringbuffer.push(ring, 3)
+    ringbuffer.push(ring, 4)
+    failed := failed + expect("ring", ringbuffer.get(ring, 0) = 2 && ringbuffer.average(ring) = 3.0)
+    var ll: *linkedlist.List := linkedlist.new()
+    linkedlist.push_back(ll, 2)
+    linkedlist.push_front(ll, 1)
+    linkedlist.push_back(ll, 3)
+    failed := failed + expect("linkedlist", linkedlist.join(ll, "-") = "1-2-3")
+    linkedlist.pop_front(ll)
+    failed := failed + expect("linkedlist pop", linkedlist.join(ll, "-") = "2-3")
+    var s: *stack.Ints := stack.ints()
+    stack.push(s, 1)
+    stack.push(s, 2)
+    failed := failed + expect("stack", stack.pop(s) = 2 && stack.peek(s) = 1)
+    var ss: *stack.Strings := stack.strings()
+    stack.push.string(ss, "a")
+    stack.push.string(ss, "b")
+    failed := failed + expect("stack strings", stack.pop.string(ss) = "b")
+    var q: *queue.Strings := queue.strings()
+    i := 0
+    while i < 200 {
+        queue.push.string(q, "m" + str.number(i))
+        i := i + 1
+    }
+    i := 0
+    var lastValue: string := ""
+    while i < 150 {
+        lastValue := queue.pop.string(q)
+        i := i + 1
+    }
+    failed := failed + expect("queue strings", lastValue = "m149" && queue.len.string(q) = 50)
+    var cache: *lru.Cache := lru.new(2)
+    lru.put(cache, "a", "1")
+    lru.put(cache, "b", "2")
+    lru.get(cache, "a", "")
+    lru.put(cache, "c", "3")
+    failed := failed + expect("lru eviction", lru.has(cache, "b") = 0 && lru.get(cache, "a", "") = "1" && lru.get(cache, "c", "") = "3")
+    var t: *trie.Trie := trie.new()
+    trie.insert(t, "car")
+    trie.insert(t, "cart")
+    trie.insert(t, "cat")
+    trie.insert(t, "dog")
+    failed := failed + expect("trie", trie.contains(t, "cart") = 1 && trie.contains(t, "ca") = 0 && trie.count_prefix(t, "ca") = 3)
+    failed := failed + expect("trie complete", strlist.join(trie.complete(t, "car", 10), ",") = "car,cart")
+    var u: *unionfind.Sets := unionfind.new(10)
+    unionfind.union(u, 1, 2)
+    unionfind.union(u, 2, 3)
+    unionfind.union(u, 7, 8)
+    failed := failed + expect("unionfind", unionfind.connected(u, 1, 3) = 1 && unionfind.connected(u, 1, 7) = 0 && unionfind.groups(u) = 7)
+    if failed = 0 { writeln("structures ok") }
+    return failed
+end

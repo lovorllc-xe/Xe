@@ -1,0 +1,72 @@
+// ratelimit: token-bucket rate limiter on the monotonic clock.
+uses clock
+
+module ratelimit
+begin
+    type Bucket: record
+    begin
+        rate: int
+        burst: int
+        tokens: int
+        last: int
+    end
+
+    // rate = tokens added per second; burst = bucket capacity.
+    fn new(rate: int, burst: int): *ratelimit.Bucket
+    begin
+        var b: *ratelimit.Bucket := alloc(32)
+        b.rate := rate
+        b.burst := burst
+        b.tokens := burst * 1000000
+        b.last := clock.monotonic()
+        return b
+    end
+
+    // Tokens are tracked in millionths for precision.
+    fn refill(b: *ratelimit.Bucket)
+    begin
+        var now: int := clock.monotonic()
+        var gained: int := (now - b.last) / 1000 * b.rate / 1000
+        if gained > 0 {
+            b.tokens := b.tokens + gained
+            if b.tokens > b.burst * 1000000 { b.tokens := b.burst * 1000000 }
+            b.last := now
+        }
+    end
+
+    fn allow_n(b: *ratelimit.Bucket, count: int): int
+    begin
+        refill(b)
+        if b.tokens >= count * 1000000 {
+            b.tokens := b.tokens - count * 1000000
+            return 1
+        }
+        return 0
+    end
+
+    fn allow(b: *ratelimit.Bucket): int
+    begin
+        return allow_n(b, 1)
+    end
+
+    // Nanoseconds until `count` tokens will be available.
+    fn delay_ns(b: *ratelimit.Bucket, count: int): int
+    begin
+        refill(b)
+        var missing: int := count * 1000000 - b.tokens
+        if missing <= 0 { return 0 }
+        return missing * 1000 / b.rate
+    end
+
+    // Blocks until a token is available, then takes it.
+    fn wait(b: *ratelimit.Bucket)
+    begin
+        while allow(b) = 0 { clock.sleep_ns(delay_ns(b, 1)) }
+    end
+
+    fn available(b: *ratelimit.Bucket): int
+    begin
+        refill(b)
+        return b.tokens / 1000000
+    end
+end

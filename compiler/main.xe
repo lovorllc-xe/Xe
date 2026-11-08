@@ -15,29 +15,48 @@ begin
         return result + token.character(39)
     end
 
+    fn version(): string
+    begin
+        return "2.0.0"
+    end
+
+    fn err(text: string): int
+    begin
+        var line: string := text + token.character(10)
+        syscall.invoke3(1, 2, line, str.length(line))
+        return 1
+    end
+
     fn help(): int
     begin
-        writeln("Xe compiler")
+        writeln("Xe " + version() + " compiler")
         writeln()
         writeln("Usage:")
-        writeln("  xe --build <file.xe> [file.xe ...] [--library-path <directory>] -o <program.xee>")
+        writeln("  xe <file.xe> [file.xe ...]              build ./<file> (same as --build)")
+        writeln("  xe --build <file.xe> [...] [-o <out>]    build a native Linux x86-64 executable")
+        writeln("  xe --run <file.xe> [...] [-- args...]    build into a temporary file and run it")
+        writeln("  xe --check <file.xe> [...]               check the program without building it")
         writeln()
         writeln("Emit assembly:")
-        writeln("  xe --emit-asm <file.xe> [file.xe ...] -o <output.s>")
-        writeln("  xe --emit-nasm <file.xe> [file.xe ...] -o <output.asm>")
-        writeln("  xe --emit-pe <file.xe> [file.xe ...] -o <output.asm>")
-        writeln("  xe --emit-baremetal <file.xe> [file.xe ...] -o <output.s>")
-        writeln("  xe --emit-baremetal-nasm <file.xe> [file.xe ...] -o <output.asm>")
+        writeln("  xe --emit-asm <file.xe> [...] -o <output.s>")
+        writeln("  xe --emit-nasm <file.xe> [...] -o <output.asm>")
+        writeln("  xe --emit-pe <file.xe> [...] -o <output.asm>")
+        writeln("  xe --emit-baremetal <file.xe> [...] -o <output.s>")
+        writeln("  xe --emit-baremetal-nasm <file.xe> [...] -o <output.asm>")
         writeln()
-        writeln("Build executables:")
-        writeln("  xe --build-nasm <file.xe> [file.xe ...] -o <program.xee>")
-        writeln("  xe --build-pe <file.xe> [file.xe ...] -o <program.xee>")
-        writeln("  xe --build-baremetal <file.xe> [file.xe ...] -o <program.xee>")
+        writeln("Other executable targets:")
+        writeln("  xe --build-nasm | --build-pe | --build-baremetal <file.xe> [...] -o <program>")
         writeln()
         writeln("Options:")
-        writeln("  --library-path <dir>  Search this directory for .xel libraries")
-        writeln("  -h, --help       Show this help")
-        writeln("  -V, --version    Show compiler version")
+        writeln("  -o <file>              output path (default: the first source name without .xe)")
+        writeln("  --library-path <dir>   also search this directory for .xel libraries")
+        writeln("  --no-std               do not add the standard io and mem modules")
+        writeln("  -q, --quiet            do not print the build summary")
+        writeln("  --keep-asm             keep the generated .s and .o files")
+        writeln("  -h, --help             show this help")
+        writeln("  -v, -V, --version      show the compiler version and logo")
+        writeln()
+        writeln("Environment: XE_HOME overrides the directory that holds std/ and libraries/.")
         return 0
     end
 
@@ -47,15 +66,71 @@ begin
         return 2
     end
 
-    fn showHelp(): int
+    fn directoryOf(path: string): string
     begin
-        return help()
+        var index: int := str.length(path) - 1
+        while index >= 0 && str.char(path, index) != 47 { index := index - 1 }
+        if index < 0 { return "." }
+        if index = 0 { return "/" }
+        return str.slice(path, 0, index)
     end
 
-    fn version(): int
+    fn executablePath(): string
     begin
-        writeln("Xe 1.7.0")
-        return 0
+        var buffer: *void := alloc(4096)
+        var count: int := syscall.invoke3(89, "/proc/self/exe", buffer, 4095)
+        if count <= 0 { return "" }
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < count {
+            text := str.append(text, token.character(runtime.hw.read8(buffer + index)))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn exists(path: string): int
+    begin
+        return str.length(file.read(path)) > 0
+    end
+
+    // Locates the directory that contains std/ and libraries/.
+    fn home(): string
+    begin
+        var configured: string := env.get("XE_HOME")
+        if str.length(configured) > 0 { return configured }
+        var directory: string := directoryOf(executablePath())
+        if exists(directory + "/../lib/xelang/std/io.xe") = 1 { return directory + "/../lib/xelang" }
+        if exists(directory + "/std/io.xe") = 1 { return directory }
+        if exists(directory + "/../std/io.xe") = 1 { return directory + "/.." }
+        if exists("/usr/local/lib/xelang/std/io.xe") = 1 { return "/usr/local/lib/xelang" }
+        return ""
+    end
+
+    fn nanoseconds(): int
+    begin
+        var buffer: *int := alloc(16)
+        syscall.invoke3(228, 1, buffer, 0)
+        var seconds: int := *buffer
+        var fraction: *int := buffer + 1
+        return seconds * 1000000000 + *fraction
+    end
+
+    fn decimal(value: int, divisor: int): string
+    begin
+        var whole: int := value / divisor
+        var rest: int := ((value % divisor) * 100) / divisor
+        var text: string := str.number(whole) + "."
+        if rest < 10 { text := text + "0" }
+        return text + str.number(rest)
+    end
+
+    fn duration(elapsed: int): string
+    begin
+        if elapsed < 1000 { return str.number(elapsed) + " ns" }
+        if elapsed < 1000000 { return decimal(elapsed, 1000) + " " + token.character(194) + token.character(181) + "s" }
+        if elapsed < 1000000000 { return decimal(elapsed, 1000000) + " ms" }
+        return decimal(elapsed, 1000000000) + " s"
     end
 
     fn importName(line: string): string
@@ -91,24 +166,23 @@ begin
 
     fn importPath(importer: string, name: string, libraryPath: string): string
     begin
-        var directoryEnd: int := -1
+        var directory: string := directoryOf(importer)
+        var dotted: string := importFileName(name, 0)
+        if exists(directory + "/" + dotted) = 1 { return directory + "/" + dotted }
+        var start: int := 0
         var index: int := 0
-        while index < str.length(importer) {
-            if str.char(importer, index) = 47 || str.char(importer, index) = 92 { directoryEnd := index }
+        var size: int := str.length(libraryPath)
+        while index <= size {
+            if index = size || str.char(libraryPath, index) = 58 {
+                if index > start {
+                    var candidate: string := str.slice(libraryPath, start, index) + "/" + dotted
+                    if exists(candidate) = 1 { return candidate }
+                }
+                start := index + 1
+            }
             index := index + 1
         }
-        var directory: string := ""
-        if directoryEnd >= 0 { directory := str.slice(importer, 0, directoryEnd + 1) }
-        var dotted: string := importFileName(name, 0)
-        var knownLibrary: int := 0
-        if name = "collections" || name = "string_utils" || name = "math" || name = "math_ext" || name = "bitops" || name = "algorithms" || name = "net" || name = "sys" || name = "syscall" || name = "time" || name = "fs" || name = "process" || name = "terminal" || name = "threading" || name = "crypto" || name = "compression" || name = "json" || name = "cli" || name = "log" || name = "test" || name = "serde" { knownLibrary := 1 }
-        if knownLibrary = 1 {
-            if str.length(libraryPath) > 0 { return libraryPath + "/" + dotted }
-            return "libraries/" + dotted
-        }
-        if str.length(libraryPath) > 0 { return libraryPath + "/" + dotted }
-        if str.length(directory) > 0 { return directory + dotted }
-        return dotted
+        return directory + "/" + dotted
     end
 
     fn readSourceGraph(path: string, depth: int, loaded: string, libraryPath: string): string
@@ -117,6 +191,7 @@ begin
         if depth > 32 || str.find(loaded, marker) >= 0 { return loaded }
         var contents: string := file.read(path)
         if str.length(contents) = 0 { return loaded }
+        if str.char(contents, str.length(contents) - 1) != 10 { contents := contents + token.character(10) }
         loaded := str.append(loaded, marker)
         var probe: int := 0
         var importsFound: int := 0
@@ -133,7 +208,7 @@ begin
             }
         }
         if importsFound = 0 { return str.append(loaded, contents) }
-        var source: string := str.builder("")
+        var source: string := str.builder("// xelang-file:" + path + token.character(10))
         var position: int := 0
         while position < str.length(contents) {
             var newline: int := str.find(str.slice(contents, position, str.length(contents)), token.character(10))
@@ -146,7 +221,14 @@ begin
             var line: string := str.slice(contents, position, finish)
             var imported: string := importName(line)
             if str.length(imported) > 0 {
-                loaded := readSourceGraph(importPath(path, imported, libraryPath), depth + 1, loaded, libraryPath)
+                var importedPath: string := importPath(path, imported, libraryPath)
+                if str.length(file.read(importedPath)) = 0 {
+                    err(path + ": error: cannot find library '" + imported + "' (searched next to the file and in: " + libraryPath + ")")
+                    return token.character(1) + "xelang-missing-import"
+                }
+                loaded := readSourceGraph(importedPath, depth + 1, loaded, libraryPath)
+                if str.find(loaded, token.character(1) + "xelang-missing-import") >= 0 { return loaded }
+                source := str.append(source, token.character(10))
             }
             else { source := str.append(source, line + token.character(10)) }
             if hasNewline = 0 { position := str.length(contents) }
@@ -155,60 +237,79 @@ begin
         return str.append(loaded, source)
     end
 
-    fn readSources(first: int, finish: int): string
+    fn readSources(sources: *[256]string, count: int, libraryPath: string): string
     begin
         var source: string := str.builder("")
-        var index: int := first
-        var libraryPath: string := ""
-        var optionIndex: int := first
-        while optionIndex < finish {
-            if arg.get(optionIndex) = "--" { optionIndex := finish }
-            else {
-              if arg.get(optionIndex) = "--library-path" && optionIndex + 1 < finish {
-                libraryPath := arg.get(optionIndex + 1)
-                optionIndex := optionIndex + 2
-              }
-              else { optionIndex := optionIndex + 1 }
+        var index: int := 0
+        while index < count {
+            var path: string := (*sources)[index]
+            if exists(path) = 0 {
+                err("error: cannot read source file '" + path + "'")
+                return token.character(1) + "xelang-missing-import"
             }
-        }
-        while index < finish {
-            if arg.get(index) = "--library-path" && index + 1 < finish {
-                libraryPath := arg.get(index + 1)
-                index := index + 2
-            }
-            else {
-                if arg.get(index) = "--" { index := finish }
-                else {
-                    source := readSourceGraph(arg.get(index), 0, source, libraryPath)
-                    index := index + 1
-                }
-            }
+            source := readSourceGraph(path, 0, source, libraryPath)
+            if str.find(source, token.character(1) + "xelang-missing-import") >= 0 { return source }
+            index := index + 1
         }
         return source
     end
 
     fn compile(source: string, output: string, target: int): int
     begin
-        var pool: [524288]int
+        if str.find(source, token.character(1) + "xelang-missing-import") >= 0 { return 1 }
+        if str.length(source) = 0 { return err("error: no source files could be read") }
+        if parser.validate(source) = 0 { return 1 }
+        var pool: *[12582912]int := alloc(100663304)
         var nodeCount: int := 0
-        var program: [4]int := parser.build(source, &pool, &nodeCount)
-        if checker.validate(source, &pool, program, nodeCount) = 0 {
-            writeln("source uses unsupported syntax or has an invalid structure")
+        var program: [4]int := parser.build(source, pool, &nodeCount)
+        if checker.validate(source, pool, program, nodeCount) = 0 {
+            if diag.hasReported(pool) = 0 { err("error: the program could not be compiled (no further detail is available)") }
             return 1
         }
+        if str.length(output) = 0 { return 0 }
         var peTarget: int := 0
         if target = 2 { peTarget := 1 }
-        if target >= 2 && codegen.freestandingSupported(source, &pool, program, peTarget) = 0 {
-            writeln("this output target supports only freestanding code without runtime I/O, allocation, or GC")
-            return 1
+        if target >= 2 && codegen.freestandingSupported(source, pool, program, peTarget) = 0 {
+            return err("error: this output target supports only freestanding code without runtime I/O, allocation, or GC")
         }
-        var assembly: string := codegen.generate(source, &pool, program)
-        if target = 1 { assembly := codegen.generateNasm(source, &pool, program) }
-        if target = 2 { assembly := codegen.generatePe(source, &pool, program) }
-        if target = 3 { assembly := codegen.generateBaremetal(source, &pool, program) }
-        if target = 4 { assembly := codegen.generateBaremetalNasm(source, &pool, program) }
+        var assembly: string := ""
+        if target = 0 { assembly := codegen.generate(source, pool, program) }
+        if target = 1 { assembly := codegen.generateNasm(source, pool, program) }
+        if target = 2 { assembly := codegen.generatePe(source, pool, program) }
+        if target = 3 { assembly := codegen.generateBaremetal(source, pool, program) }
+        if target = 4 { assembly := codegen.generateBaremetalNasm(source, pool, program) }
         file.write(output, assembly)
         return 0
+    end
+
+    fn defaultOutput(path: string): string
+    begin
+        var size: int := str.length(path)
+        var start: int := size - 1
+        while start >= 0 && str.char(path, start) != 47 { start := start - 1 }
+        var name: string := str.slice(path, start + 1, size)
+        var nameSize: int := str.length(name)
+        if nameSize > 3 && str.slice(name, nameSize - 3, nameSize) = ".xe" { name := str.slice(name, 0, nameSize - 3) }
+        else { name := name + ".out" }
+        return name
+    end
+
+    fn linkCommand(output: string, assembly: string, object: string, target: int, keep: int): string
+    begin
+        var command: string := "as -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object)
+        if target = 1 || target = 4 { command := "nasm -f elf64 -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object) }
+        if target = 2 {
+            var definitions: string := output + ".def"
+            var library: string := output + ".lib"
+            file.write(definitions, "LIBRARY KERNEL32.dll\nEXPORTS\nExitProcess\n")
+            command := "nasm -f win64 -o " + quote(object) + " " + quote(assembly) + " && llvm-dlltool -m i386:x86-64 -d " + quote(definitions) + " -l " + quote(library) + " && lld-link /subsystem:console /entry:_start /nodefaultlib /machine:x64 /out:" + quote(output) + " " + quote(object) + " " + quote(library)
+        }
+        if target = 3 {
+            var elf: string := output + ".elf"
+            command := "as --64 -o " + quote(object) + " " + quote(assembly) + " && ld -nostdlib -Ttext=0x100000 -e _start -o " + quote(elf) + " " + quote(object) + " && objcopy -O binary " + quote(elf) + " " + quote(output)
+        }
+        if keep = 0 { command := "(" + command + "); status=$?; rm -f " + quote(assembly) + " " + quote(object) + "; exit $status" }
+        return command
     end
 
     fn run(): int
@@ -216,66 +317,159 @@ begin
         var count: int := arg.count()
         if count < 1 { return usage() }
         var mode: string := arg.get(0)
-        if mode = "--version" || mode = "-V" { return version() }
-        if mode = "--help" || mode = "-h" { return showHelp() }
-        if mode = "--emit-asm" || mode = "--emit-nasm" || mode = "--emit-pe" || mode = "--emit-baremetal" || mode = "--emit-baremetal-nasm" {
-            var target: int := 0
-            if mode = "--emit-nasm" { target := 1 }
-            if mode = "--emit-pe" { target := 2 }
-            if mode = "--emit-baremetal" { target := 3 }
-            if mode = "--emit-baremetal-nasm" { target := 4 }
-            var output: string := ""
-            var finish: int := count
-            if count >= 4 && arg.get(count - 2) = "-o" {
-                output := arg.get(count - 1)
-                finish := count - 2
-            }
-            else {
-                if count != 3 { return usage() }
-                output := arg.get(2)
-                finish := 2
-            }
-            return compile(readSources(1, finish), output, target)
+        if mode = "--version" || mode = "-V" || mode = "-v" {
+            write(logo.art())
+            writeln("Xe " + version() + "  (Linux x86-64, self-hosted)")
+            return 0
         }
-        if mode = "--build" || mode = "--build-nasm" || mode = "--build-pe" || mode = "--build-baremetal" {
-            var target: int := 0
-            if mode = "--build-nasm" { target := 1 }
-            if mode = "--build-pe" { target := 2 }
-            if mode = "--build-baremetal" { target := 3 }
-            var output: string := ""
-            var finish: int := count
-            if count >= 4 && arg.get(count - 2) = "-o" {
-                output := arg.get(count - 1)
-                finish := count - 2
-            }
-            else {
-                if count != 3 { return usage() }
-                output := arg.get(2)
-                finish := 2
-            }
-            var assembly: string := output + ".s"
-            var object: string := output + ".o"
-            if target = 2 {
-                assembly := output + ".asm"
-                object := output + ".obj"
-            }
-            var result: int := compile(readSources(1, finish), assembly, target)
-            if result != 0 { return result }
-            var command: string := "as -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object)
-            if target = 1 || target = 4 { command := "nasm -f elf64 -o " + quote(object) + " " + quote(assembly) + " && ld -o " + quote(output) + " " + quote(object) }
-            if target = 2 {
-                var definitions: string := output + ".def"
-                var library: string := output + ".lib"
-                file.write(definitions, "LIBRARY KERNEL32.dll\nEXPORTS\nExitProcess\n")
-                command := "nasm -f win64 -o " + quote(object) + " " + quote(assembly) + " && llvm-dlltool -m i386:x86-64 -d " + quote(definitions) + " -l " + quote(library) + " && lld-link /subsystem:console /entry:_start /nodefaultlib /machine:x64 /out:" + quote(output) + " " + quote(object) + " " + quote(library)
-            }
-            if target = 3 {
-                var elf: string := output + ".elf"
-                command := "as --64 -o " + quote(object) + " " + quote(assembly) + " && ld -nostdlib -Ttext=0x100000 -e _start -o " + quote(elf) + " " + quote(object) + " && objcopy -O binary " + quote(elf) + " " + quote(output)
-            }
-            return process.run(command)
+        if mode = "--help" || mode = "-h" { return help() }
+        var target: int := -1
+        var emitOnly: int := 0
+        var runAfter: int := 0
+        var checkOnly: int := 0
+        var first: int := 1
+        if mode = "--build" { target := 0 }
+        if mode = "--build-nasm" { target := 1 }
+        if mode = "--build-pe" { target := 2 }
+        if mode = "--build-baremetal" { target := 3 }
+        if mode = "--run" {
+            target := 0
+            runAfter := 1
         }
-        return usage()
+        if mode = "--check" {
+            target := 0
+            checkOnly := 1
+        }
+        if mode = "--emit-asm" { target := 0 }
+        if mode = "--emit-nasm" { target := 1 }
+        if mode = "--emit-pe" { target := 2 }
+        if mode = "--emit-baremetal" { target := 3 }
+        if mode = "--emit-baremetal-nasm" { target := 4 }
+        if str.length(mode) > 6 && str.slice(mode, 0, 7) = "--emit-" { emitOnly := 1 }
+        if target < 0 {
+            if str.length(mode) > 0 && str.char(mode, 0) = 45 {
+                err("error: unknown option '" + mode + "'")
+                return usage()
+            }
+            target := 0
+            first := 0
+        }
+        var sources: *[256]string := alloc(2056)
+        var sourceCount: int := 0
+        var output: string := ""
+        var userLibraries: string := ""
+        var withStd: int := 1
+        var quiet: int := 0
+        var keep: int := 0
+        var programArguments: string := ""
+        var index: int := first
+        while index < count {
+            var option: string := arg.get(index)
+            var handled: int := 0
+            if option = "--" {
+                index := index + 1
+                while index < count {
+                    programArguments := programArguments + " " + quote(arg.get(index))
+                    index := index + 1
+                }
+                handled := 1
+            }
+            if handled = 0 && option = "-o" && index + 1 < count {
+                output := arg.get(index + 1)
+                index := index + 2
+                handled := 1
+            }
+            if handled = 0 && option = "--library-path" && index + 1 < count {
+                if str.length(userLibraries) > 0 { userLibraries := userLibraries + ":" }
+                userLibraries := userLibraries + arg.get(index + 1)
+                index := index + 2
+                handled := 1
+            }
+            if handled = 0 && option = "--no-std" {
+                withStd := 0
+                index := index + 1
+                handled := 1
+            }
+            if handled = 0 && (option = "-q" || option = "--quiet") {
+                quiet := 1
+                index := index + 1
+                handled := 1
+            }
+            if handled = 0 && option = "--keep-asm" {
+                keep := 1
+                index := index + 1
+                handled := 1
+            }
+            if handled = 0 && str.length(option) > 1 && str.char(option, 0) = 45 {
+                err("error: unknown option '" + option + "'")
+                return 2
+            }
+            if handled = 0 {
+                if sourceCount >= 250 { return err("error: too many source files") }
+                (*sources)[sourceCount] := option
+                sourceCount := sourceCount + 1
+                index := index + 1
+            }
+        }
+        if sourceCount = 0 { return usage() }
+        var started: int := nanoseconds()
+        var xeHome: string := home()
+        var libraries: string := userLibraries
+        if str.length(xeHome) > 0 {
+            if str.length(libraries) > 0 { libraries := libraries + ":" }
+            libraries := libraries + xeHome + "/libraries"
+        }
+        var userCount: int := sourceCount
+        if withStd = 1 && target <= 1 {
+            var already: int := 0
+            var scan: int := 0
+            while scan < userCount {
+                var given: string := (*sources)[scan]
+                var givenSize: int := str.length(given)
+                if givenSize >= 9 && str.slice(given, givenSize - 9, givenSize) = "std/io.xe" { already := 1 }
+                scan := scan + 1
+            }
+            if already = 0 {
+                if str.length(xeHome) = 0 { return err("error: cannot find the Xe standard library; set XE_HOME or pass --no-std") }
+                (*sources)[sourceCount] := xeHome + "/std/io.xe"
+                (*sources)[sourceCount + 1] := xeHome + "/std/mem.xe"
+                sourceCount := sourceCount + 2
+            }
+        }
+        var source: string := readSources(sources, sourceCount, libraries)
+        if checkOnly = 1 {
+            var checked: int := compile(source, "", target)
+            if checked = 0 && quiet = 0 { writeln("check passed in " + duration(nanoseconds() - started)) }
+            return checked
+        }
+        if emitOnly = 1 {
+            if str.length(output) = 0 { output := defaultOutput((*sources)[0]) + ".s" }
+            return compile(source, output, target)
+        }
+        if str.length(output) = 0 {
+            if runAfter = 1 { output := "/tmp/xe-run-" + str.number(nanoseconds()) + ".xee" }
+            else { output := defaultOutput((*sources)[0]) }
+        }
+        var assembly: string := output + ".s"
+        var object: string := output + ".o"
+        if target = 2 {
+            assembly := output + ".asm"
+            object := output + ".obj"
+        }
+        var result: int := compile(source, assembly, target)
+        if result != 0 { return result }
+        result := process.run(linkCommand(output, assembly, object, target, keep))
+        var elapsed: int := nanoseconds() - started
+        if result != 0 { return err("error: assembling or linking failed (exit status " + str.number(result) + ")") }
+        if runAfter = 1 {
+            var path: string := output
+            if str.find(path, "/") < 0 { path := "./" + path }
+            var status: int := process.run(quote(path) + programArguments)
+            process.run("rm -f " + quote(output))
+            return status
+        }
+        if quiet = 0 { writeln("built " + output + " in " + duration(elapsed)) }
+        return 0
     end
 end
 

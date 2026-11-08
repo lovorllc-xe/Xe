@@ -1,0 +1,46 @@
+// semaphore: counting semaphores built on futexes.
+uses futex
+uses atomic
+
+module semaphore
+begin
+    fn new(count: int): *void
+    begin
+        var s: *void := alloc(8)
+        atomic.store(s, count)
+        return s
+    end
+
+    fn acquire(s: *void)
+    begin
+        var waiting: int := 1
+        while waiting = 1 {
+            var current: int := atomic.load(s)
+            if current > 0 {
+                if atomic.compare_exchange(s, current, current - 1) = 1 { waiting := 0 }
+            }
+            else { futex.wait(s, 0) }
+        }
+    end
+
+    fn try_acquire(s: *void): int
+    begin
+        var current: int := atomic.load(s)
+        while current > 0 {
+            if atomic.compare_exchange(s, current, current - 1) = 1 { return 1 }
+            current := atomic.load(s)
+        }
+        return 0
+    end
+
+    fn release(s: *void)
+    begin
+        atomic.add(s, 1)
+        futex.wake(s, 1)
+    end
+
+    fn available(s: *void): int
+    begin
+        return atomic.load(s)
+    end
+end

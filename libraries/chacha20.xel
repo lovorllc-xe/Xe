@@ -1,0 +1,77 @@
+// chacha20: the ChaCha20 stream cipher (RFC 8439) over byte buffers.
+uses bytes
+
+module chacha20
+begin
+    fn rotl(v: int, n: int): int
+    begin
+        return ((v << n) | (v >> (32 - n))) & 4294967295
+    end
+
+    fn quarter(s: *int, a: int, b: int, c: int, d: int)
+    begin
+        *(s + a) := (*(s + a) + *(s + b)) & 4294967295
+        *(s + d) := rotl(*(s + d) ^ *(s + a), 16)
+        *(s + c) := (*(s + c) + *(s + d)) & 4294967295
+        *(s + b) := rotl(*(s + b) ^ *(s + c), 12)
+        *(s + a) := (*(s + a) + *(s + b)) & 4294967295
+        *(s + d) := rotl(*(s + d) ^ *(s + a), 8)
+        *(s + c) := (*(s + c) + *(s + d)) & 4294967295
+        *(s + b) := rotl(*(s + b) ^ *(s + c), 7)
+    end
+
+    fn word(buffer: *bytes.Buffer, offset: int): int
+    begin
+        return bytes.read_le_at(buffer, offset, 4)
+    end
+
+    // key: 32 bytes, nonce: 12 bytes. Encryption and decryption are the same operation.
+    fn xor(key: *bytes.Buffer, nonce: *bytes.Buffer, counter: int, input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var output: *bytes.Buffer := bytes.new()
+        var state: *int := alloc(16 * 8)
+        var working: *int := alloc(16 * 8)
+        var block: int := counter
+        var offset: int := 0
+        while offset < input.size {
+            *state := 1634760805
+            *(state + 1) := 857760878
+            *(state + 2) := 2036477234
+            *(state + 3) := 1797285236
+            var i: int := 0
+            while i < 8 {
+                *(state + 4 + i) := word(key, i * 4)
+                i := i + 1
+            }
+            *(state + 12) := block & 4294967295
+            *(state + 13) := word(nonce, 0)
+            *(state + 14) := word(nonce, 4)
+            *(state + 15) := word(nonce, 8)
+            runtime.mem.copy(working, state, 128)
+            var round: int := 0
+            while round < 10 {
+                quarter(working, 0, 4, 8, 12)
+                quarter(working, 1, 5, 9, 13)
+                quarter(working, 2, 6, 10, 14)
+                quarter(working, 3, 7, 11, 15)
+                quarter(working, 0, 5, 10, 15)
+                quarter(working, 1, 6, 11, 12)
+                quarter(working, 2, 7, 8, 13)
+                quarter(working, 3, 4, 9, 14)
+                round := round + 1
+            }
+            i := 0
+            while i < 64 && offset + i < input.size {
+                var w: int := (*(working + i / 4) + *(state + i / 4)) & 4294967295
+                var keystream: int := (w >> ((i % 4) * 8)) & 255
+                bytes.push(output, bytes.get(input, offset + i) ^ keystream)
+                i := i + 1
+            }
+            offset := offset + 64
+            block := block + 1
+        }
+        free(state)
+        free(working)
+        return output
+    end
+end

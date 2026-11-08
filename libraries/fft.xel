@@ -1,0 +1,129 @@
+// fft: fast Fourier transform (radix-2) and convolution over fltlist real/imaginary parts.
+uses fltlist
+uses mathx
+
+module fft
+begin
+    fn is_power_of_two(n: int): int
+    begin
+        return n > 0 && (n & (n - 1)) = 0
+    end
+
+    fn next_power(n: int): int
+    begin
+        var p: int := 1
+        while p < n { p := p * 2 }
+        return p
+    end
+
+    // In-place transform; length must be a power of two. Returns 0 otherwise.
+    fn transform(re: *fltlist.List, im: *fltlist.List, inverse: int): int
+    begin
+        var n: int := fltlist.len(re)
+        if is_power_of_two(n) = 0 || fltlist.len(im) != n { return 0 }
+        var j: int := 0
+        var i: int := 1
+        while i < n {
+            var bit: int := n >> 1
+            while (j & bit) != 0 {
+                j := j ^ bit
+                bit := bit >> 1
+            }
+            j := j ^ bit
+            if i < j {
+                var tr: flt := fltlist.get(re, i)
+                fltlist.set(re, i, fltlist.get(re, j))
+                fltlist.set(re, j, tr)
+                var ti: flt := fltlist.get(im, i)
+                fltlist.set(im, i, fltlist.get(im, j))
+                fltlist.set(im, j, ti)
+            }
+            i := i + 1
+        }
+        var length: int := 2
+        while length <= n {
+            var angle: flt := 2.0 * mathx.pi() / length
+            if inverse = 0 { angle := -angle }
+            var wr: flt := mathx.cos(angle)
+            var wi: flt := mathx.sin(angle)
+            var start: int := 0
+            while start < n {
+                var cr: flt := 1.0
+                var ci: flt := 0.0
+                var k: int := 0
+                while k < length / 2 {
+                    var a: int := start + k
+                    var b: int := start + k + length / 2
+                    var xr: flt := fltlist.get(re, b) * cr - fltlist.get(im, b) * ci
+                    var xi: flt := fltlist.get(re, b) * ci + fltlist.get(im, b) * cr
+                    fltlist.set(re, b, fltlist.get(re, a) - xr)
+                    fltlist.set(im, b, fltlist.get(im, a) - xi)
+                    fltlist.set(re, a, fltlist.get(re, a) + xr)
+                    fltlist.set(im, a, fltlist.get(im, a) + xi)
+                    var nr: flt := cr * wr - ci * wi
+                    ci := cr * wi + ci * wr
+                    cr := nr
+                    k := k + 1
+                }
+                start := start + length
+            }
+            length := length * 2
+        }
+        if inverse = 1 {
+            var scale: int := 0
+            while scale < n {
+                fltlist.set(re, scale, fltlist.get(re, scale) / n)
+                fltlist.set(im, scale, fltlist.get(im, scale) / n)
+                scale := scale + 1
+            }
+        }
+        return 1
+    end
+
+    fn magnitudes(re: *fltlist.List, im: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var i: int := 0
+        while i < fltlist.len(re) {
+            fltlist.push(out, mathx.hypot(fltlist.get(re, i), fltlist.get(im, i)))
+            i := i + 1
+        }
+        return out
+    end
+
+    // Polynomial / sequence convolution of two real lists.
+    fn convolve(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var size: int := next_power(fltlist.len(a) + fltlist.len(b) - 1)
+        var ar: *fltlist.List := fltlist.new()
+        var ai: *fltlist.List := fltlist.new()
+        var br: *fltlist.List := fltlist.new()
+        var bi: *fltlist.List := fltlist.new()
+        var i: int := 0
+        while i < size {
+            fltlist.push(ar, fltlist.get(a, i))
+            fltlist.push(ai, 0.0)
+            fltlist.push(br, fltlist.get(b, i))
+            fltlist.push(bi, 0.0)
+            i := i + 1
+        }
+        transform(ar, ai, 0)
+        transform(br, bi, 0)
+        i := 0
+        while i < size {
+            var r: flt := fltlist.get(ar, i) * fltlist.get(br, i) - fltlist.get(ai, i) * fltlist.get(bi, i)
+            var m: flt := fltlist.get(ar, i) * fltlist.get(bi, i) + fltlist.get(ai, i) * fltlist.get(br, i)
+            fltlist.set(ar, i, r)
+            fltlist.set(ai, i, m)
+            i := i + 1
+        }
+        transform(ar, ai, 1)
+        var out: *fltlist.List := fltlist.new()
+        i := 0
+        while i < fltlist.len(a) + fltlist.len(b) - 1 {
+            fltlist.push(out, fltlist.get(ar, i))
+            i := i + 1
+        }
+        return out
+    end
+end

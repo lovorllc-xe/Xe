@@ -1,0 +1,69 @@
+// queue: FIFO queues of ints and strings.
+uses deque
+uses strlist
+
+module queue
+begin
+    type Strings: record
+    begin
+        items: *strlist.List
+        head: int
+    end
+
+    fn ints(): *deque.Deque
+    begin
+        return deque.new()
+    end
+
+    fn push(q: *deque.Deque, value: int)
+    begin
+        deque.push_back(q, value)
+    end
+
+    fn pop(q: *deque.Deque): int
+    begin
+        return deque.pop_front(q)
+    end
+
+    fn len(q: *deque.Deque): int
+    begin
+        return deque.len(q)
+    end
+
+    fn strings(): *queue.Strings
+    begin
+        var q: *queue.Strings := alloc(16)
+        q.items := strlist.new()
+        q.head := 0
+        return q
+    end
+
+    fn push.string(q: *queue.Strings, value: string)
+    begin
+        strlist.push(q.items, value)
+    end
+
+    fn pop.string(q: *queue.Strings): string
+    begin
+        if q.head >= strlist.len(q.items) { return "" }
+        var value: string := strlist.get(q.items, q.head)
+        q.head := q.head + 1
+        if q.head > 64 && q.head * 2 > strlist.len(q.items) {
+            var fresh: *strlist.List := strlist.new()
+            var index: int := q.head
+            while index < strlist.len(q.items) {
+                strlist.push(fresh, strlist.get(q.items, index))
+                index := index + 1
+            }
+            strlist.release(q.items)
+            q.items := fresh
+            q.head := 0
+        }
+        return value
+    end
+
+    fn len.string(q: *queue.Strings): int
+    begin
+        return strlist.len(q.items) - q.head
+    end
+end

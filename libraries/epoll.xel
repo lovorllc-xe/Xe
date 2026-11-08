@@ -1,0 +1,115 @@
+// epoll: scalable I/O readiness notification (Linux epoll) for event loops and servers.
+//   var ep: int := epoll.create()
+//   epoll.add(ep, fd, epoll.readable())
+//   var ready: *intlist.List := epoll.wait(ep, 16, 1000)   // [fd, events, fd, events, ...]
+uses intlist
+
+module epoll
+begin
+    fn readable(): int
+    begin
+        return 1
+    end
+
+    fn writable(): int
+    begin
+        return 4
+    end
+
+    fn error_event(): int
+    begin
+        return 8
+    end
+
+    fn hangup(): int
+    begin
+        return 16
+    end
+
+    fn edge_triggered(): int
+    begin
+        return 2147483648
+    end
+
+    fn create(): int
+    begin
+        return syscall.invoke3(291, 524288, 0, 0)
+    end
+
+    // struct epoll_event is packed: u32 events + u64 data = 12 bytes.
+    fn control(ep: int, operation: int, fd: int, events: int): int
+    begin
+        var event: *void := alloc(16)
+        runtime.mem.set(event, 0, 16)
+        runtime.hw.write32(event, events & 4294967295)
+        runtime.hw.write32(event + 4, fd)
+        var result: int := syscall.invoke6(233, ep, operation, fd, event, 0, 0)
+        free(event)
+        return result = 0
+    end
+
+    fn add(ep: int, fd: int, events: int): int
+    begin
+        return control(ep, 1, fd, events)
+    end
+
+    fn modify(ep: int, fd: int, events: int): int
+    begin
+        return control(ep, 3, fd, events)
+    end
+
+    fn remove(ep: int, fd: int): int
+    begin
+        return control(ep, 2, fd, 0)
+    end
+
+    // Waits up to timeoutMs (-1 = forever). Returns flat [fd, events, ...] pairs.
+    fn wait(ep: int, maxEvents: int, timeoutMs: int): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        var events: *void := alloc(maxEvents * 12 + 16)
+        var count: int := syscall.invoke6(232, ep, events, maxEvents, timeoutMs, 0, 0)
+        var i: int := 0
+        while i < count {
+            intlist.push(out, runtime.hw.read32(events + i * 12 + 4))
+            intlist.push(out, runtime.hw.read32(events + i * 12))
+            i := i + 1
+        }
+        free(events)
+        return out
+    end
+
+    fn close(ep: int)
+    begin
+        syscall.invoke3(3, ep, 0, 0)
+    end
+
+    // Makes a descriptor non-blocking.
+    fn set_nonblocking(fd: int): int
+    begin
+        var flags: int := syscall.invoke3(72, fd, 3, 0)
+        if flags < 0 { return 0 }
+        return syscall.invoke3(72, fd, 4, flags | 2048) >= 0
+    end
+
+    // eventfd for waking an event loop from another thread.
+    fn eventfd(): int
+    begin
+        return syscall.invoke3(290, 0, 524288, 0)
+    end
+
+    fn signal(fd: int)
+    begin
+        var one: *int := alloc(8)
+        *one := 1
+        syscall.invoke3(1, fd, one, 8)
+        free(one)
+    end
+
+    fn drain(fd: int)
+    begin
+        var sink: *int := alloc(8)
+        syscall.invoke3(0, fd, sink, 8)
+        free(sink)
+    end
+end

@@ -1,0 +1,128 @@
+// decimal: exact fixed-point amounts (money) stored as integer minor units, with fair splitting.
+uses intlist
+uses strings
+
+module decimal
+begin
+    fn pow10(n: int): int
+    begin
+        var r: int := 1
+        var i: int := 0
+        while i < n {
+            r := r * 10
+            i := i + 1
+        }
+        return r
+    end
+
+    // "12.34" with scale 2 -> 1234. Extra digits are rounded half away from zero.
+    fn parse(text: string, scale: int): int
+    begin
+        var t: string := strings.trim(text)
+        var negative: int := 0
+        if strings.starts_with(t, "-") = 1 {
+            negative := 1
+            t := str.slice(t, 1, str.length(t))
+        }
+        var dot: int := strings.index_of(t, ".")
+        var whole: string := t
+        var fraction: string := ""
+        if dot >= 0 {
+            whole := str.slice(t, 0, dot)
+            fraction := str.slice(t, dot + 1, str.length(t))
+        }
+        var value: int := 0
+        var i: int := 0
+        while i < str.length(whole) {
+            value := value * 10 + str.char(whole, i) - 48
+            i := i + 1
+        }
+        i := 0
+        while i < scale {
+            var digit: int := 0
+            if i < str.length(fraction) { digit := str.char(fraction, i) - 48 }
+            value := value * 10 + digit
+            i := i + 1
+        }
+        if str.length(fraction) > scale && str.char(fraction, scale) >= 53 { value := value + 1 }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn format(amount: int, scale: int): string
+    begin
+        var negative: int := amount < 0
+        var n: int := amount
+        if negative = 1 { n := -n }
+        var unit: int := pow10(scale)
+        var whole: int := n / unit
+        var out: string := str.number(whole)
+        if scale > 0 {
+            var fraction: string := str.number(n % unit)
+            while str.length(fraction) < scale { fraction := "0" + fraction }
+            out := out + "." + fraction
+        }
+        if negative = 1 { return "-" + out }
+        return out
+    end
+
+    // amount * numerator / denominator, rounded half away from zero.
+    fn scale_by(amount: int, numerator: int, denominator: int): int
+    begin
+        var product: int := amount * numerator
+        var half: int := denominator / 2
+        if product >= 0 { return (product + half) / denominator }
+        return -((-product + half) / denominator)
+    end
+
+    // percent in basis points, e.g. 825 = 8.25%.
+    fn percent(amount: int, basisPoints: int): int
+    begin
+        return scale_by(amount, basisPoints, 10000)
+    end
+
+    // Splits amount into `parts` pieces differing by at most one minor unit; pieces sum to amount.
+    fn split(amount: int, parts: int): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        if parts < 1 { return out }
+        var base: int := amount / parts
+        var extra: int := amount - base * parts
+        var i: int := 0
+        while i < parts {
+            if i < extra { intlist.push(out, base + 1) }
+            else { intlist.push(out, base) }
+            i := i + 1
+        }
+        return out
+    end
+
+    // Splits by weights (largest remainder method); pieces sum to amount.
+    fn allocate(amount: int, weights: *intlist.List): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        var total: int := intlist.sum(weights)
+        if total <= 0 { return out }
+        var assigned: int := 0
+        var i: int := 0
+        while i < intlist.len(weights) {
+            var share: int := amount * intlist.get(weights, i) / total
+            intlist.push(out, share)
+            assigned := assigned + share
+            i := i + 1
+        }
+        var left: int := amount - assigned
+        i := 0
+        while left > 0 && intlist.len(out) > 0 {
+            intlist.set(out, i % intlist.len(out), intlist.get(out, i % intlist.len(out)) + 1)
+            left := left - 1
+            i := i + 1
+        }
+        return out
+    end
+
+    fn to_flt(amount: int, scale: int): flt
+    begin
+        return amount / (pow10(scale) * 1.0)
+    end
+end

@@ -1,0 +1,55 @@
+// bench: measure how long code takes. Wrap the work between start() and stop().
+//   var t: int := bench.start()
+//   ... work ...
+//   writeln(bench.report("sort 1M", bench.stop(t), 1))
+uses clock
+uses fmt
+
+module bench
+begin
+    fn start(): int
+    begin
+        return clock.monotonic()
+    end
+
+    fn stop(started: int): int
+    begin
+        return clock.monotonic() - started
+    end
+
+    // Keeps a value alive so the compiler cannot discard the work that produced it.
+    fn consume(value: int): int
+    begin
+        var cell: *int := alloc(8)
+        *cell := value
+        var result: int := *cell
+        free(cell)
+        return result
+    end
+
+    fn per_iteration(totalNs: int, iterations: int): int
+    begin
+        if iterations < 1 { return totalNs }
+        return totalNs / iterations
+    end
+
+    fn report(name: string, totalNs: int, iterations: int): string
+    begin
+        var each: int := per_iteration(totalNs, iterations)
+        return fmt.left(name, 28) + fmt.right(clock.format(totalNs), 12) + "  " + fmt.right(clock.format(each), 12) + " / iter"
+    end
+
+    fn ops_per_second(totalNs: int, iterations: int): int
+    begin
+        if totalNs < 1 { return 0 }
+        return iterations * 1000000000 / totalNs
+    end
+
+    // Smallest of `runs` timings of a callback-free measurement loop helper: call min_of(prev, next).
+    fn best(a: int, b: int): int
+    begin
+        if a <= 0 { return b }
+        if b < a { return b }
+        return a
+    end
+end

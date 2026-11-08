@@ -1,0 +1,25 @@
+fn fib(n: int): int
+begin
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(fib(n))
+    return 0
+end

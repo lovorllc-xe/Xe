@@ -1,0 +1,69 @@
+// uuid: random (v4) UUID generation, validation and parsing.
+uses random
+
+module uuid
+begin
+    fn hex_digit(v: int): string
+    begin
+        return str.slice("0123456789abcdef", v, v + 1)
+    end
+
+    fn v4_with(rng: *random.Rng): string
+    begin
+        var high: int := random.next(rng)
+        var low: int := random.next(rng)
+        high := (high & -61441) | 16384
+        low := (low & 4611686018427387903) | (-9223372036854775807 - 1)
+        var out: string := str.builder("")
+        var index: int := 15
+        while index >= 0 {
+            out := str.append(out, hex_digit((high >> (index * 4)) & 15))
+            if index = 8 || index = 4 { out := str.append(out, "-") }
+            index := index - 1
+        }
+        out := str.append(out, "-")
+        index := 15
+        while index >= 0 {
+            out := str.append(out, hex_digit((low >> (index * 4)) & 15))
+            if index = 12 { out := str.append(out, "-") }
+            index := index - 1
+        }
+        return out
+    end
+
+    fn v4(): string
+    begin
+        return v4_with(random.new_random())
+    end
+
+    fn valid(text: string): int
+    begin
+        if str.length(text) != 36 { return 0 }
+        var index: int := 0
+        while index < 36 {
+            var c: int := str.char(text, index)
+            if index = 8 || index = 13 || index = 18 || index = 23 {
+                if c != 45 { return 0 }
+            }
+            else {
+                var hexChar: int := (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70)
+                if hexChar = 0 { return 0 }
+            }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn version(text: string): int
+    begin
+        if valid(text) = 0 { return -1 }
+        var c: int := str.char(text, 14)
+        if c >= 48 && c <= 57 { return c - 48 }
+        return c - 87
+    end
+
+    fn nil(): string
+    begin
+        return "00000000-0000-0000-0000-000000000000"
+    end
+end

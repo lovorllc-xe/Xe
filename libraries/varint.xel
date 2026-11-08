@@ -1,0 +1,61 @@
+// varint: LEB128 variable-length integers and zigzag encoding (protobuf compatible).
+module varint
+begin
+    fn encode_unsigned(value: int): string
+    begin
+        var out: string := str.builder("")
+        var v: int := value
+        var going: int := 1
+        while going = 1 {
+            var byte: int := v & 127
+            v := (v >> 7) & 144115188075855871
+            if v != 0 { byte := byte | 128 }
+            else { going := 0 }
+            out := str.append(out, str.fromchar(byte))
+        }
+        return out
+    end
+
+    fn zigzag(value: int): int
+    begin
+        return (value << 1) ^ (value >> 63)
+    end
+
+    fn unzigzag(value: int): int
+    begin
+        return ((value >> 1) & 9223372036854775807) ^ -(value & 1)
+    end
+
+    fn encode(value: int): string
+    begin
+        return encode_unsigned(zigzag(value))
+    end
+
+    // Decodes at offset; returns [value, bytes consumed] (consumed 0 on error).
+    fn decode_unsigned(data: string, offset: int): [2]int
+    begin
+        var result: [2]int
+        var value: int := 0
+        var shift: int := 0
+        var index: int := offset
+        while index < str.length(data) && shift < 70 {
+            var byte: int := str.char(data, index)
+            value := value | ((byte & 127) << shift)
+            index := index + 1
+            if (byte & 128) = 0 {
+                result[0] := value
+                result[1] := index - offset
+                return result
+            }
+            shift := shift + 7
+        }
+        return result
+    end
+
+    fn decode(data: string, offset: int): [2]int
+    begin
+        var raw: [2]int := decode_unsigned(data, offset)
+        raw[0] := unzigzag(raw[0])
+        return raw
+    end
+end

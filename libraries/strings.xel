@@ -1,0 +1,337 @@
+// strings: searching, replacing, trimming, padding and case conversion for byte strings.
+module strings
+begin
+    fn len(text: string): int
+    begin
+        return str.length(text)
+    end
+
+    fn index_from(text: string, needle: string, start: int): int
+    begin
+        var size: int := str.length(text)
+        var gap: int := str.length(needle)
+        var index: int := start
+        if index < 0 { index := 0 }
+        if gap = 0 { return index }
+        var first: int := str.char(needle, 0)
+        while index <= size - gap {
+            if str.char(text, index) = first {
+                var offset: int := 1
+                var matched: int := 1
+                while offset < gap && matched = 1 {
+                    if str.char(text, index + offset) != str.char(needle, offset) { matched := 0 }
+                    offset := offset + 1
+                }
+                if matched = 1 { return index }
+            }
+            index := index + 1
+        }
+        return -1
+    end
+
+    fn index_of(text: string, needle: string): int
+    begin
+        return index_from(text, needle, 0)
+    end
+
+    fn last_index_of(text: string, needle: string): int
+    begin
+        var found: int := -1
+        var position: int := index_from(text, needle, 0)
+        while position >= 0 {
+            found := position
+            position := index_from(text, needle, position + 1)
+        }
+        return found
+    end
+
+    fn contains(text: string, needle: string): int
+    begin
+        return index_from(text, needle, 0) >= 0
+    end
+
+    fn starts_with(text: string, prefix: string): int
+    begin
+        var size: int := str.length(prefix)
+        if size > str.length(text) { return 0 }
+        var index: int := 0
+        while index < size {
+            if str.char(text, index) != str.char(prefix, index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn ends_with(text: string, suffix: string): int
+    begin
+        var size: int := str.length(suffix)
+        var offset: int := str.length(text) - size
+        if offset < 0 { return 0 }
+        var index: int := 0
+        while index < size {
+            if str.char(text, offset + index) != str.char(suffix, index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn count(text: string, needle: string): int
+    begin
+        if str.length(needle) = 0 { return 0 }
+        var total: int := 0
+        var position: int := index_from(text, needle, 0)
+        while position >= 0 {
+            total := total + 1
+            position := index_from(text, needle, position + str.length(needle))
+        }
+        return total
+    end
+
+    fn replace_n(text: string, old: string, new: string, limit: int): string
+    begin
+        if str.length(old) = 0 { return text }
+        var result: string := str.builder("")
+        var start: int := 0
+        var done: int := 0
+        var position: int := index_from(text, old, 0)
+        while position >= 0 && (limit < 0 || done < limit) {
+            result := str.append(result, str.slice(text, start, position))
+            result := str.append(result, new)
+            start := position + str.length(old)
+            done := done + 1
+            position := index_from(text, old, start)
+        }
+        return str.append(result, str.slice(text, start, str.length(text)))
+    end
+
+    fn replace(text: string, old: string, new: string): string
+    begin
+        return replace_n(text, old, new, -1)
+    end
+
+    fn replace_first(text: string, old: string, new: string): string
+    begin
+        return replace_n(text, old, new, 1)
+    end
+
+    fn is_space(value: int): int
+    begin
+        return value = 32 || value = 9 || value = 10 || value = 13 || value = 11 || value = 12
+    end
+
+    fn trim_left(text: string): string
+    begin
+        var start: int := 0
+        var size: int := str.length(text)
+        while start < size && is_space(str.char(text, start)) = 1 { start := start + 1 }
+        return str.slice(text, start, size)
+    end
+
+    fn trim_right(text: string): string
+    begin
+        var finish: int := str.length(text)
+        while finish > 0 && is_space(str.char(text, finish - 1)) = 1 { finish := finish - 1 }
+        return str.slice(text, 0, finish)
+    end
+
+    fn trim(text: string): string
+    begin
+        return trim_left(trim_right(text))
+    end
+
+    fn trim_prefix(text: string, prefix: string): string
+    begin
+        if starts_with(text, prefix) = 1 { return str.slice(text, str.length(prefix), str.length(text)) }
+        return text
+    end
+
+    fn trim_suffix(text: string, suffix: string): string
+    begin
+        if ends_with(text, suffix) = 1 { return str.slice(text, 0, str.length(text) - str.length(suffix)) }
+        return text
+    end
+
+    fn repeat(text: string, times: int): string
+    begin
+        var result: string := str.builder("")
+        var index: int := 0
+        while index < times {
+            result := str.append(result, text)
+            index := index + 1
+        }
+        return result
+    end
+
+    fn to_upper(text: string): string
+    begin
+        var result: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var value: int := str.char(text, index)
+            if value >= 97 && value <= 122 { value := value - 32 }
+            result := str.append(result, str.fromchar(value))
+            index := index + 1
+        }
+        return result
+    end
+
+    fn to_lower(text: string): string
+    begin
+        var result: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var value: int := str.char(text, index)
+            if value >= 65 && value <= 90 { value := value + 32 }
+            result := str.append(result, str.fromchar(value))
+            index := index + 1
+        }
+        return result
+    end
+
+    fn capitalize(text: string): string
+    begin
+        if str.length(text) = 0 { return text }
+        return to_upper(str.slice(text, 0, 1)) + str.slice(text, 1, str.length(text))
+    end
+
+    fn title(text: string): string
+    begin
+        var result: string := str.builder("")
+        var start: int := 1
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var value: int := str.char(text, index)
+            if start = 1 && value >= 97 && value <= 122 { value := value - 32 }
+            if start = 0 && value >= 65 && value <= 90 { value := value + 32 }
+            start := is_space(value)
+            result := str.append(result, str.fromchar(value))
+            index := index + 1
+        }
+        return result
+    end
+
+    fn equal_fold(a: string, b: string): int
+    begin
+        return to_lower(a) = to_lower(b)
+    end
+
+    fn pad_left(text: string, width: int, fill: string): string
+    begin
+        var missing: int := width - str.length(text)
+        if missing <= 0 { return text }
+        return repeat(fill, missing) + text
+    end
+
+    fn pad_right(text: string, width: int, fill: string): string
+    begin
+        var missing: int := width - str.length(text)
+        if missing <= 0 { return text }
+        return text + repeat(fill, missing)
+    end
+
+    fn center(text: string, width: int, fill: string): string
+    begin
+        var missing: int := width - str.length(text)
+        if missing <= 0 { return text }
+        var left: int := missing / 2
+        return repeat(fill, left) + text + repeat(fill, missing - left)
+    end
+
+    fn reverse(text: string): string
+    begin
+        var result: string := str.builder("")
+        var index: int := str.length(text) - 1
+        while index >= 0 {
+            result := str.append(result, str.fromchar(str.char(text, index)))
+            index := index - 1
+        }
+        return result
+    end
+
+    fn compare(a: string, b: string): int
+    begin
+        var sizeA: int := str.length(a)
+        var sizeB: int := str.length(b)
+        var index: int := 0
+        while index < sizeA && index < sizeB {
+            var x: int := str.char(a, index)
+            var y: int := str.char(b, index)
+            if x < y { return -1 }
+            if x > y { return 1 }
+            index := index + 1
+        }
+        if sizeA < sizeB { return -1 }
+        if sizeA > sizeB { return 1 }
+        return 0
+    end
+
+    fn is_digit(value: int): int
+    begin
+        return value >= 48 && value <= 57
+    end
+
+    fn is_alpha(value: int): int
+    begin
+        return (value >= 65 && value <= 90) || (value >= 97 && value <= 122)
+    end
+
+    fn is_alnum(value: int): int
+    begin
+        return is_digit(value) = 1 || is_alpha(value) = 1
+    end
+
+    fn all_digits(text: string): int
+    begin
+        if str.length(text) = 0 { return 0 }
+        var index: int := 0
+        while index < str.length(text) {
+            if is_digit(str.char(text, index)) = 0 { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn char_at(text: string, index: int): string
+    begin
+        if index < 0 || index >= str.length(text) { return "" }
+        return str.slice(text, index, index + 1)
+    end
+
+    fn substring(text: string, start: int, count: int): string
+    begin
+        var first: int := start
+        var size: int := str.length(text)
+        if first < 0 { first := 0 }
+        if first > size { first := size }
+        var last: int := first + count
+        if last > size { last := size }
+        return str.slice(text, first, last)
+    end
+
+    fn before(text: string, separator: string): string
+    begin
+        var position: int := index_of(text, separator)
+        if position < 0 { return text }
+        return str.slice(text, 0, position)
+    end
+
+    fn after(text: string, separator: string): string
+    begin
+        var position: int := index_of(text, separator)
+        if position < 0 { return "" }
+        return str.slice(text, position + str.length(separator), str.length(text))
+    end
+
+    fn between(text: string, open: string, close: string): string
+    begin
+        var start: int := index_of(text, open)
+        if start < 0 { return "" }
+        start := start + str.length(open)
+        var finish: int := index_from(text, close, start)
+        if finish < 0 { return "" }
+        return str.slice(text, start, finish)
+    end
+end

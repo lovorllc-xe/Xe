@@ -1,0 +1,128 @@
+// geometry: 2D vectors, distances, polygons and intersections.
+uses mathx
+uses fltlist
+
+module geometry
+begin
+    type Vec2: record
+    begin
+        x: flt
+        y: flt
+    end
+
+    fn vec(x: flt, y: flt): geometry.Vec2
+    begin
+        var v: geometry.Vec2
+        v.x := x
+        v.y := y
+        return v
+    end
+
+    fn add(a: geometry.Vec2, b: geometry.Vec2): geometry.Vec2
+    begin
+        return vec(a.x + b.x, a.y + b.y)
+    end
+
+    fn sub(a: geometry.Vec2, b: geometry.Vec2): geometry.Vec2
+    begin
+        return vec(a.x - b.x, a.y - b.y)
+    end
+
+    fn scale(a: geometry.Vec2, factor: flt): geometry.Vec2
+    begin
+        return vec(a.x * factor, a.y * factor)
+    end
+
+    fn dot(a: geometry.Vec2, b: geometry.Vec2): flt
+    begin
+        return a.x * b.x + a.y * b.y
+    end
+
+    fn cross(a: geometry.Vec2, b: geometry.Vec2): flt
+    begin
+        return a.x * b.y - a.y * b.x
+    end
+
+    fn length(a: geometry.Vec2): flt
+    begin
+        return mathx.hypot(a.x, a.y)
+    end
+
+    fn distance(a: geometry.Vec2, b: geometry.Vec2): flt
+    begin
+        return length(sub(a, b))
+    end
+
+    fn normalize(a: geometry.Vec2): geometry.Vec2
+    begin
+        var size: flt := length(a)
+        if size = 0.0 { return a }
+        return scale(a, 1.0 / size)
+    end
+
+    fn rotate(a: geometry.Vec2, angle: flt): geometry.Vec2
+    begin
+        var c: flt := mathx.cos(angle)
+        var s: flt := mathx.sin(angle)
+        return vec(a.x * c - a.y * s, a.x * s + a.y * c)
+    end
+
+    fn angle(a: geometry.Vec2): flt
+    begin
+        return mathx.atan2(a.y, a.x)
+    end
+
+    // Shoelace area of a polygon given parallel coordinate lists (positive when counter-clockwise).
+    fn polygon_area(xs: *fltlist.List, ys: *fltlist.List): flt
+    begin
+        var n: int := fltlist.len(xs)
+        var total: flt := 0.0
+        var index: int := 0
+        while index < n {
+            var next: int := (index + 1) % n
+            total := total + fltlist.get(xs, index) * fltlist.get(ys, next) - fltlist.get(xs, next) * fltlist.get(ys, index)
+            index := index + 1
+        }
+        return total / 2.0
+    end
+
+    fn point_in_polygon(px: flt, py: flt, xs: *fltlist.List, ys: *fltlist.List): int
+    begin
+        var n: int := fltlist.len(xs)
+        var inside: int := 0
+        var i: int := 0
+        var j: int := n - 1
+        while i < n {
+            var xi: flt := fltlist.get(xs, i)
+            var yi: flt := fltlist.get(ys, i)
+            var xj: flt := fltlist.get(xs, j)
+            var yj: flt := fltlist.get(ys, j)
+            if (yi > py) != (yj > py) {
+                if px < (xj - xi) * (py - yi) / (yj - yi) + xi { inside := 1 - inside }
+            }
+            j := i
+            i := i + 1
+        }
+        return inside
+    end
+
+    // 1 when segments p1-p2 and p3-p4 intersect.
+    fn segments_intersect(p1: geometry.Vec2, p2: geometry.Vec2, p3: geometry.Vec2, p4: geometry.Vec2): int
+    begin
+        var d1: flt := cross(sub(p4, p3), sub(p1, p3))
+        var d2: flt := cross(sub(p4, p3), sub(p2, p3))
+        var d3: flt := cross(sub(p2, p1), sub(p3, p1))
+        var d4: flt := cross(sub(p2, p1), sub(p4, p1))
+        return ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+    end
+
+    fn circle_area(radius: flt): flt
+    begin
+        return mathx.pi() * radius * radius
+    end
+
+    fn triangle_area(a: geometry.Vec2, b: geometry.Vec2, c: geometry.Vec2): flt
+    begin
+        return mathx.abs(cross(sub(b, a), sub(c, a))) / 2.0
+    end
+end

@@ -1,0 +1,80 @@
+// progress: terminal progress bars and spinners.
+uses clock
+
+module progress
+begin
+    type Bar: record
+    begin
+        total: int
+        current: int
+        width: int
+        label: string
+        started: int
+    end
+
+    fn new(total: int, label: string): *progress.Bar
+    begin
+        var bar: *progress.Bar := alloc(40)
+        bar.total := total
+        bar.current := 0
+        bar.width := 30
+        bar.label := label
+        bar.started := clock.monotonic()
+        return bar
+    end
+
+    fn render(bar: *progress.Bar): string
+    begin
+        var total: int := bar.total
+        if total <= 0 { total := 1 }
+        var filled: int := bar.current * bar.width / total
+        if filled > bar.width { filled := bar.width }
+        var out: string := str.builder(bar.label + " [")
+        var index: int := 0
+        while index < bar.width {
+            if index < filled { out := str.append(out, "#") }
+            else { out := str.append(out, "-") }
+            index := index + 1
+        }
+        var percent: int := bar.current * 100 / total
+        out := str.append(out, "] " + str.number(percent) + "% (" + str.number(bar.current) + "/" + str.number(bar.total) + ")")
+        var elapsed: int := clock.monotonic() - bar.started
+        if bar.current > 0 && bar.current < bar.total {
+            var remaining: int := elapsed / bar.current * (bar.total - bar.current)
+            out := str.append(out, " eta " + clock.format(remaining))
+        }
+        return out
+    end
+
+    fn draw(bar: *progress.Bar)
+    begin
+        var line: string := str.fromchar(13) + render(bar)
+        syscall.invoke3(1, 2, line, str.length(line))
+    end
+
+    fn advance(bar: *progress.Bar, amount: int)
+    begin
+        bar.current := bar.current + amount
+        draw(bar)
+    end
+
+    fn set(bar: *progress.Bar, value: int)
+    begin
+        bar.current := value
+        draw(bar)
+    end
+
+    fn finish(bar: *progress.Bar)
+    begin
+        bar.current := bar.total
+        draw(bar)
+        syscall.invoke3(1, 2, "\n", 1)
+    end
+
+    fn spinner_frame(step: int): string
+    begin
+        var frames: string := "|/-\\"
+        var index: int := step % 4
+        return str.slice(frames, index, index + 1)
+    end
+end

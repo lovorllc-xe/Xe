@@ -1,0 +1,114 @@
+// kvstore: a small persistent key-value store. Writes append to a log file; opening replays it.
+uses strmap
+uses strconv
+uses strlist
+uses strings
+uses stat
+
+module kvstore
+begin
+    type Store: record
+    begin
+        path: string
+        fd: int
+        data: *strmap.Map
+        records: int
+    end
+
+    fn open(path: string): *kvstore.Store
+    begin
+        var s: *kvstore.Store := alloc(40)
+        s.path := path
+        s.data := strmap.new()
+        s.records := 0
+        var lines: *strlist.List := strlist.lines(file.read(path))
+        var i: int := 0
+        while i < strlist.len(lines) {
+            var line: string := strlist.get(lines, i)
+            if str.length(line) > 2 {
+                var op: int := str.char(line, 0)
+                var rest: string := str.slice(line, 2, str.length(line))
+                if op = 83 {
+                    var split: int := strings.index_of(rest, " ")
+                    if split > 0 { strmap.put(s.data, strconv.unquote(str.slice(rest, 0, split)), strconv.unquote(str.slice(rest, split + 1, str.length(rest)))) }
+                }
+                if op = 68 { strmap.remove(s.data, strconv.unquote(rest)) }
+                s.records := s.records + 1
+            }
+            i := i + 1
+        }
+        s.fd := syscall.invoke3(2, path, 1089, 420)
+        return s
+    end
+
+    fn append(s: *kvstore.Store, line: string)
+    begin
+        var text: string := line + "\n"
+        syscall.invoke3(1, s.fd, text, str.length(text))
+        s.records := s.records + 1
+    end
+
+    fn set(s: *kvstore.Store, key: string, value: string)
+    begin
+        strmap.put(s.data, key, value)
+        append(s, "S " + strconv.quote(key) + " " + strconv.quote(value))
+    end
+
+    fn get(s: *kvstore.Store, key: string, fallback: string): string
+    begin
+        return strmap.get(s.data, key, fallback)
+    end
+
+    fn has(s: *kvstore.Store, key: string): int
+    begin
+        return strmap.has(s.data, key)
+    end
+
+    fn remove(s: *kvstore.Store, key: string): int
+    begin
+        if strmap.remove(s.data, key) = 0 { return 0 }
+        append(s, "D " + strconv.quote(key))
+        return 1
+    end
+
+    fn len(s: *kvstore.Store): int
+    begin
+        return strmap.len(s.data)
+    end
+
+    fn keys(s: *kvstore.Store): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var slot: int := 0
+        while slot < strmap.capacity(s.data) {
+            if strmap.occupied(s.data, slot) = 1 { strlist.push(out, strmap.key_at(s.data, slot)) }
+            slot := slot + 1
+        }
+        strlist.sort(out)
+        return out
+    end
+
+    // Rewrites the log with one record per live key.
+    fn compact(s: *kvstore.Store)
+    begin
+        var names: *strlist.List := keys(s)
+        var text: string := str.builder("")
+        var i: int := 0
+        while i < strlist.len(names) {
+            var key: string := strlist.get(names, i)
+            text := str.append(text, "S " + strconv.quote(key) + " " + strconv.quote(strmap.get(s.data, key, "")) + "\n")
+            i := i + 1
+        }
+        var temp: string := s.path + ".tmp"
+        file.write(temp, text)
+        syscall.invoke3(3, s.fd, 0, 0)
+        syscall.invoke3(82, temp, s.path, 0)
+        s.fd := syscall.invoke3(2, s.path, 1089, 420)
+        s.records := strlist.len(names)
+    end
+
+    fn close(s: *kvstore.Store)
+    begin
+        syscall.invoke3(3, s.fd, 0, 0)
+    end
+end

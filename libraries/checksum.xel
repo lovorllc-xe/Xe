@@ -1,0 +1,94 @@
+// checksum: CRC-32 (IEEE), CRC-32C, CRC-16/CCITT, Adler-32 and Fletcher-16.
+module checksum
+begin
+    fn crc32_with(text: string, polynomial: int): int
+    begin
+        var crc: int := 4294967295
+        var index: int := 0
+        while index < str.length(text) {
+            crc := crc ^ str.char(text, index)
+            var bit: int := 0
+            while bit < 8 {
+                if (crc & 1) = 1 { crc := (crc >> 1) ^ polynomial }
+                else { crc := crc >> 1 }
+                bit := bit + 1
+            }
+            index := index + 1
+        }
+        return crc ^ 4294967295
+    end
+
+    fn crc32(text: string): int
+    begin
+        return crc32_with(text, 3988292384)
+    end
+
+    fn crc32c(text: string): int
+    begin
+        return crc32_with(text, 2197175160)
+    end
+
+    fn crc16(text: string): int
+    begin
+        var crc: int := 65535
+        var index: int := 0
+        while index < str.length(text) {
+            crc := crc ^ (str.char(text, index) << 8)
+            var bit: int := 0
+            while bit < 8 {
+                if (crc & 32768) != 0 { crc := ((crc << 1) ^ 4129) & 65535 }
+                else { crc := (crc << 1) & 65535 }
+                bit := bit + 1
+            }
+            index := index + 1
+        }
+        return crc
+    end
+
+    fn adler32(text: string): int
+    begin
+        var a: int := 1
+        var b: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            a := (a + str.char(text, index)) % 65521
+            b := (b + a) % 65521
+            index := index + 1
+        }
+        return (b << 16) | a
+    end
+
+    fn fletcher16(text: string): int
+    begin
+        var a: int := 0
+        var b: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            a := (a + str.char(text, index)) % 255
+            b := (b + a) % 255
+            index := index + 1
+        }
+        return (b << 8) | a
+    end
+
+    fn luhn(digits: string): int
+    begin
+        var total: int := 0
+        var double: int := 0
+        var index: int := str.length(digits) - 1
+        while index >= 0 {
+            var c: int := str.char(digits, index)
+            if c >= 48 && c <= 57 {
+                var d: int := c - 48
+                if double = 1 {
+                    d := d * 2
+                    if d > 9 { d := d - 9 }
+                }
+                total := total + d
+                double := 1 - double
+            }
+            index := index - 1
+        }
+        return total % 10 = 0
+    end
+end

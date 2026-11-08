@@ -1,0 +1,71 @@
+type Task: record
+begin
+    lo: int
+    hi: int
+    out: int
+end
+
+fn tprime_worker(arg: *void): int
+begin
+    var task: *Task := arg
+    var s: int := 0
+    var x: int := task.lo
+    while x < task.hi {
+        if x >= 2 {
+            var d: int := 2
+            var prime: int := 1
+            while d * d <= x && prime = 1 {
+                if x % d = 0 { prime := 0 }
+                d := d + 1
+            }
+            s := s + prime
+        }
+        x := x + 1
+    }
+    task.out := s
+    return 0
+end
+
+fn tprime(n: int): int
+begin
+    var tasks: [8]*Task
+    var ids: [8]int
+    var t: int := 0
+    while t < 8 {
+        var task: *Task := alloc(24)
+        task.lo := n * t / 8
+        task.hi := n * (t + 1) / 8
+        task.out := 0
+        tasks[t] := task
+        ids[t] := thread.start(&tprime_worker, task)
+        t := t + 1
+    }
+    var total: int := 0
+    t := 0
+    while t < 8 {
+        thread.join(ids[t])
+        var task: *Task := tasks[t]
+        total := (total + task.out) % 1000000007
+        free(task)
+        t := t + 1
+    }
+    return total
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(tprime(n))
+    return 0
+end

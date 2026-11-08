@@ -1,0 +1,18 @@
+{
+  "grammars": [
+    {
+      "name": "xe",
+      "camelcase": "Xe",
+      "scope": "source.xe",
+      "path": ".",
+      "file-types": ["xe", "xel"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Xe grammar for tree-sitter",
+    "authors": [{ "name": "lovro" }]
+  }
+}

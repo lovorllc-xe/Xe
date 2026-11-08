@@ -1,0 +1,176 @@
+// polynomial: polynomials with flt coefficients, lowest degree first ([1, 2, 3] = 1 + 2x + 3x^2).
+uses fltlist
+uses mathx
+
+module polynomial
+begin
+    fn of(c0: flt, c1: flt, c2: flt): *fltlist.List
+    begin
+        var p: *fltlist.List := fltlist.new()
+        fltlist.push(p, c0)
+        fltlist.push(p, c1)
+        fltlist.push(p, c2)
+        return p
+    end
+
+    fn degree(p: *fltlist.List): int
+    begin
+        var d: int := fltlist.len(p) - 1
+        while d > 0 && fltlist.get(p, d) = 0.0 { d := d - 1 }
+        return d
+    end
+
+    fn eval(p: *fltlist.List, x: flt): flt
+    begin
+        var result: flt := 0.0
+        var i: int := fltlist.len(p) - 1
+        while i >= 0 {
+            result := result * x + fltlist.get(p, i)
+            i := i - 1
+        }
+        return result
+    end
+
+    fn add(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var n: int := fltlist.len(a)
+        if fltlist.len(b) > n { n := fltlist.len(b) }
+        var i: int := 0
+        while i < n {
+            fltlist.push(out, fltlist.get(a, i) + fltlist.get(b, i))
+            i := i + 1
+        }
+        return out
+    end
+
+    fn sub(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var n: int := fltlist.len(a)
+        if fltlist.len(b) > n { n := fltlist.len(b) }
+        var i: int := 0
+        while i < n {
+            fltlist.push(out, fltlist.get(a, i) - fltlist.get(b, i))
+            i := i + 1
+        }
+        return out
+    end
+
+    fn mul(a: *fltlist.List, b: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var n: int := fltlist.len(a) + fltlist.len(b) - 1
+        var i: int := 0
+        while i < n {
+            fltlist.push(out, 0.0)
+            i := i + 1
+        }
+        i := 0
+        while i < fltlist.len(a) {
+            var j: int := 0
+            while j < fltlist.len(b) {
+                fltlist.set(out, i + j, fltlist.get(out, i + j) + fltlist.get(a, i) * fltlist.get(b, j))
+                j := j + 1
+            }
+            i := i + 1
+        }
+        return out
+    end
+
+    fn derivative(p: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var i: int := 1
+        while i < fltlist.len(p) {
+            fltlist.push(out, fltlist.get(p, i) * i)
+            i := i + 1
+        }
+        if fltlist.len(out) = 0 { fltlist.push(out, 0.0) }
+        return out
+    end
+
+    fn integral(p: *fltlist.List, constant: flt): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        fltlist.push(out, constant)
+        var i: int := 0
+        while i < fltlist.len(p) {
+            fltlist.push(out, fltlist.get(p, i) / (i + 1))
+            i := i + 1
+        }
+        return out
+    end
+
+    fn scale(p: *fltlist.List, factor: flt): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        var i: int := 0
+        while i < fltlist.len(p) {
+            fltlist.push(out, fltlist.get(p, i) * factor)
+            i := i + 1
+        }
+        return out
+    end
+
+    // Polynomial with the given roots (monic).
+    fn from_roots(roots: *fltlist.List): *fltlist.List
+    begin
+        var out: *fltlist.List := fltlist.new()
+        fltlist.push(out, 1.0)
+        var i: int := 0
+        while i < fltlist.len(roots) {
+            var factor: *fltlist.List := fltlist.new()
+            fltlist.push(factor, -fltlist.get(roots, i))
+            fltlist.push(factor, 1.0)
+            out := mul(out, factor)
+            i := i + 1
+        }
+        return out
+    end
+
+    // Newton's method starting at guess; returns the root or the last iterate.
+    fn newton(p: *fltlist.List, guess: flt): flt
+    begin
+        var d: *fltlist.List := derivative(p)
+        var x: flt := guess
+        var i: int := 0
+        while i < 100 {
+            var slope: flt := eval(d, x)
+            if slope = 0.0 { return x }
+            var next: flt := x - eval(p, x) / slope
+            if mathx.abs(next - x) < 0.000000000000001 { return next }
+            x := next
+            i := i + 1
+        }
+        return x
+    end
+
+    fn to_string(p: *fltlist.List): string
+    begin
+        var out: string := str.builder("")
+        var i: int := degree(p)
+        var first: int := 1
+        while i >= 0 {
+            var c: flt := fltlist.get(p, i)
+            if c != 0.0 || (i = 0 && first = 1) {
+                var negative: int := c < 0.0
+                if first = 0 {
+                    if negative = 1 { out := str.append(out, " - ") }
+                    else { out := str.append(out, " + ") }
+                }
+                else {
+                    if negative = 1 { out := str.append(out, "-") }
+                }
+                var magnitude: flt := c
+                if negative = 1 { magnitude := -c }
+                if magnitude != 1.0 || i = 0 { out := str.append(out, flt.format(magnitude, 2)) }
+                if i >= 1 { out := str.append(out, "x") }
+                if i > 1 { out := str.append(out, "^" + str.number(i)) }
+                first := 0
+            }
+            i := i - 1
+        }
+        return out
+    end
+end

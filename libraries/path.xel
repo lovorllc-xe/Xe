@@ -1,0 +1,127 @@
+// path: POSIX path manipulation (join, split, normalize, extensions).
+uses strlist
+uses strings
+
+module path
+begin
+    fn join(a: string, b: string): string
+    begin
+        if str.length(a) = 0 { return b }
+        if str.length(b) = 0 { return a }
+        if str.char(b, 0) = 47 { return b }
+        if str.char(a, str.length(a) - 1) = 47 { return a + b }
+        return a + "/" + b
+    end
+
+    fn join3(a: string, b: string, c: string): string
+    begin
+        return join(join(a, b), c)
+    end
+
+    fn is_absolute(p: string): int
+    begin
+        return str.length(p) > 0 && str.char(p, 0) = 47
+    end
+
+    fn basename(p: string): string
+    begin
+        var trimmed: string := p
+        while str.length(trimmed) > 1 && str.char(trimmed, str.length(trimmed) - 1) = 47 { trimmed := str.slice(trimmed, 0, str.length(trimmed) - 1) }
+        var slash: int := strings.last_index_of(trimmed, "/")
+        if slash < 0 { return trimmed }
+        if str.length(trimmed) = 1 { return "/" }
+        return str.slice(trimmed, slash + 1, str.length(trimmed))
+    end
+
+    fn dirname(p: string): string
+    begin
+        var trimmed: string := p
+        while str.length(trimmed) > 1 && str.char(trimmed, str.length(trimmed) - 1) = 47 { trimmed := str.slice(trimmed, 0, str.length(trimmed) - 1) }
+        var slash: int := strings.last_index_of(trimmed, "/")
+        if slash < 0 { return "." }
+        if slash = 0 { return "/" }
+        return str.slice(trimmed, 0, slash)
+    end
+
+    fn extension(p: string): string
+    begin
+        var name: string := basename(p)
+        var dot: int := strings.last_index_of(name, ".")
+        if dot <= 0 { return "" }
+        return str.slice(name, dot, str.length(name))
+    end
+
+    fn stem(p: string): string
+    begin
+        var name: string := basename(p)
+        var dot: int := strings.last_index_of(name, ".")
+        if dot <= 0 { return name }
+        return str.slice(name, 0, dot)
+    end
+
+    fn with_extension(p: string, ext: string): string
+    begin
+        var current: string := extension(p)
+        return str.slice(p, 0, str.length(p) - str.length(current)) + ext
+    end
+
+    // Resolves "." and ".." and repeated slashes without touching the file system.
+    fn normalize(p: string): string
+    begin
+        if str.length(p) = 0 { return "." }
+        var absolute: int := is_absolute(p)
+        var parts: *strlist.List := strlist.split(p, "/")
+        var out: *strlist.List := strlist.new()
+        var index: int := 0
+        while index < strlist.len(parts) {
+            var part: string := strlist.get(parts, index)
+            if str.length(part) > 0 && part != "." {
+                if part = ".." {
+                    if strlist.len(out) > 0 && strlist.get(out, strlist.len(out) - 1) != ".." { strlist.pop(out) }
+                    else {
+                        if absolute = 0 { strlist.push(out, "..") }
+                    }
+                }
+                else { strlist.push(out, part) }
+            }
+            index := index + 1
+        }
+        var joined: string := strlist.join(out, "/")
+        if absolute = 1 { return "/" + joined }
+        if str.length(joined) = 0 { return "." }
+        return joined
+    end
+
+    fn split(p: string): *strlist.List
+    begin
+        var parts: *strlist.List := strlist.split(p, "/")
+        var out: *strlist.List := strlist.new()
+        var index: int := 0
+        while index < strlist.len(parts) {
+            if str.length(strlist.get(parts, index)) > 0 { strlist.push(out, strlist.get(parts, index)) }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn relative(base: string, target: string): string
+    begin
+        var from: *strlist.List := split(normalize(base))
+        var to: *strlist.List := split(normalize(target))
+        var common: int := 0
+        while common < strlist.len(from) && common < strlist.len(to) && strlist.get(from, common) = strlist.get(to, common) { common := common + 1 }
+        var out: *strlist.List := strlist.new()
+        var index: int := common
+        while index < strlist.len(from) {
+            strlist.push(out, "..")
+            index := index + 1
+        }
+        index := common
+        while index < strlist.len(to) {
+            strlist.push(out, strlist.get(to, index))
+            index := index + 1
+        }
+        if strlist.len(out) = 0 { return "." }
+        return strlist.join(out, "/")
+    end
+end

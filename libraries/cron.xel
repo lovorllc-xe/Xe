@@ -1,0 +1,83 @@
+// cron: parse five-field cron expressions ("m h dom mon dow") and compute matching times (UTC).
+uses datetime
+uses strlist
+uses strings
+
+module cron
+begin
+    // True when `value` is selected by one field such as "*/15", "1-5", "1,3,5" or "*".
+    fn field_matches(field: string, value: int, low: int, high: int): int
+    begin
+        var parts: *strlist.List := strlist.split(field, ",")
+        var p: int := 0
+        while p < strlist.len(parts) {
+            var part: string := strlist.get(parts, p)
+            var step: int := 1
+            var slash: int := strings.index_of(part, "/")
+            var range: string := part
+            if slash >= 0 {
+                step := number(str.slice(part, slash + 1, str.length(part)))
+                range := str.slice(part, 0, slash)
+            }
+            var start: int := low
+            var finish: int := high
+            if range != "*" {
+                var dash: int := strings.index_of(range, "-")
+                if dash >= 0 {
+                    start := number(str.slice(range, 0, dash))
+                    finish := number(str.slice(range, dash + 1, str.length(range)))
+                }
+                else {
+                    start := number(range)
+                    finish := start
+                    if slash >= 0 { finish := high }
+                }
+            }
+            if value >= start && value <= finish && step > 0 && (value - start) % step = 0 { return 1 }
+            p := p + 1
+        }
+        return 0
+    end
+
+    fn number(text: string): int
+    begin
+        var v: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            v := v * 10 + str.char(text, i) - 48
+            i := i + 1
+        }
+        return v
+    end
+
+    fn valid(expression: string): int
+    begin
+        var fields: *strlist.List := strlist.split(strings.trim(strings.replace(expression, "  ", " ")), " ")
+        return strlist.len(fields) = 5
+    end
+
+    fn matches(expression: string, d: datetime.Date): int
+    begin
+        var fields: *strlist.List := strlist.split(strings.trim(expression), " ")
+        if strlist.len(fields) != 5 { return 0 }
+        var dow: int := datetime.weekday(d)
+        var domOk: int := field_matches(strlist.get(fields, 2), d.day, 1, 31)
+        var dowOk: int := field_matches(strlist.get(fields, 4), dow, 0, 6)
+        if dow = 0 && dowOk = 0 { dowOk := field_matches(strlist.get(fields, 4), 7, 0, 7) }
+        var dayOk: int := domOk && dowOk
+        if strlist.get(fields, 2) != "*" && strlist.get(fields, 4) != "*" { dayOk := domOk || dowOk }
+        return field_matches(strlist.get(fields, 0), d.minute, 0, 59) = 1 && field_matches(strlist.get(fields, 1), d.hour, 0, 23) = 1 && field_matches(strlist.get(fields, 3), d.month, 1, 12) = 1 && dayOk
+    end
+
+    // Unix time of the next matching minute strictly after `after`, or -1 within the next 5 years.
+    fn next_after(expression: string, after: int): int
+    begin
+        var t: int := (after / 60 + 1) * 60
+        var limit: int := t + 5 * 366 * 86400
+        while t < limit {
+            if matches(expression, datetime.from_unix(t, 0)) = 1 { return t }
+            t := t + 60
+        }
+        return -1
+    end
+end

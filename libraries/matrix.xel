@@ -1,0 +1,233 @@
+// matrix: dense flt matrices with multiplication, inverse, determinant and solving.
+uses fltlist
+uses mathx
+
+module matrix
+begin
+    type Matrix: record
+    begin
+        rows: int
+        cols: int
+        data: *flt
+    end
+
+    fn new(rows: int, cols: int): *matrix.Matrix
+    begin
+        var m: *matrix.Matrix := alloc(24)
+        m.rows := rows
+        m.cols := cols
+        m.data := alloc(rows * cols * 8 + 8)
+        runtime.mem.set(m.data, 0, rows * cols * 8)
+        return m
+    end
+
+    fn identity(size: int): *matrix.Matrix
+    begin
+        var m: *matrix.Matrix := matrix.new(size, size)
+        var index: int := 0
+        while index < size {
+            *(m.data + index * size + index) := 1.0
+            index := index + 1
+        }
+        return m
+    end
+
+    fn get(m: *matrix.Matrix, row: int, col: int): flt
+    begin
+        return *(m.data + row * m.cols + col)
+    end
+
+    fn set(m: *matrix.Matrix, row: int, col: int, value: flt)
+    begin
+        *(m.data + row * m.cols + col) := value
+    end
+
+    fn copy(m: *matrix.Matrix): *matrix.Matrix
+    begin
+        var other: *matrix.Matrix := matrix.new(m.rows, m.cols)
+        runtime.mem.copy(other.data, m.data, m.rows * m.cols * 8)
+        return other
+    end
+
+    fn add(a: *matrix.Matrix, b: *matrix.Matrix): *matrix.Matrix
+    begin
+        var result: *matrix.Matrix := matrix.new(a.rows, a.cols)
+        var index: int := 0
+        while index < a.rows * a.cols {
+            *(result.data + index) := *(a.data + index) + *(b.data + index)
+            index := index + 1
+        }
+        return result
+    end
+
+    fn scale(a: *matrix.Matrix, factor: flt): *matrix.Matrix
+    begin
+        var result: *matrix.Matrix := matrix.new(a.rows, a.cols)
+        var index: int := 0
+        while index < a.rows * a.cols {
+            *(result.data + index) := *(a.data + index) * factor
+            index := index + 1
+        }
+        return result
+    end
+
+    fn mul(a: *matrix.Matrix, b: *matrix.Matrix): *matrix.Matrix
+    begin
+        var result: *matrix.Matrix := matrix.new(a.rows, b.cols)
+        var i: int := 0
+        while i < a.rows {
+            var k: int := 0
+            while k < a.cols {
+                var factor: flt := *(a.data + i * a.cols + k)
+                var j: int := 0
+                var row: *flt := result.data + i * b.cols
+                var source: *flt := b.data + k * b.cols
+                while j < b.cols {
+                    *(row + j) := *(row + j) + factor * *(source + j)
+                    j := j + 1
+                }
+                k := k + 1
+            }
+            i := i + 1
+        }
+        return result
+    end
+
+    fn transpose(a: *matrix.Matrix): *matrix.Matrix
+    begin
+        var result: *matrix.Matrix := matrix.new(a.cols, a.rows)
+        var i: int := 0
+        while i < a.rows {
+            var j: int := 0
+            while j < a.cols {
+                *(result.data + j * a.rows + i) := *(a.data + i * a.cols + j)
+                j := j + 1
+            }
+            i := i + 1
+        }
+        return result
+    end
+
+    fn swap_rows(m: *matrix.Matrix, a: int, b: int)
+    begin
+        var col: int := 0
+        while col < m.cols {
+            var t: flt := get(m, a, col)
+            set(m, a, col, get(m, b, col))
+            set(m, b, col, t)
+            col := col + 1
+        }
+    end
+
+    fn determinant(source: *matrix.Matrix): flt
+    begin
+        var m: *matrix.Matrix := copy(source)
+        var n: int := m.rows
+        var det: flt := 1.0
+        var col: int := 0
+        while col < n {
+            var pivot: int := col
+            var row: int := col + 1
+            while row < n {
+                if mathx.abs(get(m, row, col)) > mathx.abs(get(m, pivot, col)) { pivot := row }
+                row := row + 1
+            }
+            if get(m, pivot, col) = 0.0 { return 0.0 }
+            if pivot != col {
+                swap_rows(m, pivot, col)
+                det := -det
+            }
+            det := det * get(m, col, col)
+            row := col + 1
+            while row < n {
+                var factor: flt := get(m, row, col) / get(m, col, col)
+                var k: int := col
+                while k < n {
+                    set(m, row, k, get(m, row, k) - factor * get(m, col, k))
+                    k := k + 1
+                }
+                row := row + 1
+            }
+            col := col + 1
+        }
+        return det
+    end
+
+    // Gauss-Jordan inverse; returns a 0x0 matrix when singular.
+    fn inverse(source: *matrix.Matrix): *matrix.Matrix
+    begin
+        var n: int := source.rows
+        var m: *matrix.Matrix := copy(source)
+        var inv: *matrix.Matrix := identity(n)
+        var col: int := 0
+        while col < n {
+            var pivot: int := col
+            var row: int := col + 1
+            while row < n {
+                if mathx.abs(get(m, row, col)) > mathx.abs(get(m, pivot, col)) { pivot := row }
+                row := row + 1
+            }
+            if mathx.abs(get(m, pivot, col)) < 0.000000000001 { return matrix.new(0, 0) }
+            swap_rows(m, pivot, col)
+            swap_rows(inv, pivot, col)
+            var divisor: flt := get(m, col, col)
+            var k: int := 0
+            while k < n {
+                set(m, col, k, get(m, col, k) / divisor)
+                set(inv, col, k, get(inv, col, k) / divisor)
+                k := k + 1
+            }
+            row := 0
+            while row < n {
+                if row != col {
+                    var factor: flt := get(m, row, col)
+                    k := 0
+                    while k < n {
+                        set(m, row, k, get(m, row, k) - factor * get(m, col, k))
+                        set(inv, row, k, get(inv, row, k) - factor * get(inv, col, k))
+                        k := k + 1
+                    }
+                }
+                row := row + 1
+            }
+            col := col + 1
+        }
+        return inv
+    end
+
+    // Solves A x = b for x.
+    fn solve(a: *matrix.Matrix, b: *fltlist.List): *fltlist.List
+    begin
+        var inv: *matrix.Matrix := inverse(a)
+        var out: *fltlist.List := fltlist.new()
+        var row: int := 0
+        while row < inv.rows {
+            var total: flt := 0.0
+            var col: int := 0
+            while col < inv.cols {
+                total := total + get(inv, row, col) * fltlist.get(b, col)
+                col := col + 1
+            }
+            fltlist.push(out, total)
+            row := row + 1
+        }
+        return out
+    end
+
+    fn to_string(m: *matrix.Matrix, decimals: int): string
+    begin
+        var text: string := str.builder("")
+        var row: int := 0
+        while row < m.rows {
+            var col: int := 0
+            while col < m.cols {
+                if col > 0 { text := str.append(text, " ") }
+                text := str.append(text, flt.format(get(m, row, col), decimals))
+                col := col + 1
+            }
+            text := str.append(text, "\n")
+            row := row + 1
+        }
+        return text
+    end
+end

@@ -1,0 +1,202 @@
+// argparse: declarative command-line parsing with flags, options, positionals and generated help.
+//   var p: *argparse.Parser := argparse.new("tool", "does things")
+//   argparse.flag(p, "verbose", "v", "print more")
+//   argparse.option(p, "output", "o", "out.txt", "where to write")
+//   if argparse.parse(p) = 0 { return 2 }
+uses strlist
+uses strmap
+uses strings
+
+module argparse
+begin
+    type Parser: record
+    begin
+        name: string
+        about: string
+        longs: *strlist.List
+        shorts: *strlist.List
+        helps: *strlist.List
+        defaults: *strlist.List
+        takesValue: *strlist.List
+        values: *strmap.Map
+        positionals: *strlist.List
+        error: string
+    end
+
+    fn new(name: string, about: string): *argparse.Parser
+    begin
+        var p: *argparse.Parser := alloc(80)
+        p.name := name
+        p.about := about
+        p.longs := strlist.new()
+        p.shorts := strlist.new()
+        p.helps := strlist.new()
+        p.defaults := strlist.new()
+        p.takesValue := strlist.new()
+        p.values := strmap.new()
+        p.positionals := strlist.new()
+        p.error := ""
+        flag(p, "help", "h", "show this help")
+        return p
+    end
+
+    fn add(p: *argparse.Parser, long: string, short: string, fallback: string, help: string, valued: string)
+    begin
+        strlist.push(p.longs, long)
+        strlist.push(p.shorts, short)
+        strlist.push(p.helps, help)
+        strlist.push(p.defaults, fallback)
+        strlist.push(p.takesValue, valued)
+    end
+
+    fn flag(p: *argparse.Parser, long: string, short: string, help: string)
+    begin
+        add(p, long, short, "", help, "0")
+    end
+
+    fn option(p: *argparse.Parser, long: string, short: string, fallback: string, help: string)
+    begin
+        add(p, long, short, fallback, help, "1")
+    end
+
+    fn find(p: *argparse.Parser, name: string): int
+    begin
+        var index: int := 0
+        while index < strlist.len(p.longs) {
+            if strlist.get(p.longs, index) = name || (str.length(name) = 1 && strlist.get(p.shorts, index) = name) { return index }
+            index := index + 1
+        }
+        return -1
+    end
+
+    fn parse_list(p: *argparse.Parser, args: *strlist.List): int
+    begin
+        var index: int := 0
+        var rest: int := 0
+        while index < strlist.len(args) {
+            var current: string := strlist.get(args, index)
+            if rest = 1 || str.length(current) < 2 || str.char(current, 0) != 45 { strlist.push(p.positionals, current) }
+            else {
+                if current = "--" { rest := 1 }
+                else {
+                    var name: string := strings.trim_prefix(strings.trim_prefix(current, "-"), "-")
+                    var inline: string := ""
+                    var hasInline: int := 0
+                    var eq: int := strings.index_of(name, "=")
+                    if eq >= 0 {
+                        inline := str.slice(name, eq + 1, str.length(name))
+                        name := str.slice(name, 0, eq)
+                        hasInline := 1
+                    }
+                    var slot: int := find(p, name)
+                    if slot < 0 {
+                        p.error := "unknown option " + current
+                        return 0
+                    }
+                    var long: string := strlist.get(p.longs, slot)
+                    if strlist.get(p.takesValue, slot) = "1" {
+                        if hasInline = 1 { strmap.put(p.values, long, inline) }
+                        else {
+                            if index + 1 >= strlist.len(args) {
+                                p.error := "option --" + long + " needs a value"
+                                return 0
+                            }
+                            index := index + 1
+                            strmap.put(p.values, long, strlist.get(args, index))
+                        }
+                    }
+                    else { strmap.put(p.values, long, "1") }
+                }
+            }
+            index := index + 1
+        }
+        if has(p, "help") = 1 {
+            write(usage(p))
+            return 0
+        }
+        return 1
+    end
+
+    // Parses the program's own arguments; prints the error and usage on failure.
+    fn parse(p: *argparse.Parser): int
+    begin
+        var args: *strlist.List := strlist.new()
+        var index: int := 0
+        while index < arg.count() {
+            strlist.push(args, arg.get(index))
+            index := index + 1
+        }
+        var ok: int := parse_list(p, args)
+        if ok = 0 && str.length(p.error) > 0 {
+            writeln("error: " + p.error)
+            write(usage(p))
+        }
+        return ok
+    end
+
+    fn has(p: *argparse.Parser, long: string): int
+    begin
+        return strmap.has(p.values, long)
+    end
+
+    fn get(p: *argparse.Parser, long: string): string
+    begin
+        var slot: int := find(p, long)
+        var fallback: string := ""
+        if slot >= 0 { fallback := strlist.get(p.defaults, slot) }
+        return strmap.get(p.values, long, fallback)
+    end
+
+    fn get_int(p: *argparse.Parser, long: string): int
+    begin
+        var text: string := get(p, long)
+        var value: int := 0
+        var index: int := 0
+        var negative: int := 0
+        if str.length(text) > 0 && str.char(text, 0) = 45 {
+            negative := 1
+            index := 1
+        }
+        while index < str.length(text) && str.char(text, index) >= 48 && str.char(text, index) <= 57 {
+            value := value * 10 + str.char(text, index) - 48
+            index := index + 1
+        }
+        if negative = 1 { return -value }
+        return value
+    end
+
+    fn positional(p: *argparse.Parser, index: int): string
+    begin
+        return strlist.get(p.positionals, index)
+    end
+
+    fn positional_count(p: *argparse.Parser): int
+    begin
+        return strlist.len(p.positionals)
+    end
+
+    fn error(p: *argparse.Parser): string
+    begin
+        return p.error
+    end
+
+    fn usage(p: *argparse.Parser): string
+    begin
+        var out: string := str.builder("usage: " + p.name + " [options] [arguments]\n")
+        if str.length(p.about) > 0 { out := str.append(out, "\n" + p.about + "\n") }
+        out := str.append(out, "\noptions:\n")
+        var index: int := 0
+        while index < strlist.len(p.longs) {
+            var left: string := "  "
+            if str.length(strlist.get(p.shorts, index)) > 0 { left := left + "-" + strlist.get(p.shorts, index) + ", " }
+            else { left := left + "    " }
+            left := left + "--" + strlist.get(p.longs, index)
+            if strlist.get(p.takesValue, index) = "1" { left := left + " <value>" }
+            out := str.append(out, strings.pad_right(left, 30, " ") + strlist.get(p.helps, index))
+            if str.length(strlist.get(p.defaults, index)) > 0 { out := str.append(out, " (default: " + strlist.get(p.defaults, index) + ")") }
+            out := str.append(out, "\n")
+            index := index + 1
+        }
+        return out
+    end
+end

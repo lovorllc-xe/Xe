@@ -1,0 +1,48 @@
+fn sieve(n: int): int
+begin
+    var s: *[268435456]int := alloc((n + 1) * 8)
+    defer free(s)
+    var zero_s: int := 0
+    while zero_s < n + 1 {
+        (*s)[zero_s] := 0
+        zero_s := zero_s + 1
+    }
+    var i: int := 2
+    while i * i <= n {
+        if (*s)[i] = 0 {
+            var j: int := i * i
+            while j <= n {
+                (*s)[j] := 1
+                j := j + i
+            }
+        }
+        i := i + 1
+    }
+    var c: int := 0
+    i := 2
+    while i <= n {
+        if (*s)[i] = 0 {
+            c := c + 1
+        }
+        i := i + 1
+    }
+    return c
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(sieve(n))
+    return 0
+end

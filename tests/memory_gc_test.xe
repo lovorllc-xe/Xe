@@ -1,0 +1,164 @@
+uses heapstats
+uses waitgroup
+
+type Node: record
+begin
+    value: int
+    next: *Node
+end
+
+type Shared: record
+begin
+    group: *void
+    failures: *void
+end
+
+fn build(count: int): *Node
+begin
+    var head: *Node := 0
+    var i: int := 0
+    while i < count {
+        var node: *Node := alloc(16)
+        node.value := i
+        node.next := head
+        head := node
+        i := i + 1
+    }
+    return head
+end
+
+fn total(head: *Node): int
+begin
+    var sum: int := 0
+    var cursor: *Node := head
+    while @cursor != 0 {
+        sum := sum + cursor.value
+        cursor := cursor.next
+    }
+    return sum
+end
+
+fn allocator_worker(argument: *void): int
+begin
+    var shared: *Shared := argument
+    var bad: int := 0
+    var round: int := 0
+    while round < 200 {
+        var blocks: *[64]*void := alloc(512)
+        var i: int := 0
+        while i < 64 {
+            var size: int := 16 + (i * 37 + round) % 3000
+            var block: *void := alloc(size)
+            runtime.hw.write8(block, i)
+            runtime.hw.write8(block + size - 1, round)
+            (*blocks)[i] := block
+            i := i + 1
+        }
+        i := 0
+        while i < 64 {
+            var block2: *void := (*blocks)[i]
+            if runtime.hw.read8(block2) != i { bad := bad + 1 }
+            free(block2)
+            i := i + 1
+        }
+        free(blocks)
+        round := round + 1
+    }
+    waitgroup.done(shared.group)
+    return bad
+end
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var keep: *Node := build(1000)
+    var round: int := 0
+    var garbage: int := 0
+    while round < 4000 {
+        var temp: *Node := build(1000)
+        garbage := garbage + total(temp)
+        round := round + 1
+    }
+    failed := failed + expect("live data survives collections", total(keep) = 499500 && garbage = 4000 * 499500)
+    failed := failed + expect("collector ran by itself", heapstats.collections() >= 2)
+    failed := failed + expect("heap stays bounded", heapstats.heap_size() < 400 * 1048576)
+    var text: string := ""
+    var i: int := 0
+    while i < 50000 {
+        text := "item " + str.number(i)
+        i := i + 1
+    }
+    failed := failed + expect("strings survive", text = "item 49999")
+    var before: int := heapstats.heap_size()
+    i := 0
+    while i < 200 {
+        var big: *void := alloc(2000000)
+        runtime.hw.write8(big + 1999999, 7)
+        free(big)
+        i := i + 1
+    }
+    failed := failed + expect("large blocks are reused", heapstats.heap_size() - before < 8000000)
+    var once: *void := alloc(100)
+    free(once)
+    free(once)
+    free(0)
+    var again: *void := alloc(100)
+    var other: *void := alloc(100)
+    failed := failed + expect("double free is harmless", @again != @other)
+    var aligned: *void := aligned_alloc(100, 64)
+    failed := failed + expect("aligned alloc", @aligned % 64 = 0)
+    var heapBefore: int := heapstats.heap_size()
+    i := 0
+    while i < 20 {
+        gc.begin {
+            var j: int := 0
+            while j < 1000 {
+                var scratch: *void := alloc(4096)
+                runtime.hw.write8(scratch, 1)
+                j := j + 1
+            }
+        }
+        gc.end
+        i := i + 1
+    }
+    failed := failed + expect("regions release memory", heapstats.heap_size() - heapBefore < 16000000)
+    heapstats.disable()
+    var collectionsBefore: int := heapstats.collections()
+    i := 0
+    while i < 300 {
+        build(1000)
+        i := i + 1
+    }
+    failed := failed + expect("gc can be disabled", heapstats.collections() = collectionsBefore)
+    heapstats.enable()
+    var freed: int := heapstats.collect()
+    failed := failed + expect("explicit collect reclaims", freed > 1000000 && total(keep) = 499500)
+    var shared: *Shared := alloc(16)
+    shared.group := waitgroup.new()
+    var ids: [8]int
+    waitgroup.add(shared.group, 8)
+    var t: int := 0
+    while t < 8 {
+        ids[t] := thread.start(&allocator_worker, shared)
+        t := t + 1
+    }
+    waitgroup.wait(shared.group)
+    var corrupt: int := 0
+    t := 0
+    while t < 8 {
+        corrupt := corrupt + thread.join(ids[t])
+        t := t + 1
+    }
+    failed := failed + expect("threads allocate safely", corrupt = 0)
+    if failed = 0 { writeln("memory ok") }
+    return failed
+end

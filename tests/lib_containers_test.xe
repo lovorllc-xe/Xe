@@ -1,0 +1,92 @@
+uses intlist
+uses fltlist
+uses strlist
+uses ptrlist
+uses intmap
+uses strmap
+uses strintmap
+uses intset
+uses strset
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var list: *intlist.List := intlist.new()
+    var i: int := 0
+    while i < 1000 {
+        intlist.push(list, (i * 7919) % 1000)
+        i := i + 1
+    }
+    intlist.sort(list)
+    failed := failed + expect("intlist sorted", intlist.get(list, 0) = 0 && intlist.get(list, 999) = 999)
+    failed := failed + expect("intlist sum", intlist.sum(list) = 499500)
+    intlist.insert(list, 0, -5)
+    failed := failed + expect("intlist insert", intlist.first(list) = -5 && intlist.len(list) = 1001)
+    failed := failed + expect("intlist remove", intlist.remove(list, 0) = -5)
+    failed := failed + expect("intlist index", intlist.index_of(list, 500) = 500)
+    var small: *intlist.List := intlist.range(1, 6, 1)
+    failed := failed + expect("intlist join", intlist.join(small, ",") = "1,2,3,4,5")
+    intlist.reverse(small)
+    failed := failed + expect("intlist reverse", intlist.join(small, "") = "54321")
+    var floats: *fltlist.List := fltlist.new()
+    fltlist.push(floats, 1.5)
+    fltlist.push(floats, 2.5)
+    fltlist.push(floats, -1.0)
+    failed := failed + expect("fltlist mean", fltlist.mean(floats) = 1.0)
+    fltlist.sort(floats)
+    failed := failed + expect("fltlist sort", fltlist.get(floats, 0) = -1.0 && fltlist.max(floats) = 2.5)
+    var words: *strlist.List := strlist.split("pear,apple,fig", ",")
+    failed := failed + expect("strlist split", strlist.len(words) = 3)
+    strlist.sort(words)
+    failed := failed + expect("strlist sort", strlist.join(words, " ") = "apple fig pear")
+    failed := failed + expect("strlist lines", strlist.len(strlist.lines("a\nb\r\nc")) = 3)
+    var pointers: *ptrlist.List := ptrlist.new()
+    ptrlist.push(pointers, list)
+    var back: *intlist.List := ptrlist.get(pointers, 0)
+    failed := failed + expect("ptrlist", intlist.len(back) = 1000)
+    var counts: *intmap.Map := intmap.new()
+    i := 0
+    while i < 50000 {
+        intmap.add(counts, i % 1000, 1)
+        i := i + 1
+    }
+    failed := failed + expect("intmap count", intmap.len(counts) = 1000 && intmap.get(counts, 999, 0) = 50)
+    intmap.remove(counts, 5)
+    failed := failed + expect("intmap remove", intmap.has(counts, 5) = 0 && intmap.len(counts) = 999)
+    var names: *strmap.Map := strmap.new()
+    i := 0
+    while i < 2000 {
+        strmap.put(names, "key" + str.number(i), "value" + str.number(i * 2))
+        i := i + 1
+    }
+    failed := failed + expect("strmap get", strmap.get(names, "key1234", "") = "value2468")
+    strmap.remove(names, "key7")
+    failed := failed + expect("strmap remove", strmap.has(names, "key7") = 0 && strmap.len(names) = 1999)
+    var tally: *strintmap.Map := strintmap.new()
+    strintmap.add(tally, "x", 2)
+    strintmap.add(tally, "x", 3)
+    failed := failed + expect("strintmap", strintmap.get(tally, "x", 0) = 5)
+    var a: *intmap.Map := intset.new()
+    var b: *intmap.Map := intset.new()
+    intset.add(a, 1)
+    intset.add(a, 2)
+    intset.add(b, 2)
+    intset.add(b, 3)
+    failed := failed + expect("intset union", intset.len(intset.union(a, b)) = 3)
+    failed := failed + expect("intset intersection", intset.len(intset.intersection(a, b)) = 1)
+    var s: *strintmap.Map := strset.new()
+    strset.add(s, "go")
+    strset.add(s, "go")
+    failed := failed + expect("strset", strset.len(s) = 1 && strset.has(s, "go") = 1)
+    if failed = 0 { writeln("containers ok") }
+    return failed
+end

@@ -1,0 +1,301 @@
+// bigint: arbitrary-precision signed integers (base 10^9 limbs).
+module bigint
+begin
+    type Big: record
+    begin
+        limbs: *int
+        size: int
+        capacity: int
+        negative: int
+    end
+
+    fn base(): int
+    begin
+        return 1000000000
+    end
+
+    fn make(capacity: int): *bigint.Big
+    begin
+        var number: *bigint.Big := alloc(32)
+        var room: int := capacity
+        if room < 2 { room := 2 }
+        number.limbs := alloc(room * 8)
+        number.size := 1
+        number.capacity := room
+        number.negative := 0
+        return number
+    end
+
+    fn trim(number: *bigint.Big)
+    begin
+        while number.size > 1 && *(number.limbs + number.size - 1) = 0 { number.size := number.size - 1 }
+        if number.size = 1 && *number.limbs = 0 { number.negative := 0 }
+    end
+
+    fn from_int(value: int): *bigint.Big
+    begin
+        var number: *bigint.Big := make(3)
+        var v: int := value
+        if v < 0 {
+            number.negative := 1
+            v := -v
+        }
+        if v = -9223372036854775807 - 1 { return from_string("-9223372036854775808") }
+        number.size := 0
+        if v = 0 { number.size := 1 }
+        while v > 0 {
+            *(number.limbs + number.size) := v % 1000000000
+            v := v / 1000000000
+            number.size := number.size + 1
+        }
+        return number
+    end
+
+    fn from_string(text: string): *bigint.Big
+    begin
+        var size: int := str.length(text)
+        var start: int := 0
+        var negative: int := 0
+        if size > 0 && (str.char(text, 0) = 45 || str.char(text, 0) = 43) {
+            negative := str.char(text, 0) = 45
+            start := 1
+        }
+        var number: *bigint.Big := make((size - start) / 9 + 2)
+        number.size := 0
+        var finish: int := size
+        while finish > start {
+            var first: int := finish - 9
+            if first < start { first := start }
+            var limb: int := 0
+            var index: int := first
+            while index < finish {
+                var digit: int := str.char(text, index) - 48
+                if digit >= 0 && digit <= 9 { limb := limb * 10 + digit }
+                index := index + 1
+            }
+            *(number.limbs + number.size) := limb
+            number.size := number.size + 1
+            finish := first
+        }
+        if number.size = 0 { number.size := 1 }
+        number.negative := negative
+        trim(number)
+        return number
+    end
+
+    fn to_string(number: *bigint.Big): string
+    begin
+        var text: string := str.builder("")
+        if number.negative = 1 { text := str.append(text, "-") }
+        text := str.append(text, str.number(*(number.limbs + number.size - 1)))
+        var index: int := number.size - 2
+        while index >= 0 {
+            var part: string := str.number(*(number.limbs + index))
+            var pad: int := 9 - str.length(part)
+            while pad > 0 {
+                text := str.append(text, "0")
+                pad := pad - 1
+            }
+            text := str.append(text, part)
+            index := index - 1
+        }
+        return text
+    end
+
+    fn compare_magnitude(a: *bigint.Big, b: *bigint.Big): int
+    begin
+        if a.size != b.size { return a.size - b.size }
+        var index: int := a.size - 1
+        while index >= 0 {
+            var x: int := *(a.limbs + index)
+            var y: int := *(b.limbs + index)
+            if x != y { return x - y }
+            index := index - 1
+        }
+        return 0
+    end
+
+    fn compare(a: *bigint.Big, b: *bigint.Big): int
+    begin
+        if a.negative != b.negative {
+            if a.negative = 1 { return -1 }
+            return 1
+        }
+        var order: int := compare_magnitude(a, b)
+        if a.negative = 1 { return -order }
+        return order
+    end
+
+    fn add_magnitude(a: *bigint.Big, b: *bigint.Big): *bigint.Big
+    begin
+        var size: int := a.size
+        if b.size > size { size := b.size }
+        var result: *bigint.Big := make(size + 1)
+        var carry: int := 0
+        var index: int := 0
+        while index < size {
+            var total: int := carry
+            if index < a.size { total := total + *(a.limbs + index) }
+            if index < b.size { total := total + *(b.limbs + index) }
+            *(result.limbs + index) := total % 1000000000
+            carry := total / 1000000000
+            index := index + 1
+        }
+        *(result.limbs + size) := carry
+        result.size := size + 1
+        trim(result)
+        return result
+    end
+
+    // |a| - |b| where |a| >= |b|.
+    fn sub_magnitude(a: *bigint.Big, b: *bigint.Big): *bigint.Big
+    begin
+        var result: *bigint.Big := make(a.size)
+        var borrow: int := 0
+        var index: int := 0
+        while index < a.size {
+            var total: int := *(a.limbs + index) - borrow
+            if index < b.size { total := total - *(b.limbs + index) }
+            if total < 0 {
+                total := total + 1000000000
+                borrow := 1
+            }
+            else { borrow := 0 }
+            *(result.limbs + index) := total
+            index := index + 1
+        }
+        result.size := a.size
+        trim(result)
+        return result
+    end
+
+    fn add(a: *bigint.Big, b: *bigint.Big): *bigint.Big
+    begin
+        if a.negative = b.negative {
+            var sum: *bigint.Big := add_magnitude(a, b)
+            sum.negative := a.negative
+            trim(sum)
+            return sum
+        }
+        if compare_magnitude(a, b) >= 0 {
+            var difference: *bigint.Big := sub_magnitude(a, b)
+            difference.negative := a.negative
+            trim(difference)
+            return difference
+        }
+        var other: *bigint.Big := sub_magnitude(b, a)
+        other.negative := b.negative
+        trim(other)
+        return other
+    end
+
+    fn negate(a: *bigint.Big): *bigint.Big
+    begin
+        var copy: *bigint.Big := make(a.size)
+        runtime.mem.copy(copy.limbs, a.limbs, a.size * 8)
+        copy.size := a.size
+        copy.negative := 1 - a.negative
+        trim(copy)
+        return copy
+    end
+
+    fn sub(a: *bigint.Big, b: *bigint.Big): *bigint.Big
+    begin
+        return add(a, negate(b))
+    end
+
+    fn mul(a: *bigint.Big, b: *bigint.Big): *bigint.Big
+    begin
+        var result: *bigint.Big := make(a.size + b.size + 1)
+        runtime.mem.set(result.limbs, 0, (a.size + b.size + 1) * 8)
+        var i: int := 0
+        while i < a.size {
+            var carry: int := 0
+            var x: int := *(a.limbs + i)
+            var j: int := 0
+            while j < b.size || carry > 0 {
+                var current: int := *(result.limbs + i + j) + carry
+                if j < b.size { current := current + x * *(b.limbs + j) }
+                *(result.limbs + i + j) := current % 1000000000
+                carry := current / 1000000000
+                j := j + 1
+            }
+            i := i + 1
+        }
+        result.size := a.size + b.size + 1
+        result.negative := a.negative ^ b.negative
+        trim(result)
+        return result
+    end
+
+    fn mul_small(a: *bigint.Big, factor: int): *bigint.Big
+    begin
+        return mul(a, from_int(factor))
+    end
+
+    // Divides by a small positive int; returns the quotient (remainder via mod_small).
+    fn div_small(a: *bigint.Big, divisor: int): *bigint.Big
+    begin
+        var result: *bigint.Big := make(a.size)
+        var remainder: int := 0
+        var index: int := a.size - 1
+        while index >= 0 {
+            var current: int := *(a.limbs + index) + remainder * 1000000000
+            *(result.limbs + index) := current / divisor
+            remainder := current % divisor
+            index := index - 1
+        }
+        result.size := a.size
+        result.negative := a.negative
+        trim(result)
+        return result
+    end
+
+    fn mod_small(a: *bigint.Big, divisor: int): int
+    begin
+        var remainder: int := 0
+        var index: int := a.size - 1
+        while index >= 0 {
+            remainder := (*(a.limbs + index) + remainder * 1000000000) % divisor
+            index := index - 1
+        }
+        if a.negative = 1 && remainder != 0 { return -remainder }
+        return remainder
+    end
+
+    fn pow(a: *bigint.Big, exponent: int): *bigint.Big
+    begin
+        var result: *bigint.Big := from_int(1)
+        var factor: *bigint.Big := a
+        var power: int := exponent
+        while power > 0 {
+            if power % 2 = 1 { result := mul(result, factor) }
+            power := power / 2
+            if power > 0 { factor := mul(factor, factor) }
+        }
+        return result
+    end
+
+    fn factorial(n: int): *bigint.Big
+    begin
+        var result: *bigint.Big := from_int(1)
+        var index: int := 2
+        while index <= n {
+            result := mul_small(result, index)
+            index := index + 1
+        }
+        return result
+    end
+
+    fn is_zero(a: *bigint.Big): int
+    begin
+        return a.size = 1 && *a.limbs = 0
+    end
+
+    fn digits(a: *bigint.Big): int
+    begin
+        var text: string := to_string(a)
+        if a.negative = 1 { return str.length(text) - 1 }
+        return str.length(text)
+    end
+end

@@ -1,0 +1,115 @@
+// intervals: merge, intersect and query closed integer intervals stored as flat [start, end, start, end...] lists.
+uses intlist
+
+module intervals
+begin
+    fn new(): *intlist.List
+    begin
+        return intlist.new()
+    end
+
+    fn add(set: *intlist.List, start: int, finish: int)
+    begin
+        if finish < start { return }
+        intlist.push(set, start)
+        intlist.push(set, finish)
+    end
+
+    fn count(set: *intlist.List): int
+    begin
+        return intlist.len(set) / 2
+    end
+
+    fn sort_pairs(set: *intlist.List)
+    begin
+        var n: int := count(set)
+        var i: int := 1
+        while i < n {
+            var s: int := intlist.get(set, i * 2)
+            var e: int := intlist.get(set, i * 2 + 1)
+            var j: int := i - 1
+            var moving: int := 1
+            while moving = 1 {
+                if j < 0 { moving := 0 }
+                else {
+                    if intlist.get(set, j * 2) > s {
+                        intlist.set(set, (j + 1) * 2, intlist.get(set, j * 2))
+                        intlist.set(set, (j + 1) * 2 + 1, intlist.get(set, j * 2 + 1))
+                        j := j - 1
+                    }
+                    else { moving := 0 }
+                }
+            }
+            intlist.set(set, (j + 1) * 2, s)
+            intlist.set(set, (j + 1) * 2 + 1, e)
+            i := i + 1
+        }
+    end
+
+    // Sorted union with overlapping or touching intervals joined (touching means end + 1 = next start).
+    fn merge(set: *intlist.List): *intlist.List
+    begin
+        var copy: *intlist.List := intlist.copy(set)
+        sort_pairs(copy)
+        var out: *intlist.List := intervals.new()
+        var i: int := 0
+        while i < count(copy) {
+            var s: int := intlist.get(copy, i * 2)
+            var e: int := intlist.get(copy, i * 2 + 1)
+            var n: int := count(out)
+            if n > 0 && s <= intlist.get(out, (n - 1) * 2 + 1) + 1 {
+                if e > intlist.get(out, (n - 1) * 2 + 1) { intlist.set(out, (n - 1) * 2 + 1, e) }
+            }
+            else { add(out, s, e) }
+            i := i + 1
+        }
+        return out
+    end
+
+    fn contains(set: *intlist.List, point: int): int
+    begin
+        var i: int := 0
+        while i < count(set) {
+            if point >= intlist.get(set, i * 2) && point <= intlist.get(set, i * 2 + 1) { return 1 }
+            i := i + 1
+        }
+        return 0
+    end
+
+    fn overlaps(aStart: int, aEnd: int, bStart: int, bEnd: int): int
+    begin
+        return aStart <= bEnd && bStart <= aEnd
+    end
+
+    // Total number of integers covered after merging.
+    fn total_length(set: *intlist.List): int
+    begin
+        var merged: *intlist.List := merge(set)
+        var total: int := 0
+        var i: int := 0
+        while i < count(merged) {
+            total := total + intlist.get(merged, i * 2 + 1) - intlist.get(merged, i * 2) + 1
+            i := i + 1
+        }
+        return total
+    end
+
+    fn intersect(a: *intlist.List, b: *intlist.List): *intlist.List
+    begin
+        var x: *intlist.List := merge(a)
+        var y: *intlist.List := merge(b)
+        var out: *intlist.List := intervals.new()
+        var i: int := 0
+        var j: int := 0
+        while i < count(x) && j < count(y) {
+            var low: int := intlist.get(x, i * 2)
+            if intlist.get(y, j * 2) > low { low := intlist.get(y, j * 2) }
+            var high: int := intlist.get(x, i * 2 + 1)
+            if intlist.get(y, j * 2 + 1) < high { high := intlist.get(y, j * 2 + 1) }
+            if low <= high { add(out, low, high) }
+            if intlist.get(x, i * 2 + 1) < intlist.get(y, j * 2 + 1) { i := i + 1 }
+            else { j := j + 1 }
+        }
+        return out
+    end
+end

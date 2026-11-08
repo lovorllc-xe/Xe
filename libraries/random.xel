@@ -1,0 +1,156 @@
+// random: fast seeded pseudo-random numbers (xoshiro256**) plus OS entropy.
+uses mathx
+uses intlist
+
+module random
+begin
+    type Rng: record
+    begin
+        s0: int
+        s1: int
+        s2: int
+        s3: int
+    end
+
+    fn shr(value: int, amount: int): int
+    begin
+        return (value >> amount) & ~(-1 << (64 - amount))
+    end
+
+    fn rotl(value: int, amount: int): int
+    begin
+        return (value << amount) | shr(value, 64 - amount)
+    end
+
+    fn splitmix(state: *int): int
+    begin
+        *state := *state + 7046029254386353131
+        var z: int := *state
+        z := (z ^ shr(z, 30)) * -4658895280553007687
+        z := (z ^ shr(z, 27)) * -7723592293110705685
+        return z ^ shr(z, 31)
+    end
+
+    fn new(seed: int): *random.Rng
+    begin
+        var rng: *random.Rng := alloc(32)
+        var state: *int := alloc(8)
+        *state := seed
+        rng.s0 := splitmix(state)
+        rng.s1 := splitmix(state)
+        rng.s2 := splitmix(state)
+        rng.s3 := splitmix(state)
+        free(state)
+        return rng
+    end
+
+    // Reads 8 bytes from the kernel (getrandom); falls back to the clock.
+    fn entropy(): int
+    begin
+        var buffer: *int := alloc(8)
+        var got: int := syscall.invoke3(318, buffer, 8, 0)
+        var value: int := *buffer
+        free(buffer)
+        if got != 8 {
+            var clock: *int := alloc(16)
+            syscall.invoke3(228, 1, clock, 0)
+            value := *clock * 1000000007 + *(clock + 1)
+            free(clock)
+        }
+        return value
+    end
+
+    fn new_random(): *random.Rng
+    begin
+        return random.new(entropy())
+    end
+
+    fn next(rng: *random.Rng): int
+    begin
+        var result: int := rotl(rng.s1 * 5, 7) * 9
+        var t: int := rng.s1 << 17
+        rng.s2 := rng.s2 ^ rng.s0
+        rng.s3 := rng.s3 ^ rng.s1
+        rng.s1 := rng.s1 ^ rng.s2
+        rng.s0 := rng.s0 ^ rng.s3
+        rng.s2 := rng.s2 ^ t
+        rng.s3 := rotl(rng.s3, 45)
+        return result
+    end
+
+    // Uniform integer in [0, bound).
+    fn below(rng: *random.Rng, bound: int): int
+    begin
+        if bound <= 1 { return 0 }
+        var limit: int := 9223372036854775807 - (9223372036854775807 % bound)
+        var value: int := shr(next(rng), 1)
+        while value >= limit { value := shr(next(rng), 1) }
+        return value % bound
+    end
+
+    // Uniform integer in [low, high].
+    fn range(rng: *random.Rng, low: int, high: int): int
+    begin
+        if high <= low { return low }
+        return low + below(rng, high - low + 1)
+    end
+
+    // Uniform float in [0, 1).
+    fn float(rng: *random.Rng): flt
+    begin
+        return shr(next(rng), 11) * 0.00000000000000011102230246251565
+    end
+
+    fn uniform(rng: *random.Rng, low: flt, high: flt): flt
+    begin
+        return low + (high - low) * float(rng)
+    end
+
+    fn chance(rng: *random.Rng, probability: flt): int
+    begin
+        return float(rng) < probability
+    end
+
+    // Standard normal sample (Box-Muller).
+    fn gaussian(rng: *random.Rng): flt
+    begin
+        var u: flt := float(rng)
+        while u = 0.0 { u := float(rng) }
+        var v: flt := float(rng)
+        return mathx.sqrt(-2.0 * mathx.ln(u)) * mathx.cos(mathx.tau() * v)
+    end
+
+    fn normal(rng: *random.Rng, mean: flt, deviation: flt): flt
+    begin
+        return mean + deviation * gaussian(rng)
+    end
+
+    fn shuffle(rng: *random.Rng, list: *intlist.List)
+    begin
+        var index: int := intlist.len(list) - 1
+        while index > 0 {
+            var other: int := below(rng, index + 1)
+            var swap: int := intlist.get(list, index)
+            intlist.set(list, index, intlist.get(list, other))
+            intlist.set(list, other, swap)
+            index := index - 1
+        }
+    end
+
+    fn choice(rng: *random.Rng, list: *intlist.List): int
+    begin
+        return intlist.get(list, below(rng, intlist.len(list)))
+    end
+
+    fn string(rng: *random.Rng, length: int, alphabet: string): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(alphabet)
+        while index < length {
+            text := str.append(text, str.fromchar(str.char(alphabet, below(rng, size))))
+            index := index + 1
+        }
+        return text
+    end
+end

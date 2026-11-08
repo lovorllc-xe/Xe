@@ -1,0 +1,133 @@
+// semver: semantic version parsing, comparison and range checks.
+uses strings
+
+module semver
+begin
+    type Version: record
+    begin
+        major: int
+        minor: int
+        patch: int
+        pre: string
+        build: string
+        valid: int
+    end
+
+    fn number(text: string): int
+    begin
+        var value: int := 0
+        var index: int := 0
+        if str.length(text) = 0 { return -1 }
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            if c < 48 || c > 57 { return -1 }
+            value := value * 10 + c - 48
+            index := index + 1
+        }
+        return value
+    end
+
+    fn parse(text: string): semver.Version
+    begin
+        var v: semver.Version
+        v.valid := 0
+        v.pre := ""
+        v.build := ""
+        var core: string := strings.trim(text)
+        if strings.starts_with(core, "v") = 1 { core := str.slice(core, 1, str.length(core)) }
+        var plus: int := strings.index_of(core, "+")
+        if plus >= 0 {
+            v.build := str.slice(core, plus + 1, str.length(core))
+            core := str.slice(core, 0, plus)
+        }
+        var dash: int := strings.index_of(core, "-")
+        if dash >= 0 {
+            v.pre := str.slice(core, dash + 1, str.length(core))
+            core := str.slice(core, 0, dash)
+        }
+        var first: int := strings.index_of(core, ".")
+        if first < 0 { return v }
+        var second: int := strings.index_from(core, ".", first + 1)
+        if second < 0 { return v }
+        v.major := number(str.slice(core, 0, first))
+        v.minor := number(str.slice(core, first + 1, second))
+        v.patch := number(str.slice(core, second + 1, str.length(core)))
+        if v.major >= 0 && v.minor >= 0 && v.patch >= 0 { v.valid := 1 }
+        return v
+    end
+
+    fn compare(a: semver.Version, b: semver.Version): int
+    begin
+        if a.major != b.major { return a.major - b.major }
+        if a.minor != b.minor { return a.minor - b.minor }
+        if a.patch != b.patch { return a.patch - b.patch }
+        if a.pre = b.pre { return 0 }
+        if str.length(a.pre) = 0 { return 1 }
+        if str.length(b.pre) = 0 { return -1 }
+        return strings.compare(a.pre, b.pre)
+    end
+
+    fn compare_text(a: string, b: string): int
+    begin
+        return compare(parse(a), parse(b))
+    end
+
+    fn to_string(v: semver.Version): string
+    begin
+        var text: string := str.number(v.major) + "." + str.number(v.minor) + "." + str.number(v.patch)
+        if str.length(v.pre) > 0 { text := text + "-" + v.pre }
+        if str.length(v.build) > 0 { text := text + "+" + v.build }
+        return text
+    end
+
+    // Supports ^1.2.3, ~1.2.3, >=1.2.3, <=, >, <, = and exact versions.
+    fn satisfies(version: string, range: string): int
+    begin
+        var v: semver.Version := parse(version)
+        var r: string := strings.trim(range)
+        if strings.starts_with(r, "^") = 1 {
+            var base: semver.Version := parse(str.slice(r, 1, str.length(r)))
+            if compare(v, base) < 0 { return 0 }
+            if base.major > 0 { return v.major = base.major }
+            if base.minor > 0 { return v.major = 0 && v.minor = base.minor }
+            return v.major = 0 && v.minor = 0 && v.patch = base.patch
+        }
+        if strings.starts_with(r, "~") = 1 {
+            var tilde: semver.Version := parse(str.slice(r, 1, str.length(r)))
+            return compare(v, tilde) >= 0 && v.major = tilde.major && v.minor = tilde.minor
+        }
+        if strings.starts_with(r, ">=") = 1 { return compare(v, parse(str.slice(r, 2, str.length(r)))) >= 0 }
+        if strings.starts_with(r, "<=") = 1 { return compare(v, parse(str.slice(r, 2, str.length(r)))) <= 0 }
+        if strings.starts_with(r, ">") = 1 { return compare(v, parse(str.slice(r, 1, str.length(r)))) > 0 }
+        if strings.starts_with(r, "<") = 1 { return compare(v, parse(str.slice(r, 1, str.length(r)))) < 0 }
+        if strings.starts_with(r, "=") = 1 { return compare(v, parse(str.slice(r, 1, str.length(r)))) = 0 }
+        return compare(v, parse(r)) = 0
+    end
+
+    fn bump_major(v: semver.Version): semver.Version
+    begin
+        var out: semver.Version := v
+        out.major := v.major + 1
+        out.minor := 0
+        out.patch := 0
+        out.pre := ""
+        return out
+    end
+
+    fn bump_minor(v: semver.Version): semver.Version
+    begin
+        var out: semver.Version := v
+        out.minor := v.minor + 1
+        out.patch := 0
+        out.pre := ""
+        return out
+    end
+
+    fn bump_patch(v: semver.Version): semver.Version
+    begin
+        var out: semver.Version := v
+        out.patch := v.patch + 1
+        out.pre := ""
+        return out
+    end
+end

@@ -1,0 +1,98 @@
+// textwrap: word wrapping, indentation and line utilities.
+uses strlist
+uses strings
+
+module textwrap
+begin
+    fn wrap(text: string, width: int): string
+    begin
+        var words: *strlist.List := strlist.split(text, " ")
+        var result: string := str.builder("")
+        var line: int := 0
+        var index: int := 0
+        while index < strlist.len(words) {
+            var word: string := strlist.get(words, index)
+            if str.length(word) > 0 {
+                if line > 0 && line + 1 + str.length(word) > width {
+                    result := str.append(result, "\n")
+                    line := 0
+                }
+                if line > 0 {
+                    result := str.append(result, " ")
+                    line := line + 1
+                }
+                result := str.append(result, word)
+                line := line + str.length(word)
+            }
+            index := index + 1
+        }
+        return result
+    end
+
+    fn indent(text: string, prefix: string): string
+    begin
+        var lines: *strlist.List := strlist.lines(text)
+        var result: string := str.builder("")
+        var index: int := 0
+        while index < strlist.len(lines) {
+            if index > 0 { result := str.append(result, "\n") }
+            if str.length(strlist.get(lines, index)) > 0 { result := str.append(result, prefix) }
+            result := str.append(result, strlist.get(lines, index))
+            index := index + 1
+        }
+        return result
+    end
+
+    fn dedent(text: string): string
+    begin
+        var lines: *strlist.List := strlist.lines(text)
+        var common: int := 1000000
+        var index: int := 0
+        while index < strlist.len(lines) {
+            var line: string := strlist.get(lines, index)
+            if str.length(strings.trim(line)) > 0 {
+                var lead: int := 0
+                while lead < str.length(line) && (str.char(line, lead) = 32 || str.char(line, lead) = 9) { lead := lead + 1 }
+                if lead < common { common := lead }
+            }
+            index := index + 1
+        }
+        if common = 1000000 { common := 0 }
+        var result: string := str.builder("")
+        index := 0
+        while index < strlist.len(lines) {
+            if index > 0 { result := str.append(result, "\n") }
+            var line2: string := strlist.get(lines, index)
+            if str.length(line2) >= common { result := str.append(result, str.slice(line2, common, str.length(line2))) }
+            index := index + 1
+        }
+        return result
+    end
+
+    fn truncate(text: string, width: int, ellipsis: string): string
+    begin
+        if str.length(text) <= width { return text }
+        var keep: int := width - str.length(ellipsis)
+        if keep < 0 { keep := 0 }
+        return str.slice(text, 0, keep) + ellipsis
+    end
+
+    fn line_count(text: string): int
+    begin
+        return strlist.len(strlist.lines(text))
+    end
+
+    fn word_count(text: string): int
+    begin
+        var total: int := 0
+        var inWord: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            var space: int := strings.is_space(str.char(text, index))
+            if space = 0 && inWord = 0 { total := total + 1 }
+            inWord := 1 - space
+            index := index + 1
+        }
+        return total
+    end
+end

@@ -1,0 +1,102 @@
+// arena: bump allocators. Allocate many small objects fast and free them all at once with reset/release.
+uses ptrlist
+
+module arena
+begin
+    type Arena: record
+    begin
+        chunks: *ptrlist.List
+        chunkSize: int
+        used: int
+        current: *void
+        total: int
+    end
+
+    fn new(chunkSize: int): *arena.Arena
+    begin
+        var a: *arena.Arena := alloc(40)
+        a.chunks := ptrlist.new()
+        a.chunkSize := chunkSize
+        if a.chunkSize < 4096 { a.chunkSize := 4096 }
+        a.used := a.chunkSize
+        a.current := 0
+        a.total := 0
+        return a
+    end
+
+    // 8-byte aligned, zeroed memory valid until reset()/release().
+    fn allocate(a: *arena.Arena, size: int): *void
+    begin
+        var need: int := (size + 7) / 8 * 8
+        if need > a.chunkSize {
+            var big: *void := alloc(need)
+            ptrlist.push(a.chunks, big)
+            a.total := a.total + need
+            return big
+        }
+        if a.used + need > a.chunkSize {
+            a.current := alloc(a.chunkSize)
+            ptrlist.push(a.chunks, a.current)
+            a.used := 0
+        }
+        var result: *void := a.current + a.used
+        a.used := a.used + need
+        a.total := a.total + need
+        return result
+    end
+
+    fn text(a: *arena.Arena, value: string): string
+    begin
+        var size: int := str.length(value)
+        var copy: *void := allocate(a, size + 1)
+        runtime.mem.copy(copy, cstr_pointer(value), size)
+        runtime.hw.write8(copy + size, 0)
+        var cell: *void := alloc(8)
+        runtime.pointer.write(cell, copy)
+        var view: *string := cell
+        var result: string := *view
+        free(cell)
+        return result
+    end
+
+    fn cstr_pointer(value: string): *void
+    begin
+        var cell: *string := alloc(8)
+        *cell := value
+        var raw: *void := cell
+        var result: *void := runtime.pointer.read(raw)
+        free(cell)
+        return result
+    end
+
+    fn bytes_used(a: *arena.Arena): int
+    begin
+        return a.total
+    end
+
+    fn chunk_count(a: *arena.Arena): int
+    begin
+        return ptrlist.len(a.chunks)
+    end
+
+    // Frees every chunk; the arena can be used again.
+    fn reset(a: *arena.Arena)
+    begin
+        var i: int := 0
+        while i < ptrlist.len(a.chunks) {
+            free(ptrlist.get(a.chunks, i))
+            i := i + 1
+        }
+        ptrlist.clear(a.chunks)
+        a.used := a.chunkSize
+        a.current := 0
+        a.total := 0
+    end
+
+    fn release(a: *arena.Arena)
+    begin
+        reset(a)
+        ptrlist.release(a.chunks)
+        free(a)
+    end
+end

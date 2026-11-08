@@ -1,0 +1,90 @@
+fn editdist(n: int): int
+begin
+    var a: *[268435456]int := alloc((n) * 8)
+    defer free(a)
+    var zero_a: int := 0
+    while zero_a < n {
+        (*a)[zero_a] := 0
+        zero_a := zero_a + 1
+    }
+    var b: *[268435456]int := alloc((n) * 8)
+    defer free(b)
+    var zero_b: int := 0
+    while zero_b < n {
+        (*b)[zero_b] := 0
+        zero_b := zero_b + 1
+    }
+    var x: int := 7
+    var i: int := 0
+    while i < n {
+        x := (x * 1103515245 + 12345) % 2147483648
+        (*a)[i] := (x >> 8) % 4
+        x := (x * 1103515245 + 12345) % 2147483648
+        (*b)[i] := (x >> 8) % 4
+        i := i + 1
+    }
+    var prev: *[268435456]int := alloc((n + 1) * 8)
+    defer free(prev)
+    var zero_prev: int := 0
+    while zero_prev < n + 1 {
+        (*prev)[zero_prev] := 0
+        zero_prev := zero_prev + 1
+    }
+    var cur: *[268435456]int := alloc((n + 1) * 8)
+    defer free(cur)
+    var zero_cur: int := 0
+    while zero_cur < n + 1 {
+        (*cur)[zero_cur] := 0
+        zero_cur := zero_cur + 1
+    }
+    i := 0
+    while i <= n {
+        (*prev)[i] := i
+        i := i + 1
+    }
+    i := 1
+    while i <= n {
+        (*cur)[0] := i
+        var j: int := 1
+        while j <= n {
+            var cost: int := 1
+            if (*a)[i - 1] = (*b)[j - 1] {
+                cost := 0
+            }
+            var best: int := (*prev)[j - 1] + cost
+            if (*prev)[j] + 1 < best {
+                best := (*prev)[j] + 1
+            }
+            if (*cur)[j - 1] + 1 < best {
+                best := (*cur)[j - 1] + 1
+            }
+            (*cur)[j] := best
+            j := j + 1
+        }
+        j := 0
+        while j <= n {
+            (*prev)[j] := (*cur)[j]
+            j := j + 1
+        }
+        i := i + 1
+    }
+    return (*prev)[n]
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(editdist(n))
+    return 0
+end

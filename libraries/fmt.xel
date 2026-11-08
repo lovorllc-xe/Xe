@@ -1,0 +1,177 @@
+// fmt: string formatting with {} placeholders, widths and number formats.
+//   fmt.f2("{} has {} items", name, str.number(n))
+//   fmt.int(42, 8) -> "      42"     fmt.flt(3.14159, 2) -> "3.14"
+uses strlist
+
+module fmt
+begin
+    fn format(template: string, values: *strlist.List): string
+    begin
+        var result: string := str.builder("")
+        var index: int := 0
+        var next: int := 0
+        var size: int := str.length(template)
+        while index < size {
+            var c: int := str.char(template, index)
+            if c = 123 && index + 1 < size && str.char(template, index + 1) = 123 {
+                result := str.append(result, "{")
+                index := index + 2
+            }
+            else {
+                if c = 125 && index + 1 < size && str.char(template, index + 1) = 125 {
+                    result := str.append(result, "}")
+                    index := index + 2
+                }
+                else {
+                    if c = 123 {
+                        var close: int := index + 1
+                        while close < size && str.char(template, close) != 125 { close := close + 1 }
+                        var spec: string := str.slice(template, index + 1, close)
+                        var slot: int := next
+                        var width: int := 0
+                        var align: int := 0
+                        var position: int := 0
+                        var digits: int := 0
+                        var number: int := 0
+                        while position < str.length(spec) && str.char(spec, position) >= 48 && str.char(spec, position) <= 57 {
+                            number := number * 10 + str.char(spec, position) - 48
+                            digits := digits + 1
+                            position := position + 1
+                        }
+                        if digits > 0 { slot := number }
+                        else { next := next + 1 }
+                        if position < str.length(spec) && str.char(spec, position) = 58 {
+                            position := position + 1
+                            if position < str.length(spec) && (str.char(spec, position) = 60 || str.char(spec, position) = 62 || str.char(spec, position) = 94) {
+                                align := str.char(spec, position)
+                                position := position + 1
+                            }
+                            while position < str.length(spec) && str.char(spec, position) >= 48 && str.char(spec, position) <= 57 {
+                                width := width * 10 + str.char(spec, position) - 48
+                                position := position + 1
+                            }
+                        }
+                        var value: string := strlist.get(values, slot)
+                        var missing: int := width - str.length(value)
+                        if missing > 0 {
+                            if align = 60 { value := value + spaces(missing) }
+                            else {
+                                if align = 94 { value := spaces(missing / 2) + value + spaces(missing - missing / 2) }
+                                else { value := spaces(missing) + value }
+                            }
+                        }
+                        result := str.append(result, value)
+                        index := close + 1
+                    }
+                    else {
+                        result := str.append(result, str.fromchar(c))
+                        index := index + 1
+                    }
+                }
+            }
+        }
+        return result
+    end
+
+    fn spaces(count: int): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < count {
+            text := str.append(text, " ")
+            index := index + 1
+        }
+        return text
+    end
+
+    fn f1(template: string, a: string): string
+    begin
+        var values: *strlist.List := strlist.new()
+        strlist.push(values, a)
+        return format(template, values)
+    end
+
+    fn f2(template: string, a: string, b: string): string
+    begin
+        var values: *strlist.List := strlist.new()
+        strlist.push(values, a)
+        strlist.push(values, b)
+        return format(template, values)
+    end
+
+    fn f3(template: string, a: string, b: string, c: string): string
+    begin
+        var values: *strlist.List := strlist.new()
+        strlist.push(values, a)
+        strlist.push(values, b)
+        strlist.push(values, c)
+        return format(template, values)
+    end
+
+    fn f4(template: string, a: string, b: string, c: string, d: string): string
+    begin
+        var values: *strlist.List := strlist.new()
+        strlist.push(values, a)
+        strlist.push(values, b)
+        strlist.push(values, c)
+        strlist.push(values, d)
+        return format(template, values)
+    end
+
+    fn int(value: int, width: int): string
+    begin
+        var text: string := str.number(value)
+        if str.length(text) >= width { return text }
+        return spaces(width - str.length(text)) + text
+    end
+
+    fn int_zero(value: int, width: int): string
+    begin
+        var text: string := str.number(value)
+        var negative: int := value < 0
+        if negative = 1 { text := str.slice(text, 1, str.length(text)) }
+        while str.length(text) < width - negative { text := "0" + text }
+        if negative = 1 { return "-" + text }
+        return text
+    end
+
+    fn flt(value: flt, decimals: int): string
+    begin
+        return flt.format(value, decimals)
+    end
+
+    fn flt_width(value: flt, decimals: int, width: int): string
+    begin
+        var text: string := flt.format(value, decimals)
+        if str.length(text) >= width { return text }
+        return spaces(width - str.length(text)) + text
+    end
+
+    fn percent(value: flt, decimals: int): string
+    begin
+        return flt.format(value * 100.0, decimals) + "%"
+    end
+
+    fn bool(value: int): string
+    begin
+        if value != 0 { return "true" }
+        return "false"
+    end
+
+    fn left(text: string, width: int): string
+    begin
+        if str.length(text) >= width { return text }
+        return text + spaces(width - str.length(text))
+    end
+
+    fn right(text: string, width: int): string
+    begin
+        if str.length(text) >= width { return text }
+        return spaces(width - str.length(text)) + text
+    end
+
+    fn println2(template: string, a: string, b: string)
+    begin
+        writeln(f2(template, a, b))
+    end
+end

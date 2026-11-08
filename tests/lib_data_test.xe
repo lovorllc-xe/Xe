@@ -1,0 +1,54 @@
+uses jsonx
+uses lzss
+uses huffman
+uses inflate
+uses bytes
+uses strings
+uses subprocess
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var doc: *jsonx.Doc := jsonx.parse("{\"users\": [{\"name\": \"ann\", \"age\": 31}, {\"name\": \"bo\\u017e\", \"tags\": [true, null, -2.5e2]}], \"emoji\": \"\\ud83d\\ude00\", \"n\": 0}")
+    failed := failed + expect("json ok", jsonx.ok(doc) = 1)
+    failed := failed + expect("json path", jsonx.text(doc, jsonx.path(doc, 0, "users[0].name")) = "ann" && jsonx.int(doc, jsonx.path(doc, 0, "users[0].age")) = 31)
+    failed := failed + expect("json unicode", str.length(jsonx.text(doc, jsonx.path(doc, 0, "users[1].name"))) = 4 && str.length(jsonx.text(doc, jsonx.get(doc, 0, "emoji"))) = 4)
+    failed := failed + expect("json types", jsonx.bool(doc, jsonx.path(doc, 0, "users[1].tags[0]")) = 1 && jsonx.is_null(doc, jsonx.path(doc, 0, "users[1].tags[1]")) = 1 && jsonx.num(doc, jsonx.path(doc, 0, "users[1].tags[2]")) = -250.0)
+    failed := failed + expect("json len", jsonx.len(doc, jsonx.get(doc, 0, "users")) = 2)
+    var built: *jsonx.Doc := jsonx.new()
+    var root: int := jsonx.object(built)
+    jsonx.set(built, root, "name", jsonx.string(built, "x\"e"))
+    var list: int := jsonx.array(built)
+    jsonx.push(built, list, jsonx.integer(built, 1))
+    jsonx.push(built, list, jsonx.number(built, 2.5))
+    jsonx.set(built, root, "values", list)
+    jsonx.set(built, root, "name", jsonx.string(built, "xe"))
+    failed := failed + expect("json build", jsonx.stringify(built, root) = "{\"name\":\"xe\",\"values\":[1,2.5]}")
+    failed := failed + expect("json pretty", strings.contains(jsonx.pretty(built, root), "\n  \"values\": [\n    1,") = 1)
+    var reparsed: *jsonx.Doc := jsonx.parse(jsonx.stringify(doc, 0))
+    failed := failed + expect("json roundtrip", jsonx.stringify(reparsed, 0) = jsonx.stringify(doc, 0))
+    failed := failed + expect("json error", jsonx.ok(jsonx.parse("{\"a\": [1, 2}")) = 0)
+    var text: string := strings.repeat("the quick brown fox jumps over the lazy dog. ", 200)
+    var packed: *bytes.Buffer := lzss.compress_string(text)
+    failed := failed + expect("lzss ratio", bytes.len(packed) * 6 < str.length(text))
+    failed := failed + expect("lzss roundtrip", lzss.decompress_string(packed) = text)
+    var coded: *bytes.Buffer := huffman.encode(bytes.from_string(text))
+    failed := failed + expect("huffman", bytes.len(coded) < str.length(text) && bytes.to_string(huffman.decode(coded)) = text)
+    var single: *bytes.Buffer := huffman.encode(bytes.from_string("aaaa"))
+    failed := failed + expect("huffman single symbol", bytes.to_string(huffman.decode(single)) = "aaaa")
+    subprocess.shell("printf 'hello gzip world, hello gzip world, hello gzip!' | gzip -9 -c > /tmp/xe-inflate-test.gz")
+    failed := failed + expect("inflate gzip", inflate.gzip_file("/tmp/xe-inflate-test.gz") = "hello gzip world, hello gzip world, hello gzip!")
+    subprocess.shell("head -c 20000 /dev/urandom | base64 > /tmp/xe-inflate-big.txt && gzip -c /tmp/xe-inflate-big.txt > /tmp/xe-inflate-big.gz")
+    failed := failed + expect("inflate dynamic", inflate.gzip_file("/tmp/xe-inflate-big.gz") = file.read("/tmp/xe-inflate-big.txt"))
+    if failed = 0 { writeln("data ok") }
+    return failed
+end

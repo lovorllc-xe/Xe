@@ -1,0 +1,97 @@
+// stack: growable LIFO stacks of ints and of strings.
+module stack
+begin
+    type Ints: record
+    begin
+        data: *int
+        size: int
+        capacity: int
+    end
+
+    type Strings: record
+    begin
+        data: *string
+        size: int
+        capacity: int
+    end
+
+    fn ints(): *stack.Ints
+    begin
+        var s: *stack.Ints := alloc(24)
+        s.data := alloc(128)
+        s.size := 0
+        s.capacity := 16
+        return s
+    end
+
+    fn push(s: *stack.Ints, value: int)
+    begin
+        if s.size = s.capacity {
+            var bigger: *int := alloc(s.capacity * 16)
+            runtime.mem.copy(bigger, s.data, s.size * 8)
+            free(s.data)
+            s.data := bigger
+            s.capacity := s.capacity * 2
+        }
+        *(s.data + s.size) := value
+        s.size := s.size + 1
+    end
+
+    fn pop(s: *stack.Ints): int
+    begin
+        if s.size = 0 { return 0 }
+        s.size := s.size - 1
+        return *(s.data + s.size)
+    end
+
+    fn peek(s: *stack.Ints): int
+    begin
+        if s.size = 0 { return 0 }
+        return *(s.data + s.size - 1)
+    end
+
+    fn len(s: *stack.Ints): int
+    begin
+        return s.size
+    end
+
+    fn strings(): *stack.Strings
+    begin
+        var s: *stack.Strings := alloc(24)
+        s.data := alloc(128)
+        s.size := 0
+        s.capacity := 16
+        return s
+    end
+
+    fn push.string(s: *stack.Strings, value: string)
+    begin
+        if s.size = s.capacity {
+            var bigger: *string := alloc(s.capacity * 16)
+            runtime.mem.copy(bigger, s.data, s.size * 8)
+            free(s.data)
+            s.data := bigger
+            s.capacity := s.capacity * 2
+        }
+        *(s.data + s.size) := value
+        s.size := s.size + 1
+    end
+
+    fn pop.string(s: *stack.Strings): string
+    begin
+        if s.size = 0 { return "" }
+        s.size := s.size - 1
+        return *(s.data + s.size)
+    end
+
+    fn peek.string(s: *stack.Strings): string
+    begin
+        if s.size = 0 { return "" }
+        return *(s.data + s.size - 1)
+    end
+
+    fn len.string(s: *stack.Strings): int
+    begin
+        return s.size
+    end
+end

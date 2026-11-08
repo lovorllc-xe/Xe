@@ -1,0 +1,37 @@
+// waitgroup: wait for a collection of threads or tasks to finish (like Go's sync.WaitGroup).
+uses futex
+uses atomic
+
+module waitgroup
+begin
+    fn new(): *void
+    begin
+        var group: *void := alloc(8)
+        atomic.store(group, 0)
+        return group
+    end
+
+    fn add(group: *void, count: int)
+    begin
+        atomic.add(group, count)
+    end
+
+    fn done(group: *void)
+    begin
+        if atomic.add(group, -1) = 0 { futex.wake_all(group) }
+    end
+
+    fn wait(group: *void)
+    begin
+        var current: int := atomic.load(group)
+        while current != 0 {
+            futex.wait(group, current)
+            current := atomic.load(group)
+        }
+    end
+
+    fn pending(group: *void): int
+    begin
+        return atomic.load(group)
+    end
+end

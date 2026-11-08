@@ -1,0 +1,394 @@
+// mathx: double-precision math (exp, log, pow, trigonometry, hyperbolic, rounding).
+// All functions use range reduction so results are accurate to about 1e-15 relative.
+module mathx
+begin
+    fn pi(): flt
+    begin
+        return 3.141592653589793
+    end
+
+    fn tau(): flt
+    begin
+        return 6.283185307179586
+    end
+
+    fn e(): flt
+    begin
+        return 2.718281828459045
+    end
+
+    fn ln2(): flt
+    begin
+        return 0.6931471805599453
+    end
+
+    fn infinity(): flt
+    begin
+        var big: flt := 1.0
+        var index: int := 0
+        while index < 1100 {
+            big := big * 2.0
+            index := index + 1
+        }
+        return big
+    end
+
+    fn nan(): flt
+    begin
+        var zero: flt := 0.0
+        return zero / zero
+    end
+
+    fn is_nan(value: flt): int
+    begin
+        return value != value
+    end
+
+    fn is_inf(value: flt): int
+    begin
+        return value = infinity() || value = -infinity()
+    end
+
+    fn abs(value: flt): flt
+    begin
+        if value < 0.0 { return -value }
+        return value
+    end
+
+    fn min(a: flt, b: flt): flt
+    begin
+        if a < b { return a }
+        return b
+    end
+
+    fn max(a: flt, b: flt): flt
+    begin
+        if a > b { return a }
+        return b
+    end
+
+    fn clamp(value: flt, low: flt, high: flt): flt
+    begin
+        if value < low { return low }
+        if value > high { return high }
+        return value
+    end
+
+    fn sign(value: flt): flt
+    begin
+        if value > 0.0 { return 1.0 }
+        if value < 0.0 { return -1.0 }
+        return 0.0
+    end
+
+    fn trunc(value: flt): flt
+    begin
+        if abs(value) >= 4503599627370496.0 { return value }
+        return flt.toint(value) * 1.0
+    end
+
+    fn floor(value: flt): flt
+    begin
+        var whole: flt := trunc(value)
+        if whole > value { return whole - 1.0 }
+        return whole
+    end
+
+    fn ceil(value: flt): flt
+    begin
+        var whole: flt := trunc(value)
+        if whole < value { return whole + 1.0 }
+        return whole
+    end
+
+    fn round(value: flt): flt
+    begin
+        if value < 0.0 { return -floor(-value + 0.5) }
+        return floor(value + 0.5)
+    end
+
+    fn round_to(value: flt, decimals: int): flt
+    begin
+        var scale: flt := pow_int(10.0, decimals)
+        return round(value * scale) / scale
+    end
+
+    fn fmod(a: flt, b: flt): flt
+    begin
+        if b = 0.0 { return nan() }
+        return a - trunc(a / b) * b
+    end
+
+    fn pow_int(base: flt, exponent: int): flt
+    begin
+        var result: flt := 1.0
+        var factor: flt := base
+        var power: int := exponent
+        if power < 0 { power := -power }
+        while power > 0 {
+            if power % 2 = 1 { result := result * factor }
+            factor := factor * factor
+            power := power / 2
+        }
+        if exponent < 0 { return 1.0 / result }
+        return result
+    end
+
+    fn sqrt(value: flt): flt
+    begin
+        if value < 0.0 { return nan() }
+        if value = 0.0 || value != value { return value }
+        if value = infinity() { return value }
+        var scaled: flt := value
+        var factor: flt := 1.0
+        while scaled > 4.0 {
+            scaled := scaled * 0.25
+            factor := factor * 2.0
+        }
+        while scaled < 0.25 {
+            scaled := scaled * 4.0
+            factor := factor * 0.5
+        }
+        var guess: flt := (scaled + 1.0) * 0.5
+        var step: int := 0
+        while step < 8 {
+            guess := (guess + scaled / guess) * 0.5
+            step := step + 1
+        }
+        return guess * factor
+    end
+
+    fn cbrt(value: flt): flt
+    begin
+        if value = 0.0 { return 0.0 }
+        var negative: int := value < 0.0
+        var x: flt := abs(value)
+        var guess: flt := exp(ln(x) / 3.0)
+        guess := guess - (guess * guess * guess - x) / (3.0 * guess * guess)
+        guess := guess - (guess * guess * guess - x) / (3.0 * guess * guess)
+        if negative = 1 { return -guess }
+        return guess
+    end
+
+    fn hypot(a: flt, b: flt): flt
+    begin
+        var x: flt := abs(a)
+        var y: flt := abs(b)
+        if x < y {
+            var swap: flt := x
+            x := y
+            y := swap
+        }
+        if x = 0.0 { return 0.0 }
+        var ratio: flt := y / x
+        return x * sqrt(1.0 + ratio * ratio)
+    end
+
+    fn exp(value: flt): flt
+    begin
+        if value != value { return value }
+        if value > 709.78 { return infinity() }
+        if value < -745.2 { return 0.0 }
+        var k: int := flt.toint(round(value / ln2()))
+        var r: flt := value - k * 0.6931471803691238 - k * 0.0000000001908214929270587
+        var term: flt := 1.0
+        var total: flt := 1.0
+        var n: int := 1
+        while n < 22 {
+            term := term * r / n
+            total := total + term
+            n := n + 1
+        }
+        return total * pow_int(2.0, k)
+    end
+
+    fn ln(value: flt): flt
+    begin
+        if value != value { return value }
+        if value < 0.0 { return nan() }
+        if value = 0.0 { return -infinity() }
+        if value = infinity() { return value }
+        var m: flt := value
+        var k: int := 0
+        while m >= 2.0 {
+            m := m * 0.5
+            k := k + 1
+        }
+        while m < 1.0 {
+            m := m * 2.0
+            k := k - 1
+        }
+        if m > 1.4142135623730951 {
+            m := m * 0.5
+            k := k + 1
+        }
+        var s: flt := (m - 1.0) / (m + 1.0)
+        var s2: flt := s * s
+        var term: flt := s
+        var total: flt := 0.0
+        var n: int := 1
+        while n < 60 {
+            total := total + term / n
+            term := term * s2
+            n := n + 2
+        }
+        return 2.0 * total + k * ln2()
+    end
+
+    fn log10(value: flt): flt
+    begin
+        return ln(value) / 2.302585092994046
+    end
+
+    fn log2(value: flt): flt
+    begin
+        return ln(value) / ln2()
+    end
+
+    fn log(value: flt, base: flt): flt
+    begin
+        return ln(value) / ln(base)
+    end
+
+    fn pow(base: flt, exponent: flt): flt
+    begin
+        var whole: flt := trunc(exponent)
+        if whole = exponent && abs(exponent) < 1000000000.0 { return pow_int(base, flt.toint(exponent)) }
+        if base < 0.0 { return nan() }
+        if base = 0.0 { return 0.0 }
+        return exp(exponent * ln(base))
+    end
+
+    fn reduce(angle: flt): flt
+    begin
+        var turns: flt := floor(angle / tau() + 0.5)
+        return angle - turns * 6.283185307179586 - turns * 0.0000000000000002449293598294706
+    end
+
+    fn sin_core(x: flt): flt
+    begin
+        var x2: flt := x * x
+        var term: flt := x
+        var total: flt := x
+        var n: int := 1
+        while n < 12 {
+            term := -term * x2 / ((2 * n) * (2 * n + 1))
+            total := total + term
+            n := n + 1
+        }
+        return total
+    end
+
+    fn cos_core(x: flt): flt
+    begin
+        var x2: flt := x * x
+        var term: flt := 1.0
+        var total: flt := 1.0
+        var n: int := 1
+        while n < 12 {
+            term := -term * x2 / ((2 * n - 1) * (2 * n))
+            total := total + term
+            n := n + 1
+        }
+        return total
+    end
+
+    fn sin(angle: flt): flt
+    begin
+        var x: flt := reduce(angle)
+        var quarter: flt := pi() / 2.0
+        if x > quarter { return sin_core(pi() - x) }
+        if x < -quarter { return -sin_core(pi() + x) }
+        return sin_core(x)
+    end
+
+    fn cos(angle: flt): flt
+    begin
+        return sin(angle + pi() / 2.0)
+    end
+
+    fn tan(angle: flt): flt
+    begin
+        return sin(angle) / cos(angle)
+    end
+
+    fn atan(value: flt): flt
+    begin
+        if value != value { return value }
+        if value < 0.0 { return -atan(-value) }
+        if value > 1.0 { return pi() / 2.0 - atan(1.0 / value) }
+        if value > 0.2679491924311228 { return pi() / 6.0 + atan((value * 1.7320508075688772 - 1.0) / (value + 1.7320508075688772)) }
+        var x2: flt := value * value
+        var term: flt := value
+        var total: flt := 0.0
+        var n: int := 1
+        while n < 50 {
+            total := total + term / n
+            term := -term * x2
+            n := n + 2
+        }
+        return total
+    end
+
+    fn atan2(y: flt, x: flt): flt
+    begin
+        if x > 0.0 { return atan(y / x) }
+        if x < 0.0 {
+            if y >= 0.0 { return atan(y / x) + pi() }
+            return atan(y / x) - pi()
+        }
+        if y > 0.0 { return pi() / 2.0 }
+        if y < 0.0 { return -pi() / 2.0 }
+        return 0.0
+    end
+
+    fn asin(value: flt): flt
+    begin
+        if value > 1.0 || value < -1.0 { return nan() }
+        if value = 1.0 { return pi() / 2.0 }
+        if value = -1.0 { return -pi() / 2.0 }
+        return atan(value / sqrt(1.0 - value * value))
+    end
+
+    fn acos(value: flt): flt
+    begin
+        if value > 1.0 || value < -1.0 { return nan() }
+        return pi() / 2.0 - asin(value)
+    end
+
+    fn sinh(value: flt): flt
+    begin
+        if abs(value) < 0.001 { return value + value * value * value / 6.0 }
+        var grow: flt := exp(value)
+        return (grow - 1.0 / grow) / 2.0
+    end
+
+    fn cosh(value: flt): flt
+    begin
+        var grow: flt := exp(value)
+        return (grow + 1.0 / grow) / 2.0
+    end
+
+    fn tanh(value: flt): flt
+    begin
+        if value > 20.0 { return 1.0 }
+        if value < -20.0 { return -1.0 }
+        var grow: flt := exp(2.0 * value)
+        return (grow - 1.0) / (grow + 1.0)
+    end
+
+    fn radians(degrees: flt): flt
+    begin
+        return degrees * pi() / 180.0
+    end
+
+    fn degrees(radians: flt): flt
+    begin
+        return radians * 180.0 / pi()
+    end
+
+    fn approx(a: flt, b: flt, tolerance: flt): int
+    begin
+        return abs(a - b) <= tolerance * max(1.0, max(abs(a), abs(b)))
+    end
+end

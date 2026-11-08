@@ -178,7 +178,7 @@ begin
         return output
     end
 
-    fn messageIndex(source: string, pool: *[524288]int, mainId: int, before: int): int
+    fn messageIndex(source: string, pool: *[12582912]int, mainId: int, before: int): int
     begin
         var position: int := before
         var finish: int := ast.read(pool, mainId, 8)
@@ -200,7 +200,7 @@ begin
         return -1
     end
 
-    fn floatExpressionType(source: string, pool: *[524288]int, functionId: int, id: int): int
+    fn floatExpressionType(source: string, pool: *[12582912]int, functionId: int, id: int): int
     begin
         if id < 0 { return 0 }
         var kind: int := ast.read(pool, id, 0)
@@ -237,7 +237,7 @@ begin
         return 0
     end
 
-    fn stringExpressionType(source: string, pool: *[524288]int, functionId: int, id: int): int
+    fn stringExpressionType(source: string, pool: *[12582912]int, functionId: int, id: int): int
     begin
         if id < 0 { return 0 }
         var kind: int := ast.read(pool, id, 0)
@@ -272,7 +272,7 @@ begin
         return 0
     end
 
-    fn writeCode(source: string, pool: *[524288]int, mainId: int, word: string, argumentStart: int, callStart: int): string
+    fn writeCode(source: string, pool: *[12582912]int, mainId: int, word: string, argumentStart: int, callStart: int): string
     begin
         var argument: [4]int := lexer.scan(source, argumentStart, 1)
         var newline: int := 0
@@ -301,7 +301,7 @@ begin
         return ""
     end
 
-    fn writeArgumentCode(source: string, pool: *[524288]int, functionId: int, word: string, argument: int, callStart: int): string
+    fn writeArgumentCode(source: string, pool: *[12582912]int, functionId: int, word: string, argument: int, callStart: int): string
     begin
         if argument < 0 { return "" }
         var kind: int := ast.read(pool, argument, 0)
@@ -312,9 +312,7 @@ begin
                 if word = "writeln" { newline := 1 }
                 return " lea rdi, [rip+.Lstr" + token.number(ast.read(pool, argument, 1)) + "]\n mov esi, " + token.number(newline) + "\n call xe.print.string\n"
             }
-            if literalKind = token.numberKind() {
-                if str.find(str.slice(source, ast.read(pool, argument, 1), ast.read(pool, argument, 2)), ".") < 0 { return writeCode(source, pool, functionId, word, ast.read(pool, argument, 1), callStart) }
-            }
+
         }
         var newline: int := 0
         if word = "writeln" { newline := 1 }
@@ -333,7 +331,7 @@ begin
         return integerCode + " mov rdi, rax\n mov esi, " + token.number(newline) + "\n call " + runtime.intPrintName() + "\n"
     end
 
-    fn writeCallCode(source: string, pool: *[524288]int, functionId: int, word: string, firstArgument: int, callStart: int): string
+    fn writeCallCode(source: string, pool: *[12582912]int, functionId: int, word: string, firstArgument: int, callStart: int): string
     begin
         var output: string := str.builder("")
         var argument: int := firstArgument
@@ -355,7 +353,7 @@ begin
         return output
     end
 
-    fn readArgumentCode(source: string, pool: *[524288]int, functionId: int, word: string, argument: int): string
+    fn readArgumentCode(source: string, pool: *[12582912]int, functionId: int, word: string, argument: int): string
     begin
         if argument < 0 || ast.read(pool, argument, 0) != ast.nameKind() { return "" }
         var name: string := str.slice(source, ast.read(pool, argument, 1), ast.read(pool, argument, 2))
@@ -373,7 +371,7 @@ begin
         return ""
     end
 
-    fn gcWriteCalls(source: string, pool: *[524288]int, mainId: int, statement: int): string
+    fn gcWriteCalls(source: string, pool: *[12582912]int, mainId: int, statement: int): string
     begin
         var output: string := str.builder("")
         var position: int := ast.read(pool, statement, 7)
@@ -484,7 +482,7 @@ begin
         return result
     end
 
-    fn integerValue(source: string, pool: *[524288]int, id: int): [2]int
+    fn integerValue(source: string, pool: *[12582912]int, id: int): [2]int
     begin
         var result: [2]int
         if id < 0 { return result }
@@ -559,7 +557,7 @@ begin
     end
 
     // Fold literals and immutable const bindings, but never mutable locals.
-    fn compileTimeIntegerValue(source: string, pool: *[524288]int, id: int, depth: int): [2]int
+    fn compileTimeIntegerValue(source: string, pool: *[12582912]int, id: int, depth: int): [2]int
     begin
         var result: [2]int
         if id < 0 || depth > 32 { return result }
@@ -618,7 +616,7 @@ begin
         return result
     end
 
-    fn literalIntegerValue(source: string, pool: *[524288]int, id: int): [2]int
+    fn literalIntegerValue(source: string, pool: *[12582912]int, id: int): [2]int
     begin
         return compileTimeIntegerValue(source, pool, id, 0)
     end
@@ -632,7 +630,7 @@ begin
         return 0
     end
 
-    fn integerLocalCount(source: string, pool: *[524288]int, mainId: int): int
+    fn integerLocalCount(source: string, pool: *[12582912]int, mainId: int): int
     begin
         var maximumOffset: int := 0
         var id: int := mainId
@@ -646,7 +644,7 @@ begin
         return maximumOffset / 8
     end
 
-    fn parameterCount(source: string, pool: *[524288]int, functionId: int): int
+    fn parameterCount(source: string, pool: *[12582912]int, functionId: int): int
     begin
         if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return 0 }
         var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
@@ -663,7 +661,7 @@ begin
         return count
     end
 
-    fn localScopeOpen(source: string, pool: *[524288]int, functionId: int, before: int): int
+    fn localScopeOpen(source: string, pool: *[12582912]int, functionId: int, before: int): int
     begin
         var opens: [512]int
         var depth: int := 0
@@ -686,7 +684,7 @@ begin
         return -1
     end
 
-    fn localScopeActive(source: string, pool: *[524288]int, functionId: int, scopeOpen: int, before: int): int
+    fn localScopeActive(source: string, pool: *[12582912]int, functionId: int, scopeOpen: int, before: int): int
     begin
         if scopeOpen < 0 { return 1 }
         var opens: [512]int
@@ -713,7 +711,7 @@ begin
         return 0
     end
 
-    fn localDeclaration(source: string, pool: *[524288]int, functionId: int, wanted: string, before: int): int
+    fn localDeclaration(source: string, pool: *[12582912]int, functionId: int, wanted: string, before: int): int
     begin
         var declaration: int := -1
         var position: int := ast.read(pool, functionId, 7)
@@ -737,7 +735,7 @@ begin
         return declaration
     end
 
-    fn integerLocalOffsetAt(source: string, pool: *[524288]int, functionId: int, wanted: string, before: int): int
+    fn integerLocalOffsetAt(source: string, pool: *[12582912]int, functionId: int, wanted: string, before: int): int
     begin
         var declaration: int := localDeclaration(source, pool, functionId, wanted, before)
         if declaration < 0 {
@@ -774,7 +772,7 @@ begin
         return -1
     end
 
-    fn integerLocalOffset(source: string, pool: *[524288]int, mainId: int, wanted: string): int
+    fn integerLocalOffset(source: string, pool: *[12582912]int, mainId: int, wanted: string): int
     begin
         var functionName: string := str.slice(source, ast.read(pool, mainId, 3), ast.read(pool, mainId, 4))
         var resultType: string := functionResultTypeAt(source, pool, mainId)
@@ -829,7 +827,25 @@ begin
         return -1
     end
 
+    // A qualified record name (module.Name) only matches the declaration inside that module.
+    fn recordNameMatches(source: string, name: [4]int, declaration: int, record: string): int
+    begin
+        var declared: string := str.slice(source, name[1], name[2])
+        if declared = record { return moduleAt(source, declaration) = "" || str.find(record, ".") < 0 }
+        if declared != simpleName(record) { return 0 }
+        var dot: int := str.length(record) - str.length(declared) - 1
+        if dot <= 0 { return 1 }
+        return moduleAt(source, declaration) = str.slice(record, 0, dot)
+    end
+
     fn recordFieldType(source: string, record: string, wanted: string): string
+    begin
+        var key: string := "F" + record + "|" + wanted
+        if memo.has(key) = 1 { return memo.get(key) }
+        return memo.put(key, recordFieldTypeSlow(source, record, wanted))
+    end
+
+    fn recordFieldTypeSlow(source: string, record: string, wanted: string): string
     begin
         var position: int := 0
         var line: int := 1
@@ -840,7 +856,7 @@ begin
                 var name: [4]int := lexer.scan(source, item[2], item[3])
                 var colon: [4]int := lexer.scan(source, name[2], name[3])
                 var marker: [4]int := lexer.scan(source, colon[2], colon[3])
-                if name[0] = token.nameKind() && (str.slice(source, name[1], name[2]) = record || str.slice(source, name[1], name[2]) = simpleName(record)) && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
+                if name[0] = token.nameKind() && recordNameMatches(source, name, item[1], record) = 1 && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
                     var opening: [4]int := lexer.scan(source, marker[2], marker[3])
                     while opening[0] != token.endKind() && str.slice(source, opening[1], opening[2]) != "begin" { opening := lexer.scan(source, opening[2], opening[3]) }
                     var field: [4]int := lexer.scan(source, opening[2], opening[3])
@@ -865,6 +881,13 @@ begin
 
     fn recordFieldOffset(source: string, record: string, wanted: string): int
     begin
+        var key: string := "O" + record + "|" + wanted
+        if memo.has(key) = 1 { return memo.number(memo.get(key)) }
+        return memo.putNumber(key, recordFieldOffsetSlow(source, record, wanted))
+    end
+
+    fn recordFieldOffsetSlow(source: string, record: string, wanted: string): int
+    begin
         var position: int := 0
         var line: int := 1
         while position <= str.length(source) {
@@ -874,7 +897,7 @@ begin
                 var name: [4]int := lexer.scan(source, item[2], item[3])
                 var colon: [4]int := lexer.scan(source, name[2], name[3])
                 var marker: [4]int := lexer.scan(source, colon[2], colon[3])
-                if name[0] = token.nameKind() && (str.slice(source, name[1], name[2]) = record || str.slice(source, name[1], name[2]) = simpleName(record)) && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
+                if name[0] = token.nameKind() && recordNameMatches(source, name, item[1], record) = 1 && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
                     var opening: [4]int := lexer.scan(source, marker[2], marker[3])
                     while opening[0] != token.endKind() && str.slice(source, opening[1], opening[2]) != "begin" { opening := lexer.scan(source, opening[2], opening[3]) }
                     var field: [4]int := lexer.scan(source, opening[2], opening[3])
@@ -908,6 +931,13 @@ begin
     begin
         if str.length(record) = 0 || str.char(record, 0) = 42 || str.char(record, 0) = 91 || record = "int" || record = "flt" || record = "void" || record = "str" || record = "string" { return -1 }
         if depth > 16 { return -1 }
+        var key: string := "W" + record
+        if memo.has(key) = 1 { return memo.number(memo.get(key)) }
+        return memo.putNumber(key, recordWordCountSlow(source, record, depth))
+    end
+
+    fn recordWordCountSlow(source: string, record: string, depth: int): int
+    begin
         var position: int := 0
         var line: int := 1
         while position <= str.length(source) {
@@ -917,14 +947,14 @@ begin
                 var name: [4]int := lexer.scan(source, item[2], item[3])
                 var colon: [4]int := lexer.scan(source, name[2], name[3])
                 var marker: [4]int := lexer.scan(source, colon[2], colon[3])
-                if name[0] = token.nameKind() && (str.slice(source, name[1], name[2]) = record || str.slice(source, name[1], name[2]) = simpleName(record)) && colon[0] = 58 && str.slice(source, marker[1], marker[2]) != "record" {
+                if name[0] = token.nameKind() && recordNameMatches(source, name, item[1], record) = 1 && colon[0] = 58 && str.slice(source, marker[1], marker[2]) != "record" {
                     var aliasFinish: [4]int := marker
                     while aliasFinish[0] != 10 && aliasFinish[0] != token.endKind() { aliasFinish := lexer.scan(source, aliasFinish[2], aliasFinish[3]) }
                     var aliasType: string := typeText(source, marker[1], aliasFinish[1], marker[3])
                     if aliasType != record && depth < 16 { return typeWordsAt(source, aliasType, depth + 1) }
                     return 1
                 }
-                if name[0] = token.nameKind() && (str.slice(source, name[1], name[2]) = record || str.slice(source, name[1], name[2]) = simpleName(record)) && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
+                if name[0] = token.nameKind() && recordNameMatches(source, name, item[1], record) = 1 && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
                     var opening: [4]int := lexer.scan(source, marker[2], marker[3])
                     while opening[0] != token.endKind() && str.slice(source, opening[1], opening[2]) != "begin" { opening := lexer.scan(source, opening[2], opening[3]) }
                     var field: [4]int := lexer.scan(source, opening[2], opening[3])
@@ -961,7 +991,7 @@ begin
         return 0
     end
 
-    fn recordAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn recordAddress(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 { return "" }
         var type: string := expressionType(source, pool, functionId, id)
@@ -983,14 +1013,14 @@ begin
         return ""
     end
 
-    fn recordCopyTo(source: string, pool: *[524288]int, functionId: int, id: int, destinationOffset: int, words: int): string
+    fn recordCopyTo(source: string, pool: *[12582912]int, functionId: int, id: int, destinationOffset: int, words: int): string
     begin
         var address: string := recordAddress(source, pool, functionId, id)
         if str.length(address) = 0 || destinationOffset < 0 || words <= 0 { return "" }
         return address + " sub rsp, 16\n mov qword ptr [rsp], rax\n lea rdi, [rbp-" + token.number(destinationOffset) + "]\n mov rsi, qword ptr [rsp]\n mov rcx, " + token.number(words) + "\n rep movsq\n add rsp, 16\n"
     end
 
-    fn recordParameterWords(source: string, pool: *[524288]int, functionId: int): int
+    fn recordParameterWords(source: string, pool: *[12582912]int, functionId: int): int
     begin
         var total: int := 0
         if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return 0 }
@@ -1121,7 +1151,7 @@ begin
         return ""
     end
 
-    fn arrayType(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn arrayType(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
@@ -1159,7 +1189,7 @@ begin
         return ""
     end
 
-    fn arraySliceAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn arraySliceAddress(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         var type: string := arrayType(source, pool, functionId, ast.read(pool, id, 3))
         if str.length(type) = 0 || str.char(type, 0) != 91 { return "" }
@@ -1193,7 +1223,7 @@ begin
         return typeWords(source, str.slice(type, closing + 1, str.length(type)))
     end
 
-    fn isParameter(source: string, pool: *[524288]int, functionId: int, wanted: string): int
+    fn isParameter(source: string, pool: *[12582912]int, functionId: int, wanted: string): int
     begin
         if str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)) = "main" { return 0 }
         var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
@@ -1209,12 +1239,20 @@ begin
         return 0
     end
 
-    fn memberAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn memberAddress(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 || ast.read(pool, id, 0) != ast.memberKind() { return "" }
         var base: int := ast.read(pool, id, 3)
         var baseType: string := expressionType(source, pool, functionId, base)
         var field: string := str.slice(source, ast.read(pool, id, 7), ast.read(pool, id, 8))
+        if str.length(baseType) > 1 && str.char(baseType, 0) = 42 {
+            var pointerOffset: int := recordFieldOffset(source, str.slice(baseType, 1, str.length(baseType)), field)
+            if pointerOffset < 0 { return "" }
+            var pointerValue: string := integerExpression(source, pool, functionId, base)
+            if str.length(pointerValue) = 0 { return "" }
+            if pointerOffset > 0 { return pointerValue + " add rax, " + token.number(pointerOffset) + "\n" }
+            return pointerValue
+        }
         var offset: int := recordFieldOffset(source, baseType, field)
         if offset < 0 { return "" }
         var address: string := ""
@@ -1243,7 +1281,7 @@ begin
         return address
     end
 
-    fn qualifiedFieldAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn qualifiedFieldAddress(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 || ast.read(pool, id, 0) != ast.nameKind() { return "" }
         var fullName: string := str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
@@ -1268,15 +1306,14 @@ begin
                 if indirectResult(source, resultType) = 1 { hidden := 1 }
                 offset := (-2 - binding + hidden + 1) * 8
                 address := " mov rax, qword ptr [rbp-" + token.number(offset) + "]\n"
+                if str.length(recordType) > 0 && str.char(recordType, 0) = 42 { address := " lea rax, [rbp-" + token.number(offset) + "]\n" }
             }
         }
-        var fieldOffset: int := recordPathOffset(source, recordType, path)
-        if str.length(address) = 0 || fieldOffset < 0 { return "" }
-        if fieldOffset > 0 { address := address + " add rax, " + token.number(fieldOffset) + "\n" }
-        return address
+        if str.length(address) = 0 { return "" }
+        return recordPathAddress(source, address, recordType, path)
     end
 
-    fn arrayAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn arrayAddress(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
@@ -1297,14 +1334,14 @@ begin
         return ""
     end
 
-    fn arrayExpressionType(source: string, pool: *[524288]int, functionId: int, id: int): int
+    fn arrayExpressionType(source: string, pool: *[12582912]int, functionId: int, id: int): int
     begin
         var type: string := arrayType(source, pool, functionId, id)
         if str.length(type) > 0 && str.char(type, 0) = 91 { return 1 }
         return 0
     end
 
-    fn arrayLengthIsFixedLocal(source: string, pool: *[524288]int, functionId: int, baseId: int): int
+    fn arrayLengthIsFixedLocal(source: string, pool: *[12582912]int, functionId: int, baseId: int): int
     begin
         if baseId < 0 || ast.read(pool, baseId, 0) != ast.nameKind() { return 0 }
         var binding: int := ast.read(pool, baseId, 11)
@@ -1340,7 +1377,7 @@ begin
         return 1
     end
 
-    fn loopInitialCounterValue(source: string, pool: *[524288]int, functionId: int, loopId: int, binding: int): [3]int
+    fn loopInitialCounterValue(source: string, pool: *[12582912]int, functionId: int, loopId: int, binding: int): [3]int
     begin
         var result: [3]int
         var initial: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, binding, 6), 0)
@@ -1374,7 +1411,7 @@ begin
         return result
     end
 
-    fn loopCounterRange(source: string, pool: *[524288]int, functionId: int, binding: int, position: int): [3]int
+    fn loopCounterRange(source: string, pool: *[12582912]int, functionId: int, binding: int, position: int): [3]int
     begin
         var result: [3]int
         var limit: int := ast.read(pool, functionId, 11)
@@ -1474,7 +1511,7 @@ begin
         return result
     end
 
-    fn descendingLoopCounterRange(source: string, pool: *[524288]int, functionId: int, binding: int, position: int): [3]int
+    fn descendingLoopCounterRange(source: string, pool: *[12582912]int, functionId: int, binding: int, position: int): [3]int
     begin
         var result: [3]int
         if binding < 0 || ast.read(pool, binding, 6) < 0 { return result }
@@ -1536,7 +1573,7 @@ begin
         return result
     end
 
-    fn expressionIntegerRange(source: string, pool: *[524288]int, functionId: int, id: int, position: int, depth: int): [3]int
+    fn expressionIntegerRange(source: string, pool: *[12582912]int, functionId: int, id: int, position: int, depth: int): [3]int
     begin
         var result: [3]int
         if id < 0 || depth > 16 || expressionType(source, pool, functionId, id) != "int" { return result }
@@ -1633,7 +1670,7 @@ begin
         return result
     end
 
-    fn arrayIndexIsProvenInBounds(source: string, pool: *[524288]int, functionId: int, accessId: int, indexId: int, capacity: int): int
+    fn arrayIndexIsProvenInBounds(source: string, pool: *[12582912]int, functionId: int, accessId: int, indexId: int, capacity: int): int
     begin
         if indexId < 0 || ast.read(pool, indexId, 0) != ast.nameKind() { return 0 }
         var binding: int := ast.read(pool, indexId, 11)
@@ -1689,7 +1726,7 @@ begin
         return 0
     end
 
-    fn arrayElementAddress(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn arrayElementAddress(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 || ast.read(pool, id, 0) != ast.indexKind() { return "" }
         var baseId: int := ast.read(pool, id, 3)
@@ -1731,15 +1768,26 @@ begin
         var base: string := arrayAddress(source, pool, functionId, baseId)
         if str.length(base) = 0 { return "" }
         var indexCheck: string := ""
-        if capacity > 0 {
+        var throughPointer: int := 0
+        if baseId >= 0 && ast.read(pool, baseId, 0) = ast.unaryKind() && ast.read(pool, baseId, 10) = 42 { throughPointer := 1 }
+        if capacity > 0 && throughPointer = 1 {
+            indexCheck := " cmp rax, " + token.number(capacity) + "\n jae .LxeArrayIndexFail\n"
+            if arrayIndexIsProvenInBounds(source, pool, functionId, id, ast.read(pool, id, 4), capacity) = 1 { indexCheck := "" }
+        }
+        if capacity > 0 && throughPointer = 0 {
             var lengthOffset: int := capacity * arrayElementWords(source, baseType) * 8
             var label: string := token.number(id)
             indexCheck := " mov rdx, qword ptr [rsp]\n mov rcx, qword ptr [rdx+" + token.number(lengthOffset) + "]\n test rcx, rcx\n jnz .LxeArrayLengthKnown" + label + "\n mov rcx, " + token.number(capacity) + "\n jmp .LxeArrayLengthReady" + label + "\n.LxeArrayLengthKnown" + label + ":\n dec rcx\n.LxeArrayLengthReady" + label + ":\n cmp rax, rcx\n jae .LxeArrayIndexFail\n"
         }
+        var baseOperand: string := simpleOperand(base)
+        if throughPointer = 1 && capacity > 0 && str.length(baseOperand) > 0 {
+            if width = 1 || width = 2 || width = 4 || width = 8 { return index + indexCheck + " mov rcx, " + baseOperand + "\n lea rax, [rcx+rax*" + token.number(width) + "]\n" }
+            return index + indexCheck + " imul rax, " + token.number(width) + "\n add rax, " + baseOperand + "\n"
+        }
         return base + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + index + indexCheck + " imul rax, " + token.number(width) + "\n mov rcx, rax\n mov rax, qword ptr [rsp]\n add rax, rcx\n add rsp, 16\n"
     end
 
-    fn directLocalArrayAddress(source: string, pool: *[524288]int, functionId: int, indexId: int, arrayOffset: int, width: int): string
+    fn directLocalArrayAddress(source: string, pool: *[12582912]int, functionId: int, indexId: int, arrayOffset: int, width: int): string
     begin
         if indexId < 0 || width <= 0 || width > 8 || isPowerOfTwo(width) = 0 { return "" }
         var name: int := -1
@@ -1783,7 +1831,7 @@ begin
         return " lea rax, [rbp-" + token.number(arrayOffset) + "+" + registerName(register) + scale + suffix + "]\n"
     end
 
-    fn directLocalArrayMemory(source: string, pool: *[524288]int, functionId: int, indexId: int, arrayOffset: int, width: int): string
+    fn directLocalArrayMemory(source: string, pool: *[12582912]int, functionId: int, indexId: int, arrayOffset: int, width: int): string
     begin
         if indexId < 0 || arrayOffset < 0 || width <= 0 || width > 8 || isPowerOfTwo(width) = 0 { return "" }
         var name: int := -1
@@ -1826,14 +1874,14 @@ begin
         return "[rbp-" + token.number(arrayOffset) + "+" + registerName(register) + scale + suffix + "]"
     end
 
-    fn arrayCopyWords(source: string, pool: *[524288]int, functionId: int, sourceId: int, destinationOffset: int, words: int): string
+    fn arrayCopyWords(source: string, pool: *[12582912]int, functionId: int, sourceId: int, destinationOffset: int, words: int): string
     begin
         var from: string := arrayAddress(source, pool, functionId, sourceId)
         if str.length(from) = 0 || words <= 0 { return "" }
         return from + " sub rsp, 16\n mov qword ptr [rsp], rax\n lea rdi, [rbp-" + token.number(destinationOffset) + "]\n mov rsi, qword ptr [rsp]\n mov rcx, " + token.number(words) + "\n rep movsq\n add rsp, 16\n"
     end
 
-    fn arrayTemporaryWords(source: string, pool: *[524288]int, functionId: int): int
+    fn arrayTemporaryWords(source: string, pool: *[12582912]int, functionId: int): int
     begin
         var total: int := 0
         var id: int := functionId
@@ -1848,7 +1896,7 @@ begin
         return total
     end
 
-    fn arrayCallWords(source: string, pool: *[524288]int, functionId: int, callId: int): int
+    fn arrayCallWords(source: string, pool: *[12582912]int, functionId: int, callId: int): int
     begin
         if callId < 0 || ast.read(pool, callId, 0) != ast.callKind() { return 0 }
         var called: int := ast.read(pool, callId, 3)
@@ -1862,7 +1910,7 @@ begin
         return 0
     end
 
-    fn arrayTemporaryOffset(source: string, pool: *[524288]int, functionId: int, wanted: int): int
+    fn arrayTemporaryOffset(source: string, pool: *[12582912]int, functionId: int, wanted: int): int
     begin
         var parameters: int := parameterCount(source, pool, functionId)
         var hidden: int := 0
@@ -1895,7 +1943,7 @@ begin
         return ""
     end
 
-    fn saveRegisters(source: string, pool: *[524288]int, functionId: int): string
+    fn saveRegisters(source: string, pool: *[12582912]int, functionId: int): string
     begin
         var output: string := str.builder("")
         var count: int := optimizer.registerCount(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8))
@@ -1911,7 +1959,7 @@ begin
         return output
     end
 
-    fn restoreRegisters(source: string, pool: *[524288]int, functionId: int): string
+    fn restoreRegisters(source: string, pool: *[12582912]int, functionId: int): string
     begin
         var output: string := str.builder("")
         var count: int := optimizer.registerCount(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8))
@@ -1927,7 +1975,7 @@ begin
         return output
     end
 
-    fn gcDepth(source: string, pool: *[524288]int, functionId: int, before: int): int
+    fn gcDepth(source: string, pool: *[12582912]int, functionId: int, before: int): int
     begin
         var depth: int := 0
         var position: int := ast.read(pool, functionId, 7)
@@ -1949,7 +1997,7 @@ begin
         return depth
     end
 
-    fn gcExitCode(source: string, pool: *[524288]int, functionId: int, before: int): string
+    fn gcExitCode(source: string, pool: *[12582912]int, functionId: int, before: int): string
     begin
         var output: string := str.builder("")
         var depth: int := gcDepth(source, pool, functionId, before)
@@ -2037,7 +2085,10 @@ begin
                     if alias[0] = token.nameKind() && colon[0] = 58 && str.slice(source, alias[1], alias[2]) = aliasName && (aliasScope = desiredScope || str.length(aliasScope) = 0) {
                         var marker: [4]int := lexer.scan(source, colon[2], colon[3])
                         var resolved: string := ""
-                        if str.slice(source, marker[1], marker[2]) = "record" { resolved := aliasName }
+                        if str.slice(source, marker[1], marker[2]) = "record" {
+                            resolved := aliasName
+                            if str.length(aliasScope) > 0 { resolved := aliasScope + "." + aliasName }
+                        }
                         else {
                             var start: int := colon[2]
                             var finish: [4]int := lexer.scan(source, start, colon[3])
@@ -2075,10 +2126,18 @@ begin
 
     fn typeText(source: string, start: int, finish: int, line: int): string
     begin
-        return typeTextInModule(source, start, finish, line, moduleAt(source, start))
+        var value: string := str.builder("")
+        var position: int := start
+        while position < finish {
+            var character: int := str.char(source, position)
+            if character > 32 { value := str.append(value, token.character(character)) }
+            position := position + 1
+        }
+        if primitiveType(value) = 1 { return value }
+        return cachedAliasType(source, value, moduleAt(source, start))
     end
 
-    fn typeTextForFunction(source: string, pool: *[524288]int, functionId: int, start: int, finish: int, line: int): string
+    fn typeTextForFunction(source: string, pool: *[12582912]int, functionId: int, start: int, finish: int, line: int): string
     begin
         var module: string := functionModule(source, pool, functionId)
         if str.length(module) > 0 { module := str.slice(module, 0, str.length(module) - 1) }
@@ -2096,10 +2155,34 @@ begin
             }
             position := position + 1
         }
-        return resolveAliasType(source, value, 0, module)
+        return cachedAliasType(source, value, module)
     end
 
-    fn localType(source: string, pool: *[524288]int, functionId: int, wanted: string, before: int): string
+    fn primitiveType(value: string): int
+    begin
+        var index: int := 0
+        var size: int := str.length(value)
+        while index < size && str.char(value, index) = 42 { index := index + 1 }
+        while index < size && str.char(value, index) = 91 {
+            var closing: int := index + 1
+            while closing < size && str.char(value, closing) != 93 { closing := closing + 1 }
+            index := closing + 1
+            while index < size && str.char(value, index) = 42 { index := index + 1 }
+        }
+        var base: string := str.slice(value, index, size)
+        if base = "int" || base = "flt" || base = "string" || base = "str" || base = "void" { return 1 }
+        return 0
+    end
+
+    fn cachedAliasType(source: string, value: string, module: string): string
+    begin
+        if primitiveType(value) = 1 { return value }
+        var key: string := "A" + module + "|" + value
+        if memo.has(key) = 1 { return memo.get(key) }
+        return memo.put(key, resolveAliasType(source, value, 0, module))
+    end
+
+    fn localType(source: string, pool: *[12582912]int, functionId: int, wanted: string, before: int): string
     begin
         var resolvedDeclaration: int := localDeclaration(source, pool, functionId, wanted, before)
         var functionName: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
@@ -2153,6 +2236,7 @@ begin
             var dot: int := str.find(rest, ".")
             var field: string := rest
             if dot >= 0 { field := str.slice(rest, 0, dot) }
+            if str.length(type) > 1 && str.char(type, 0) = 42 { type := str.slice(type, 1, str.length(type)) }
             type := recordFieldType(source, type, field)
             if str.length(type) = 0 { return "" }
             if dot < 0 { rest := "" }
@@ -2181,7 +2265,33 @@ begin
         return offset
     end
 
-    fn boundLocalType(source: string, pool: *[524288]int, functionId: int, nameId: int): string
+    // Emits code that turns the address in rax into the address of a dotted field path.
+    // Pointer-typed fields along the path are dereferenced automatically.
+    fn recordPathAddress(source: string, address: string, initialType: string, path: string): string
+    begin
+        var type: string := initialType
+        var rest: string := path
+        var code: string := str.builder(address)
+        while str.length(rest) > 0 {
+            var dot: int := str.find(rest, ".")
+            var field: string := rest
+            if dot >= 0 { field := str.slice(rest, 0, dot) }
+            if str.length(type) > 1 && str.char(type, 0) = 42 {
+                code := str.append(code, " mov rax, qword ptr [rax]\n")
+                type := str.slice(type, 1, str.length(type))
+            }
+            var fieldOffset: int := recordFieldOffset(source, type, field)
+            if fieldOffset < 0 { return "" }
+            if fieldOffset > 0 { code := str.append(code, " add rax, " + token.number(fieldOffset) + "\n") }
+            type := recordFieldType(source, type, field)
+            if str.length(type) = 0 { return "" }
+            if dot < 0 { rest := "" }
+            else { rest := str.slice(rest, dot + 1, str.length(rest)) }
+        }
+        return code
+    end
+
+    fn boundLocalType(source: string, pool: *[12582912]int, functionId: int, nameId: int): string
     begin
         if nameId < 0 || ast.read(pool, nameId, 0) != ast.nameKind() { return "" }
         var binding: int := ast.read(pool, nameId, 11)
@@ -2201,7 +2311,7 @@ begin
         return ""
     end
 
-    fn boundLocalOffset(source: string, pool: *[524288]int, functionId: int, nameId: int): int
+    fn boundLocalOffset(source: string, pool: *[12582912]int, functionId: int, nameId: int): int
     begin
         if nameId < 0 || ast.read(pool, nameId, 0) != ast.nameKind() { return -1 }
         var binding: int := ast.read(pool, nameId, 11)
@@ -2210,7 +2320,10 @@ begin
         if dot >= 0 { path := str.slice(source, ast.read(pool, nameId, 1) + dot + 1, ast.read(pool, nameId, 2)) }
         if binding >= 0 {
             var fieldOffset: int := recordPathOffset(source, typeTextForFunction(source, pool, functionId, ast.read(pool, binding, 7), ast.read(pool, binding, 8), 1), path)
-            if fieldOffset < 0 { fieldOffset := 0 }
+            if fieldOffset < 0 {
+                if str.length(path) > 0 { return -1 }
+                fieldOffset := 0
+            }
             return ast.read(pool, binding, 11) - fieldOffset
         }
         if binding <= -2 {
@@ -2221,13 +2334,14 @@ begin
             var offset: int := (-2 - binding + hidden + 1) * 8
             var parameterType: string := functionParameterType(source, pool, functionId, "", -2 - binding)
             var fieldOffset: int := recordPathOffset(source, parameterType, path)
+            if fieldOffset < 0 && str.length(path) > 0 { return -1 }
             if fieldOffset > 0 { offset := offset + fieldOffset }
             return offset
         }
         return -1
     end
 
-    fn registerIndexForName(source: string, pool: *[524288]int, functionId: int, nameId: int): int
+    fn registerIndexForName(source: string, pool: *[12582912]int, functionId: int, nameId: int): int
     begin
         if nameId < 0 || ast.read(pool, nameId, 0) != ast.nameKind() { return -1 }
         var cached: int := ast.read(pool, nameId, 10)
@@ -2236,15 +2350,26 @@ begin
         var before: int := ast.read(pool, nameId, 1)
         var binding: int := ast.read(pool, nameId, 11)
         if binding >= 0 { before := ast.read(pool, binding, 3) }
-        var result: int := optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, before)
+        var result: int := 0
+        if binding >= 0 {
+            // Every use of one declaration shares the same answer.
+            var key: string := "reg:" + str.number(ast.read(pool, functionId, 7)) + ":" + str.number(before) + ":" + name
+            if memo.has(key) = 1 { result := memo.number(memo.get(key)) }
+            else { result := memo.putNumber(key, optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, before)) }
+        }
+        else { result := optimizer.registerIndex(source, ast.read(pool, functionId, 7), ast.read(pool, functionId, 8), name, before) }
         ast.write(pool, nameId, 10, result + 2)
         return result
     end
 
-    fn floatExpression(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn floatExpression(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
+        if (kind = ast.binaryKind() || kind = ast.callKind() || kind = ast.indexKind() || kind = ast.unaryKind()) && expressionType(source, pool, functionId, id) = "int" {
+            var integral: string := integerExpression(source, pool, functionId, id)
+            if str.length(integral) > 0 { return integral + " cvtsi2sd xmm0, rax\n" }
+        }
         if kind = ast.literalKind() {
             if ast.read(pool, id, 10) != token.numberKind() { return "" }
             var value: string := str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
@@ -2257,8 +2382,8 @@ begin
             var name: string := str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
             var offset: int := boundLocalOffset(source, pool, functionId, id)
             var type: string := boundLocalType(source, pool, functionId, id)
-            if offset < 0 || (type != "int" && type != "flt") { return "" }
             var fieldAddress: string := qualifiedFieldAddress(source, pool, functionId, id)
+            if (offset < 0 && str.length(fieldAddress) = 0) || (type != "int" && type != "flt") { return "" }
             if str.length(fieldAddress) > 0 {
                 if type = "flt" { return fieldAddress + " movsd xmm0, qword ptr [rax]\n" }
                 return fieldAddress + " mov rax, qword ptr [rax]\n cvtsi2sd xmm0, rax\n"
@@ -2339,7 +2464,85 @@ begin
         return str.slice(name, last, str.length(name))
     end
 
+    fn moduleTable(source: string): string
+    begin
+        if memo.has("#modules") = 1 { return memo.get("#modules") }
+        var table: string := str.builder("")
+        var pending: string := ""
+        var current: string := ""
+        var currentBegin: int := -1
+        var moduleDepth: int := -1
+        var depth: int := 0
+        var position: int := 0
+        var line: int := 1
+        var size: int := str.length(source)
+        while position < size {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { position := size }
+            else {
+                if item[0] = token.nameKind() {
+                    var word: string := str.slice(source, item[1], item[2])
+                    if word = "module" && depth = 0 {
+                        var name: [4]int := parser.significant(source, item[2], item[3])
+                        pending := str.slice(source, name[1], name[2])
+                    }
+                    else {
+                        if word = "begin" {
+                            depth := depth + 1
+                            if str.length(pending) > 0 {
+                                current := pending
+                                currentBegin := item[1]
+                                pending := ""
+                                moduleDepth := depth
+                            }
+                        }
+                        else {
+                            if word = "end" {
+                                if depth = moduleDepth {
+                                    table := str.append(table, current + "," + str.number(currentBegin) + "," + str.number(item[1]) + ";")
+                                    current := ""
+                                    moduleDepth := -1
+                                }
+                                if depth > 0 { depth := depth - 1 }
+                            }
+                        }
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        if moduleDepth >= 0 { table := str.append(table, current + "," + str.number(currentBegin) + "," + str.number(size + 1) + ";") }
+        return memo.put("#modules", table)
+    end
+
     fn moduleAt(source: string, finish: int): string
+    begin
+        var table: string := moduleTable(source)
+        var index: int := 0
+        var size: int := str.length(table)
+        while index < size {
+            var nameEnd: int := index
+            while str.char(table, nameEnd) != 44 { nameEnd := nameEnd + 1 }
+            var startEnd: int := nameEnd + 1
+            var first: int := 0
+            while str.char(table, startEnd) != 44 {
+                first := first * 10 + str.char(table, startEnd) - 48
+                startEnd := startEnd + 1
+            }
+            var stopEnd: int := startEnd + 1
+            var last: int := 0
+            while str.char(table, stopEnd) != 59 {
+                last := last * 10 + str.char(table, stopEnd) - 48
+                stopEnd := stopEnd + 1
+            }
+            if first < finish && finish <= last { return str.slice(table, index, nameEnd) }
+            index := stopEnd + 1
+        }
+        return ""
+    end
+
+    fn moduleAtSlow(source: string, finish: int): string
     begin
         var module: string := ""
         var pending: string := ""
@@ -2384,7 +2587,7 @@ begin
         return module
     end
 
-    fn functionModule(source: string, pool: *[524288]int, functionId: int): string
+    fn functionModule(source: string, pool: *[12582912]int, functionId: int): string
     begin
         var start: int := ast.read(pool, functionId, 9)
         if start < 0 { return "" }
@@ -2400,7 +2603,7 @@ begin
         return str.slice(source, name[1], finish) + "."
     end
 
-    fn qualifiedFunctionName(source: string, pool: *[524288]int, functionId: int): string
+    fn qualifiedFunctionName(source: string, pool: *[12582912]int, functionId: int): string
     begin
         var name: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
         var module: string := functionModule(source, pool, functionId)
@@ -2465,7 +2668,7 @@ begin
         return -1
     end
 
-    fn functionResultTypeAt(source: string, pool: *[524288]int, target: int): string
+    fn functionResultTypeAt(source: string, pool: *[12582912]int, target: int): string
     begin
         if target < 0 { return "" }
         var finish: int := ast.read(pool, target, 4)
@@ -2487,14 +2690,22 @@ begin
         return typeTextForFunction(source, pool, target, result[1], resultFinish[1], result[3])
     end
 
-    fn functionResultType(source: string, pool: *[524288]int, functionId: int, wanted: string): string
+    fn functionResultType(source: string, pool: *[12582912]int, functionId: int, wanted: string): string
+    begin
+        var key: string := "R" + functionModule(source, pool, functionId) + "|" + wanted
+        if memo.has(key) = 1 { return memo.get(key) }
+        return memo.put(key, functionResultTypeSlow(source, pool, functionId, wanted))
+    end
+
+    fn functionResultTypeSlow(source: string, pool: *[12582912]int, functionId: int, wanted: string): string
     begin
         if wanted = "atomic.load" || wanted = "atomic.compare_exchange" || wanted = "flt.toint" || wanted = "runtime.pointer.is_null" { return "int" }
         if wanted = "atomic.store" { return "void" }
         if wanted = "str.builder" || wanted = "str.append" || wanted = "str.slice" || wanted = "str.number" || wanted = "str.fromchar" || wanted = "arg.get" || wanted = "env.get" || wanted = "file.read" || wanted = "flt.format" { return "string" }
-        if wanted = "runtime.pointer.read" { return "*void" }
+        if wanted = "runtime.pointer.read" || wanted = "runtime.globals" { return "*void" }
         if wanted = "runtime.pointer.cast.string" { return "*string" }
         if wanted = "alloc" || wanted = "new" || wanted = "aligned_alloc" || wanted = "alloc.aligned" { return "*void" }
+        if wanted = "runtime.gc.collect" || wanted = "runtime.gc.enable" || wanted = "runtime.gc.stats" { return "int" }
         if wanted = "str.length" || wanted = "str.char" || wanted = "str.find" || wanted = "str.equal" || wanted = "arg.count" || wanted = "process.run" || wanted = "process.spawn" || wanted = "process.wait" || wanted = "thread.start" || wanted = "thread.join" || wanted = "syscall.invoke3" || wanted = "syscall.invoke6" || wanted = "runtime.mem.compare" || wanted = "runtime.hw.read8" || wanted = "runtime.hw.read32" { return "int" }
         if wanted = "file.write" || wanted = "free" || wanted = "delete" || wanted = "runtime.pointer.write" || wanted = "runtime.pointer.free" || wanted = "runtime.mem.copy" || wanted = "runtime.mem.set" || wanted = "runtime.hw.write8" || wanted = "runtime.hw.write32" { return "void" }
         var lookup: string := wanted
@@ -2546,7 +2757,14 @@ begin
         return typeTextForFunction(source, pool, functionId, result[1], resultFinish[1], result[3])
     end
 
-    fn functionNode(source: string, pool: *[524288]int, functionId: int, wanted: string): int
+    fn functionNode(source: string, pool: *[12582912]int, functionId: int, wanted: string): int
+    begin
+        var key: string := "N" + functionModule(source, pool, functionId) + "|" + wanted
+        if memo.has(key) = 1 { return memo.number(memo.get(key)) }
+        return memo.putNumber(key, functionNodeSlow(source, pool, functionId, wanted))
+    end
+
+    fn functionNodeSlow(source: string, pool: *[12582912]int, functionId: int, wanted: string): int
     begin
         var lookup: string := wanted
         var module: string := functionModule(source, pool, functionId)
@@ -2575,7 +2793,7 @@ begin
         return -1
     end
 
-    fn functionParameterType(source: string, pool: *[524288]int, functionId: int, wanted: string, wantedIndex: int): string
+    fn functionParameterType(source: string, pool: *[12582912]int, functionId: int, wanted: string, wantedIndex: int): string
     begin
         var target: int := functionId
         if str.length(wanted) > 0 { target := functionNode(source, pool, functionId, wanted) }
@@ -2597,13 +2815,13 @@ begin
         return ""
     end
 
-    fn functionParameterTypeAt(source: string, pool: *[524288]int, target: int, wantedIndex: int): string
+    fn functionParameterTypeAt(source: string, pool: *[12582912]int, target: int, wantedIndex: int): string
     begin
         if target < 0 { return "" }
         return functionParameterType(source, pool, target, "", wantedIndex)
     end
 
-    fn functionParameterCount(source: string, pool: *[524288]int, functionId: int, wanted: string): int
+    fn functionParameterCount(source: string, pool: *[12582912]int, functionId: int, wanted: string): int
     begin
         var target: int := functionId
         if str.length(wanted) > 0 { target := functionNode(source, pool, functionId, wanted) }
@@ -2627,13 +2845,13 @@ begin
         return count
     end
 
-    fn functionParameterCountAt(source: string, pool: *[524288]int, target: int): int
+    fn functionParameterCountAt(source: string, pool: *[12582912]int, target: int): int
     begin
         if target < 0 { return -1 }
         return functionParameterCount(source, pool, target, "")
     end
 
-    fn expressionType(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn expressionType(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
@@ -2647,12 +2865,15 @@ begin
         if kind = ast.nameKind() {
             var name: string := str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
             if name = "true" || name = "false" { return "int" }
+            var nameBinding: int := ast.read(pool, id, 11)
+            if nameBinding >= 0 || nameBinding <= -2 { return boundLocalType(source, pool, functionId, id) }
             if functionNode(source, pool, functionId, name) >= 0 { return "*void" }
             return boundLocalType(source, pool, functionId, id)
         }
         if kind = ast.memberKind() {
             var baseType: string := expressionType(source, pool, functionId, ast.read(pool, id, 3))
             var field: string := str.slice(source, ast.read(pool, id, 7), ast.read(pool, id, 8))
+            if str.length(baseType) > 1 && str.char(baseType, 0) = 42 { baseType := str.slice(baseType, 1, str.length(baseType)) }
             return recordFieldType(source, baseType, field)
         }
         if kind = ast.unaryKind() {
@@ -2725,7 +2946,7 @@ begin
         return ""
     end
 
-    fn functionCallResultForValue(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn functionCallResultForValue(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 || ast.read(pool, id, 0) != ast.callKind() { return "" }
         var called: int := ast.read(pool, id, 3)
@@ -2749,7 +2970,7 @@ begin
         return 0
     end
 
-    fn nullPointerArgument(source: string, pool: *[524288]int, expression: int): int
+    fn nullPointerArgument(source: string, pool: *[12582912]int, expression: int): int
     begin
         if expression < 0 { return 0 }
         if ast.read(pool, expression, 0) = ast.literalKind() && ast.read(pool, expression, 10) = token.numberKind() && str.slice(source, ast.read(pool, expression, 1), ast.read(pool, expression, 2)) = "0" { return 1 }
@@ -2771,7 +2992,8 @@ begin
         if name = "runtime.mem.copy" || name = "runtime.mem.set" || name = "runtime.mem.compare" { return 3 }
         if name = "runtime.hw.read8" || name = "runtime.hw.read32" { return 1 }
         if name = "runtime.hw.write8" || name = "runtime.hw.write32" { return 2 }
-        if name = "arg.count" { return 0 }
+        if name = "arg.count" || name = "runtime.globals" || name = "runtime.gc.collect" { return 0 }
+        if name = "runtime.gc.enable" || name = "runtime.gc.stats" { return 1 }
         if name = "str.builder" || name = "str.length" || name = "str.number" || name = "str.fromchar" || name = "arg.get" || name = "env.get" || name = "file.read" || name = "process.run" || name = "process.spawn" || name = "process.wait" || name = "thread.join" { return 1 }
         if name = "thread.start" { return 2 }
         if name = "str.append" || name = "str.char" || name = "str.find" || name = "str.equal" || name = "file.write" { return 2 }
@@ -2802,6 +3024,7 @@ begin
         if name = "runtime.mem.compare" && index = 2 { return "int" }
         if (name = "runtime.hw.read8" || name = "runtime.hw.read32" || name = "runtime.hw.write8" || name = "runtime.hw.write32") && index = 0 { return "*void" }
         if (name = "runtime.hw.write8" || name = "runtime.hw.write32") && index = 1 { return "int" }
+        if (name = "runtime.gc.enable" || name = "runtime.gc.stats") && index = 0 { return "int" }
         if name = "str.builder" && index = 0 { return "string" }
         if name = "str.append" { return "string" }
         if name = "str.length" && index = 0 { return "string" }
@@ -2834,7 +3057,7 @@ begin
         return label + ":\n mov eax, 1\n mov edi, 2\n lea rsi, [rip+" + messageLabel + "]\n mov edx, " + token.number(str.length(message)) + "\n syscall\n mov eax, 60\n mov edi, 1\n syscall\n ud2\n.section .rodata\n" + messageLabel + ":\n.byte " + bytes + "\n.section .text\n"
     end
 
-    fn directCallArgument(source: string, pool: *[524288]int, functionId: int, id: int): int
+    fn directCallArgument(source: string, pool: *[12582912]int, functionId: int, id: int): int
     begin
         if id < 0 { return 0 }
         var kind: int := ast.read(pool, id, 0)
@@ -2856,7 +3079,7 @@ begin
         return 0
     end
 
-    fn callCode(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn callCode(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         var called: int := ast.read(pool, id, 3)
         if called < 0 || ast.read(pool, called, 0) != ast.nameKind() { return "" }
@@ -2866,6 +3089,7 @@ begin
             if first < 0 || ast.read(pool, first, 5) >= 0 { return "" }
             var argumentType: string := expressionType(source, pool, functionId, first)
             if (name = "alloc" || name = "new") && argumentType != "int" { return "" }
+            if (name = "free" || name = "delete") && nullPointerArgument(source, pool, first) = 1 { return " xor eax, eax\n" }
             if (name = "free" || name = "delete") && (str.length(argumentType) = 0 || str.char(argumentType, 0) != 42) { return "" }
             var value: string := integerExpression(source, pool, functionId, first)
             if str.length(value) = 0 { return "" }
@@ -2984,11 +3208,23 @@ begin
         if builtin = 0 && count + arrayResult <= 6 {
             var direct: int := 1
             var directParameterIndex: int := 0
+            var complexArgument: int := -1
+            var complexIndex: int := -1
             cursor := first
             while cursor >= 0 {
                 var parameterType: string := functionParameterType(source, pool, functionId, name, directParameterIndex)
                 if target >= 0 { parameterType := functionParameterTypeAt(source, pool, target, directParameterIndex) }
-                if floatExpressionType(source, pool, functionId, cursor) = 1 || directCallArgument(source, pool, functionId, cursor) = 0 { direct := 0 }
+                if floatExpressionType(source, pool, functionId, cursor) = 1 { direct := 0 }
+                else {
+                    if directCallArgument(source, pool, functionId, cursor) = 0 {
+                        var argumentType: string := expressionType(source, pool, functionId, cursor)
+                        if complexArgument < 0 && recordWordCount(source, parameterType) <= 0 && (argumentType = "int" || (str.length(argumentType) > 0 && str.char(argumentType, 0) = 42)) && (str.length(parameterType) = 0 || parameterType = "int" || str.char(parameterType, 0) = 42) {
+                            complexArgument := cursor
+                            complexIndex := directParameterIndex
+                        }
+                        else { direct := 0 }
+                    }
+                }
                 if recordWordCount(source, parameterType) > 0 && ast.read(pool, cursor, 0) != ast.nameKind() { direct := 0 }
                 cursor := ast.read(pool, cursor, 5)
                 directParameterIndex := directParameterIndex + 1
@@ -2996,6 +3232,11 @@ begin
             if direct = 1 && (arrayResult = 0 || tempOffset >= 0) {
                 var directOutput: string := str.builder("")
                 var directIndex: int := 0
+                if complexArgument >= 0 {
+                    var complexCode: string := integerExpression(source, pool, functionId, complexArgument)
+                    if str.length(complexCode) = 0 { direct := 0 }
+                    directOutput := str.append(directOutput, complexCode + " mov " + integerArgumentRegister(complexIndex + arrayResult) + ", rax\n")
+                }
                 if arrayResult = 1 {
                     directOutput := str.append(directOutput, " lea rdi, [rbp-" + token.number(tempOffset) + "]\n")
                     directIndex := 1
@@ -3005,12 +3246,20 @@ begin
                 while cursor >= 0 {
                     var parameterType: string := functionParameterType(source, pool, functionId, name, directParameterIndex)
                     if target >= 0 { parameterType := functionParameterTypeAt(source, pool, target, directParameterIndex) }
-                    var argumentCode: string := integerExpression(source, pool, functionId, cursor)
-                    if recordWordCount(source, parameterType) > 0 { argumentCode := recordAddress(source, pool, functionId, cursor) }
-                    if str.length(argumentCode) = 0 { direct := 0 }
+                    var argumentCode: string := ""
+                    if cursor != complexArgument {
+                        argumentCode := integerExpression(source, pool, functionId, cursor)
+                        if recordWordCount(source, parameterType) > 0 { argumentCode := recordAddress(source, pool, functionId, cursor) }
+                        if str.length(argumentCode) = 0 { direct := 0 }
+                    }
                     if direct = 0 { cursor := -1 }
                     else {
-                    directOutput := str.append(directOutput, argumentCode + " mov " + integerArgumentRegister(directIndex) + ", rax\n")
+                    var argumentOperand: string := simpleOperand(argumentCode)
+                    if cursor = complexArgument { }
+                    else {
+                        if str.length(argumentOperand) > 0 { directOutput := str.append(directOutput, " mov " + integerArgumentRegister(directIndex) + ", " + argumentOperand + "\n") }
+                        else { directOutput := str.append(directOutput, argumentCode + " mov " + integerArgumentRegister(directIndex) + ", rax\n") }
+                    }
                     cursor := ast.read(pool, cursor, 5)
                     directIndex := directIndex + 1
                     directParameterIndex := directParameterIndex + 1
@@ -3191,7 +3440,7 @@ begin
         return output + " add rsp, " + token.number(stackBytes + padding + count * 16) + "\n"
     end
 
-    fn stringExpression(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn stringExpression(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
@@ -3201,9 +3450,9 @@ begin
         if kind = ast.nameKind() {
             var name: string := str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
             var offset: int := boundLocalOffset(source, pool, functionId, id)
-            if offset < 0 { return "" }
             var fieldAddress: string := qualifiedFieldAddress(source, pool, functionId, id)
             if str.length(fieldAddress) > 0 { return fieldAddress + " mov rax, qword ptr [rax]\n" }
+            if offset < 0 { return "" }
             return " mov rax, qword ptr [rbp-" + token.number(offset) + "]\n"
         }
         if kind = ast.memberKind() {
@@ -3231,7 +3480,7 @@ begin
         return ""
     end
 
-    fn arraySumIndexIsSimple(pool: *[524288]int, id: int): int
+    fn arraySumIndexIsSimple(pool: *[12582912]int, id: int): int
     begin
         if id < 0 { return 0 }
         var kind: int := ast.read(pool, id, 0)
@@ -3246,7 +3495,7 @@ begin
         return 0
     end
 
-    fn collectArraySumLeaves(source: string, pool: *[524288]int, functionId: int, id: int, leaves: *[32]int, count: *int, arrayCount: *int): int
+    fn collectArraySumLeaves(source: string, pool: *[12582912]int, functionId: int, id: int, leaves: *[32]int, count: *int, arrayCount: *int): int
     begin
         if id < 0 { return 0 }
         var kind: int := ast.read(pool, id, 0)
@@ -3273,7 +3522,7 @@ begin
         return 0
     end
 
-    fn arraySumCode(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn arraySumCode(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         var leaves: [32]int
         var count: int := 0
@@ -3291,7 +3540,7 @@ begin
         return output + " mov rax, r10\n"
     end
 
-    fn isInsideArrayIndex(pool: *[524288]int, functionId: int, id: int): int
+    fn isInsideArrayIndex(pool: *[12582912]int, functionId: int, id: int): int
     begin
         var start: int := ast.read(pool, id, 1)
         var finish: int := ast.read(pool, id, 2)
@@ -3307,7 +3556,7 @@ begin
         return 0
     end
 
-    fn scalarProductSumCode(source: string, pool: *[524288]int, functionId: int, id: int): string
+    fn scalarProductSumCode(source: string, pool: *[12582912]int, functionId: int, id: int): string
     begin
         if id < 0 || ast.read(pool, id, 0) != ast.binaryKind() || ast.read(pool, id, 10) != 43 { return "" }
         var leftId: int := ast.read(pool, id, 3)
@@ -3322,7 +3571,7 @@ begin
         return left + " mov r10, rax\n" + right + " add r10, rax\n mov rax, r10\n"
     end
 
-    fn expressionContainsCall(pool: *[524288]int, id: int, depth: int): int
+    fn expressionContainsCall(pool: *[12582912]int, id: int, depth: int): int
     begin
         if id < 0 { return 0 }
         if depth > 32 { return 1 }
@@ -3341,7 +3590,32 @@ begin
         return 0
     end
 
-    fn integerExpression(source: string, pool: *[524288]int, mainId: int, id: int): string
+    // Returns X when code is exactly " mov rax, X" and X is a register, a
+    // stack slot, or an immediate that does not involve rax or rsp.
+    fn simpleOperand(code: string): string
+    begin
+        var size: int := str.length(code)
+        if size < 12 || str.slice(code, 0, 10) != " mov rax, " || str.char(code, size - 1) != 10 { return "" }
+        var operand: string := str.slice(code, 10, size - 1)
+        if str.find(operand, token.character(10)) >= 0 { return "" }
+        if str.find(operand, "rax") >= 0 || str.find(operand, "eax") >= 0 || str.find(operand, "rsp") >= 0 || str.find(operand, "rcx") >= 0 || str.find(operand, "rdx") >= 0 { return "" }
+        var first: int := str.char(operand, 0)
+        if (first >= 48 && first <= 57) || first = 45 {
+            if str.length(operand) > 10 { return "" }
+            var value: [2]int := parseInteger(operand)
+            if value[0] = 0 || value[1] < -2147483648 || value[1] > 2147483647 { return "" }
+        }
+        return operand
+    end
+
+    fn operandIsRegisterOrImmediate(operand: string): int
+    begin
+        if str.length(operand) = 0 { return 0 }
+        if str.find(operand, "[") >= 0 { return 0 }
+        return 1
+    end
+
+    fn integerExpression(source: string, pool: *[12582912]int, mainId: int, id: int): string
     begin
         if id < 0 { return "" }
         var kind: int := ast.read(pool, id, 0)
@@ -3429,6 +3703,10 @@ begin
             var operation: int := ast.read(pool, id, 10)
             var leftType: string := expressionType(source, pool, mainId, ast.read(pool, id, 3))
             var rightType: string := expressionType(source, pool, mainId, ast.read(pool, id, 4))
+            if operation != 256 && operation != 257 && (leftType = "string" || leftType = "str" || rightType = "string" || rightType = "str") {
+                if operation = 43 && (leftType = "string" || leftType = "str") && (rightType = "string" || rightType = "str") { return stringExpression(source, pool, mainId, id) }
+                return ""
+            }
             if (operation = 43 || operation = 45) && str.length(leftType) > 0 && str.char(leftType, 0) = 42 && rightType = "int" {
                 var pointerCode: string := integerExpression(source, pool, mainId, ast.read(pool, id, 3))
                 var amountCode: string := integerExpression(source, pool, mainId, ast.read(pool, id, 4))
@@ -3526,7 +3804,7 @@ begin
             var immediate: [2]int := literalIntegerValue(source, pool, rightId)
             if immediate[0] = 1 && operation = 47 {
                 var divisor: int := immediate[1]
-                if divisor > 0 && divisor <= 2147483647 {
+                if divisor > 0 && (divisor <= 2147483647 || isPowerOfTwo(divisor) = 1) {
                     var left: string := integerExpression(source, pool, mainId, leftId)
                     if str.length(left) = 0 { return "" }
                     if divisor = 1 { return left }
@@ -3543,7 +3821,8 @@ begin
                         // preserve truncation toward zero without branching
                         // into a slow signed divide on every negative value.
                         var bias: int := divisor - 1
-                        return left + " mov rcx, rax\n sar rcx, 63\n and rcx, " + token.number(bias) + "\n add rax, rcx\n sar rax, " + token.number(shift) + "\n"
+                        if bias <= 2147483647 { return left + " mov rcx, rax\n sar rcx, 63\n and rcx, " + token.number(bias) + "\n add rax, rcx\n sar rax, " + token.number(shift) + "\n" }
+                        return left + " mov rcx, rax\n sar rcx, 63\n mov rdx, " + token.number(bias) + "\n and rcx, rdx\n add rax, rcx\n sar rax, " + token.number(shift) + "\n"
                     }
                     // For nonnegative inputs, reciprocal multiplication gives
                     // the quotient with at most one unit of underestimation.
@@ -3556,7 +3835,7 @@ begin
             }
             if immediate[0] = 1 && operation = 37 {
                 var divisor: int := immediate[1]
-                if divisor > 0 && divisor <= 2147483647 {
+                if divisor > 0 && (divisor <= 2147483647 || isPowerOfTwo(divisor) = 1) {
                     var left: string := integerExpression(source, pool, mainId, leftId)
                     if str.length(left) = 0 { return "" }
                     if divisor = 1 { return left + " xor eax, eax\n" }
@@ -3567,7 +3846,13 @@ begin
                     }
                     if isPowerOfTwo(divisor) = 1 {
                         var mask: int := divisor - 1
-                        return left + " mov rcx, rax\n sar rcx, 63\n and rcx, " + token.number(mask) + "\n add rax, rcx\n and rax, " + token.number(mask) + "\n sub rax, rcx\n"
+                        var span: [3]int := expressionIntegerRange(source, pool, mainId, leftId, ast.read(pool, id, 1), 0)
+                        if mask <= 2147483647 {
+                            if span[0] = 1 && span[1] >= 0 { return left + " and rax, " + token.number(mask) + "\n" }
+                            return left + " mov rcx, rax\n sar rcx, 63\n and rcx, " + token.number(mask) + "\n add rax, rcx\n and rax, " + token.number(mask) + "\n sub rax, rcx\n"
+                        }
+                        if span[0] = 1 && span[1] >= 0 { return left + " mov rdx, " + token.number(mask) + "\n and rax, rdx\n" }
+                        return left + " mov rcx, rax\n sar rcx, 63\n mov rdx, " + token.number(mask) + "\n and rcx, rdx\n add rax, rcx\n and rax, rdx\n sub rax, rcx\n"
                     }
                     var maxInt: int := 9223372036854775807
                     var reciprocal: int := (maxInt / divisor) * 2 + ((maxInt % divisor) * 2 + 1) / divisor
@@ -3648,7 +3933,31 @@ begin
             var left: string := integerExpression(source, pool, mainId, ast.read(pool, id, 3))
             var right: string := integerExpression(source, pool, mainId, ast.read(pool, id, 4))
             if str.length(left) = 0 || str.length(right) = 0 { return "" }
+            var rightOperand: string := simpleOperand(right)
+            if str.length(rightOperand) > 0 {
+                var direct: string := ""
+                if operation = 43 { direct := " add rax, " }
+                if operation = 45 { direct := " sub rax, " }
+                if operation = 42 { direct := " imul rax, " }
+                if operation = 38 { direct := " and rax, " }
+                if operation = 124 { direct := " or rax, " }
+                if operation = 94 { direct := " xor rax, " }
+                if str.length(direct) > 0 { return left + direct + rightOperand + "\n" }
+                var directCondition: string := ""
+                if operation = 256 { directCondition := "e" }
+                if operation = 257 { directCondition := "ne" }
+                if operation = 60 { directCondition := "l" }
+                if operation = 62 { directCondition := "g" }
+                if operation = 258 { directCondition := "le" }
+                if operation = 259 { directCondition := "ge" }
+                if str.length(directCondition) > 0 { return left + " cmp rax, " + rightOperand + "\n set" + directCondition + " al\n movzx rax, al\n" }
+            }
             var code: string := left + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + right + " mov rcx, rax\n mov rax, qword ptr [rsp]\n add rsp, 16\n"
+            if str.length(rightOperand) > 0 { code := left + " mov rcx, " + rightOperand + "\n" }
+            else {
+                var leftOperand: string := simpleOperand(left)
+                if operandIsRegisterOrImmediate(leftOperand) = 1 { code := right + " mov rcx, rax\n mov rax, " + leftOperand + "\n" }
+            }
             if operation = 43 { return code + " add rax, rcx\n" }
             if operation = 45 { return code + " sub rax, rcx\n" }
             if operation = 42 { return code + " imul rax, rcx\n" }
@@ -3671,7 +3980,7 @@ begin
         return ""
     end
 
-    fn gcLocalInitializers(source: string, pool: *[524288]int, functionId: int, gcId: int): string
+    fn gcLocalInitializers(source: string, pool: *[12582912]int, functionId: int, gcId: int): string
     begin
         var output: string := str.builder("")
         var position: int := ast.read(pool, gcId, 7)
@@ -3717,14 +4026,14 @@ begin
         return output
     end
 
-    fn deferredBlock(source: string, pool: *[524288]int, functionId: int, blockId: int, before: int): string
+    fn deferredBlock(source: string, pool: *[12582912]int, functionId: int, blockId: int, before: int): string
     begin
         if blockId < 0 || ast.read(pool, blockId, 0) != ast.blockKind() { return "" }
         if before < ast.read(pool, blockId, 1) || before > ast.read(pool, blockId, 2) { return "" }
         return deferredCode(source, pool, functionId, ast.read(pool, blockId, 6), before)
     end
 
-    fn deferredCode(source: string, pool: *[524288]int, functionId: int, first: int, before: int): string
+    fn deferredCode(source: string, pool: *[12582912]int, functionId: int, first: int, before: int): string
     begin
         if first < 0 { return "" }
         var output: string := deferredCode(source, pool, functionId, ast.read(pool, first, 5), before)
@@ -3771,7 +4080,7 @@ begin
         return output
     end
 
-    fn emitBlock(source: string, pool: *[524288]int, functionId: int, blockId: int): string
+    fn emitBlock(source: string, pool: *[12582912]int, functionId: int, blockId: int): string
     begin
         if blockId < 0 || ast.read(pool, blockId, 0) != ast.blockKind() { return "" }
         var output: string := str.builder("")
@@ -3786,7 +4095,7 @@ begin
         return output
     end
 
-    fn emitStatements(source: string, pool: *[524288]int, functionId: int, first: int): string
+    fn emitStatements(source: string, pool: *[12582912]int, functionId: int, first: int): string
     begin
         var output: string := str.builder("")
         var statement: int := first
@@ -3799,7 +4108,7 @@ begin
         return output
     end
 
-    fn branchCondition(source: string, pool: *[524288]int, functionId: int, expression: int, label: string, whenTrue: int): string
+    fn branchCondition(source: string, pool: *[12582912]int, functionId: int, expression: int, label: string, whenTrue: int): string
     begin
         if expression < 0 { return "" }
         var kind: int := ast.read(pool, expression, 0)
@@ -3832,11 +4141,15 @@ begin
                     var rightValue: [2]int := compileTimeIntegerValue(source, pool, rightId, 0)
                     var leftCode: string := integerExpression(source, pool, functionId, leftId)
                     if str.length(leftCode) = 0 { return "" }
+                    var leftSimple: string := simpleOperand(leftCode)
                     if rightValue[0] = 1 && rightValue[1] >= -2147483648 && rightValue[1] <= 2147483647 {
+                        if str.length(leftSimple) > 0 && str.find(leftSimple, "[") < 0 && (str.char(leftSimple, 0) < 48 || str.char(leftSimple, 0) > 57) { return " cmp " + leftSimple + ", " + token.number(rightValue[1]) + "\n " + jump + " " + label + "\n" }
                         return leftCode + " cmp rax, " + token.number(rightValue[1]) + "\n " + jump + " " + label + "\n"
                     }
                     var rightCode: string := integerExpression(source, pool, functionId, rightId)
                     if str.length(rightCode) = 0 { return "" }
+                    var rightSimple: string := simpleOperand(rightCode)
+                    if str.length(rightSimple) > 0 { return leftCode + " cmp rax, " + rightSimple + "\n " + jump + " " + label + "\n" }
                     return leftCode + " sub rsp, 16\n mov qword ptr [rsp], rax\n" + rightCode + " mov rcx, rax\n mov rax, qword ptr [rsp]\n add rsp, 16\n cmp rax, rcx\n " + jump + " " + label + "\n"
                 }
             }
@@ -3847,7 +4160,7 @@ begin
         return value + " test rax, rax\n jz " + label + "\n"
     end
 
-    fn emitStatement(source: string, pool: *[524288]int, functionId: int, statement: int): string
+    fn emitStatement(source: string, pool: *[12582912]int, functionId: int, statement: int): string
     begin
         var kind: int := ast.read(pool, statement, 0)
         if kind = ast.variableKind() {
@@ -3985,7 +4298,30 @@ begin
             if recordWords > 0 { return recordCopyTo(source, pool, functionId, ast.read(pool, statement, 4), offset, recordWords) }
             if type = "flt" { return floatExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " movsd qword ptr [rbp-" + token.number(offset) + "], xmm0\n" }
             var register: int := registerIndexForName(source, pool, functionId, target)
-            if register >= 0 { return integerExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " mov " + registerName(register) + ", rax\n" }
+            if register >= 0 {
+                var assigned: string := integerExpression(source, pool, functionId, ast.read(pool, statement, 4))
+                var targetRegister: string := registerName(register)
+                var prefix: string := " mov rax, " + targetRegister + "\n"
+                var prefixSize: int := str.length(prefix)
+                var assignedSize: int := str.length(assigned)
+                if assignedSize > prefixSize && str.slice(assigned, 0, prefixSize) = prefix {
+                    var update: string := str.slice(assigned, prefixSize, assignedSize)
+                    if str.find(str.slice(update, 0, str.length(update) - 1), token.character(10)) < 0 && str.find(update, "rax") > 0 && str.find(update, "rcx") < 0 && str.find(update, "rdx") < 0 {
+                        var opEnd: int := str.find(update, " rax, ")
+                        if opEnd > 0 {
+                            var opcode: string := str.slice(update, 0, opEnd)
+                            var rest: string := str.slice(update, opEnd + 6, str.length(update))
+                            if (opcode = " add" || opcode = " sub" || opcode = " and" || opcode = " or" || opcode = " xor") && str.find(rest, "rax") < 0 { return opcode + " " + targetRegister + ", " + rest }
+                        }
+                    }
+                }
+                var simple: string := simpleOperand(assigned)
+                if str.length(simple) > 0 { return " mov " + targetRegister + ", " + simple + "\n" }
+                var tailAdd: string := " mov rcx, rax\n mov rax, " + targetRegister + "\n add rax, rcx\n"
+                var tailSize: int := str.length(tailAdd)
+                if assignedSize > tailSize && str.slice(assigned, assignedSize - tailSize, assignedSize) = tailAdd { return str.slice(assigned, 0, assignedSize - tailSize) + " add " + targetRegister + ", rax\n" }
+                return assigned + " mov " + targetRegister + ", rax\n"
+            }
             if offset < 0 { return "" }
             return integerExpression(source, pool, functionId, ast.read(pool, statement, 4)) + " mov qword ptr [rbp-" + token.number(offset) + "], rax\n"
         }
@@ -4081,19 +4417,19 @@ begin
         return ""
     end
 
-    fn integerLocalStatements(source: string, pool: *[524288]int, mainId: int): string
+    fn integerLocalStatements(source: string, pool: *[12582912]int, mainId: int): string
     begin
         return emitStatements(source, pool, mainId, ast.read(pool, mainId, 6)) + deferredCode(source, pool, mainId, ast.read(pool, mainId, 6), ast.read(pool, mainId, 8))
     end
 
-    fn integerReturnCode(source: string, pool: *[524288]int, mainId: int): string
+    fn integerReturnCode(source: string, pool: *[12582912]int, mainId: int): string
     begin
         var restore: string := ""
         if str.slice(source, ast.read(pool, mainId, 3), ast.read(pool, mainId, 4)) != "main" { restore := restoreRegisters(source, pool, mainId) }
         return " xor eax, eax\n" + restore + " leave\n ret\n"
     end
 
-    fn integerHelpers(source: string, pool: *[524288]int, program: [4]int): string
+    fn integerHelpers(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         var output: string := str.builder("")
         var functionId: int := program[1]
@@ -4177,7 +4513,7 @@ begin
         return output
     end
 
-    fn mainReturn(source: string, pool: *[524288]int, mainId: int): string
+    fn mainReturn(source: string, pool: *[12582912]int, mainId: int): string
     begin
         var statement: int := ast.read(pool, mainId, 6)
         var visited: int := 0
@@ -4232,14 +4568,14 @@ begin
         return code
     end
 
-    fn generate(source: string, pool: *[524288]int, program: [4]int): string
+    fn generate(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         var mainId: int := program[3]
         var mainBody: string := str.slice(source, ast.read(pool, mainId, 7), ast.read(pool, mainId, 8))
         var entry: string := runtime.startName()
         var separator: string := runtime.underscore()
         var output: string := str.builder(".intel" + separator + "syntax noprefix\n.section .rodata\n" + messages(source) + stringConstants(source) + floatConstants(source))
-        output := str.append(output, ".section .text\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n call main\n mov edi, eax\n mov eax, 60\n syscall\n")
+        output := str.append(output, ".section .text\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n mov qword ptr [rip+.LxeStackBase], rsp\n call main\n mov edi, eax\n mov eax, 60\n syscall\n")
         var localCount: int := integerLocalCount(source, pool, mainId)
         var stackSpace: int := 40 + (localCount + arrayTemporaryWords(source, pool, mainId)) * 8
         if stackSpace % 16 != 0 { stackSpace := stackSpace + 8 }
@@ -4252,18 +4588,18 @@ begin
         return optimizer.assembly(output)
     end
 
-    fn freestandingBase(source: string, pool: *[524288]int, program: [4]int): string
+    fn freestandingBase(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         var output: string := generate(source, pool, program)
         var runtimeMarker: string := ".section .rodata" + token.character(10) + ".LxeFloatHalf:"
         var runtimeStart: int := str.find(output, runtimeMarker)
         if runtimeStart >= 0 { output := str.slice(output, 0, runtimeStart) }
-        var entry: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rdi, qword ptr [rsp]" + token.character(10) + " mov qword ptr [rip+.LxeArgc], rdi" + token.character(10) + " lea rsi, [rsp+8]" + token.character(10) + " mov qword ptr [rip+.LxeArgv], rsi" + token.character(10) + " lea rdx, [rsi+rdi*8+8]" + token.character(10) + " mov qword ptr [rip+.LxeEnv], rdx" + token.character(10) + " call main" + token.character(10) + " mov edi, eax" + token.character(10) + " mov eax, 60" + token.character(10) + " syscall" + token.character(10)
+        var entry: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rdi, qword ptr [rsp]" + token.character(10) + " mov qword ptr [rip+.LxeArgc], rdi" + token.character(10) + " lea rsi, [rsp+8]" + token.character(10) + " mov qword ptr [rip+.LxeArgv], rsi" + token.character(10) + " lea rdx, [rsi+rdi*8+8]" + token.character(10) + " mov qword ptr [rip+.LxeEnv], rdx" + token.character(10) + " mov qword ptr [rip+.LxeStackBase], rsp" + token.character(10) + " call main" + token.character(10) + " mov edi, eax" + token.character(10) + " mov eax, 60" + token.character(10) + " syscall" + token.character(10)
         var halt: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rsp, 589824" + token.character(10) + " call main" + token.character(10) + ".LxeHalt:" + token.character(10) + " hlt" + token.character(10) + " jmp .LxeHalt" + token.character(10)
         return optimizer.replaceAll(output, entry, halt)
     end
 
-    fn freestandingSupported(source: string, pool: *[524288]int, program: [4]int, pe: int): int
+    fn freestandingSupported(source: string, pool: *[12582912]int, program: [4]int, pe: int): int
     begin
         var functionId: int := program[1]
         var visitedFunctions: int := 0
@@ -4288,17 +4624,17 @@ begin
         return 1
     end
 
-    fn generateBaremetal(source: string, pool: *[524288]int, program: [4]int): string
+    fn generateBaremetal(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         return freestandingBase(source, pool, program)
     end
 
-    fn generateBaremetalNasm(source: string, pool: *[524288]int, program: [4]int): string
+    fn generateBaremetalNasm(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         return optimizer.nasm(freestandingBase(source, pool, program))
     end
 
-    fn generatePe(source: string, pool: *[524288]int, program: [4]int): string
+    fn generatePe(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         var output: string := freestandingBase(source, pool, program)
         var halt: string := ".global " + runtime.startName() + token.character(10) + runtime.startName() + ":" + token.character(10) + " mov rsp, 589824" + token.character(10) + " call main" + token.character(10) + ".LxeHalt:" + token.character(10) + " hlt" + token.character(10) + " jmp .LxeHalt" + token.character(10)
@@ -4307,7 +4643,7 @@ begin
         return "extern ExitProcess" + token.character(10) + optimizer.nasm(output)
     end
 
-    fn generateNasm(source: string, pool: *[524288]int, program: [4]int): string
+    fn generateNasm(source: string, pool: *[12582912]int, program: [4]int): string
     begin
         return optimizer.nasm(generate(source, pool, program))
     end

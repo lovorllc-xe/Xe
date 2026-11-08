@@ -1,0 +1,91 @@
+// bloom: Bloom filters for fast "definitely not present / probably present" membership tests.
+uses bitset
+uses hashing
+
+module bloom
+begin
+    type Filter: record
+    begin
+        bits: *bitset.Bits
+        size: int
+        hashes: int
+        added: int
+    end
+
+    fn new(size: int, hashes: int): *bloom.Filter
+    begin
+        var f: *bloom.Filter := alloc(32)
+        f.bits := bitset.new(size)
+        f.size := size
+        f.hashes := hashes
+        f.added := 0
+        return f
+    end
+
+    // Sizes the filter for the expected item count and false-positive rate (e.g. 0.01).
+    fn for_capacity(items: int, rate: flt): *bloom.Filter
+    begin
+        var m: flt := -items * ln_approx(rate) / 0.4804530139182014
+        var bitsCount: int := flt.toint(m) + 64
+        var k: int := flt.toint(bitsCount / (items * 1.0) * 0.6931471805599453) + 1
+        if k < 1 { k := 1 }
+        return bloom.new(bitsCount, k)
+    end
+
+    fn ln_approx(x: flt): flt
+    begin
+        var m: flt := x
+        var k: int := 0
+        while m < 0.5 {
+            m := m * 2.0
+            k := k - 1
+        }
+        var s: flt := (m - 1.0) / (m + 1.0)
+        var s2: flt := s * s
+        var term: flt := s
+        var total: flt := 0.0
+        var n: int := 1
+        while n < 40 {
+            total := total + term / n
+            term := term * s2
+            n := n + 2
+        }
+        return 2.0 * total + k * 0.6931471805599453
+    end
+
+    fn slot(f: *bloom.Filter, item: string, round: int): int
+    begin
+        var h: int := hashing.murmur3(item, round * 40503 + 17)
+        return h % f.size
+    end
+
+    fn add(f: *bloom.Filter, item: string)
+    begin
+        var round: int := 0
+        while round < f.hashes {
+            bitset.set(f.bits, slot(f, item, round))
+            round := round + 1
+        }
+        f.added := f.added + 1
+    end
+
+    fn maybe_contains(f: *bloom.Filter, item: string): int
+    begin
+        var round: int := 0
+        while round < f.hashes {
+            if bitset.get(f.bits, slot(f, item, round)) = 0 { return 0 }
+            round := round + 1
+        }
+        return 1
+    end
+
+    fn fill_ratio(f: *bloom.Filter): flt
+    begin
+        return bitset.cardinality(f.bits) / (f.size * 1.0)
+    end
+
+    fn count(f: *bloom.Filter): int
+    begin
+        return f.added
+    end
+end

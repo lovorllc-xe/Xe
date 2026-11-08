@@ -1,0 +1,106 @@
+// inotify: watch files and directories for changes (create, modify, delete, move).
+uses strlist
+uses intlist
+
+module inotify
+begin
+    fn modify(): int
+    begin
+        return 2
+    end
+
+    fn attrib(): int
+    begin
+        return 4
+    end
+
+    fn moved_from(): int
+    begin
+        return 64
+    end
+
+    fn moved_to(): int
+    begin
+        return 128
+    end
+
+    fn create_event(): int
+    begin
+        return 256
+    end
+
+    fn delete_event(): int
+    begin
+        return 512
+    end
+
+    fn everything(): int
+    begin
+        return 4095
+    end
+
+    // Non-blocking inotify instance (read returns immediately when nothing happened).
+    fn init(): int
+    begin
+        return syscall.invoke3(294, 2048 | 524288, 0, 0)
+    end
+
+    fn watch(fd: int, path: string, mask: int): int
+    begin
+        return syscall.invoke3(254, fd, path, mask)
+    end
+
+    fn unwatch(fd: int, descriptor: int): int
+    begin
+        return syscall.invoke3(255, fd, descriptor, 0) = 0
+    end
+
+    // Pending events as "mask:name" strings; name is empty for events on the watched path itself.
+    fn read_events(fd: int): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var buffer: *void := alloc(8192)
+        var count: int := syscall.invoke3(0, fd, buffer, 8192)
+        var offset: int := 0
+        while count > 0 && offset < count {
+            var mask: int := runtime.hw.read32(buffer + offset + 4)
+            var length: int := runtime.hw.read32(buffer + offset + 12)
+            var name: string := str.builder("")
+            var k: int := 0
+            var reading: int := 1
+            while k < length && reading = 1 {
+                var c: int := runtime.hw.read8(buffer + offset + 16 + k)
+                if c = 0 { reading := 0 }
+                else { name := str.append(name, str.fromchar(c)) }
+                k := k + 1
+            }
+            strlist.push(out, str.number(mask) + ":" + name)
+            offset := offset + 16 + length
+        }
+        free(buffer)
+        return out
+    end
+
+    fn mask_of(event: string): int
+    begin
+        var value: int := 0
+        var i: int := 0
+        while i < str.length(event) && str.char(event, i) != 58 {
+            value := value * 10 + str.char(event, i) - 48
+            i := i + 1
+        }
+        return value
+    end
+
+    fn name_of(event: string): string
+    begin
+        var colon: int := 0
+        while colon < str.length(event) && str.char(event, colon) != 58 { colon := colon + 1 }
+        return str.slice(event, colon + 1, str.length(event))
+    end
+
+    fn close(fd: int)
+    begin
+        syscall.invoke3(3, fd, 0, 0)
+    end
+end

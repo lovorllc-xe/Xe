@@ -1,0 +1,89 @@
+uses strings
+uses strconv
+uses bytes
+uses utf8
+uses fmt
+uses glob
+uses textwrap
+uses casing
+uses textdist
+uses table
+uses csv
+uses ini
+uses dotenv
+uses html
+uses url
+uses template
+uses scanner
+uses regex
+uses strlist
+uses strmap
+uses ptrlist
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    failed := failed + expect("replace", strings.replace("a-b-c", "-", "+") = "a+b+c")
+    failed := failed + expect("trim", strings.trim("  hi  ") = "hi" && strings.to_upper("abc") = "ABC")
+    failed := failed + expect("index", strings.last_index_of("abcabc", "bc") = 4 && strings.count("aaaa", "aa") = 2)
+    failed := failed + expect("pad", strings.pad_left("7", 3, "0") = "007" && strings.center("x", 5, "*") = "**x**")
+    failed := failed + expect("between", strings.between("[key]=1", "[", "]") = "key" && strings.title("hello big world") = "Hello Big World")
+    failed := failed + expect("parse int", strconv.parse_int("0xff") = 255 && strconv.parse_int("-1_000") = -1000 && strconv.parse_int_base("777", 8) = 511)
+    failed := failed + expect("format base", strconv.format_int_base(255, 2) = "11111111" && strconv.hex(-1) = "ffffffffffffffff")
+    failed := failed + expect("parse flt", strconv.parse_flt("1.5e3") = 1500.0 && strconv.parse_flt("-0.25") = -0.25)
+    failed := failed + expect("quote", strconv.unquote(strconv.quote("a\"b\n")) = "a\"b\n" && strconv.thousands(1234567) = "1,234,567")
+    var buffer: *bytes.Buffer := bytes.new()
+    bytes.write_le(buffer, 258, 2)
+    bytes.write_be(buffer, 258, 2)
+    bytes.append_string(buffer, "hi")
+    failed := failed + expect("bytes", bytes.hex(buffer) = "02010102" + "6869" && bytes.read_le_at(buffer, 0, 2) = 258 && bytes.slice_string(buffer, 4, 6) = "hi")
+    var snowman: string := utf8.encode(9731) + "x" + utf8.encode(128512)
+    failed := failed + expect("utf8", utf8.count(snowman) = 3 && utf8.decode(snowman, 0) = 9731 && utf8.valid(snowman) = 1 && str.length(snowman) = 8)
+    failed := failed + expect("fmt", fmt.f2("{} + {:>4}", "a", "b") = "a +    b" && fmt.int_zero(42, 5) = "00042" && fmt.f2("{1}{0}", "x", "y") = "yx")
+    failed := failed + expect("glob", glob.match("*.xe", "main.xe") = 1 && glob.match("ma?n.[a-z]e", "main.xe") = 1 && glob.match("*.c", "main.xe") = 0)
+    failed := failed + expect("wrap", textwrap.wrap("the quick brown fox jumps", 10) = "the quick\nbrown fox\njumps")
+    failed := failed + expect("casing", casing.snake("parseHTTPResponse") = "parse_http_response" && casing.camel("hello_big_world") = "helloBigWorld" && casing.pascal("x-y z") = "XYZ")
+    failed := failed + expect("levenshtein", textdist.levenshtein("kitten", "sitting") = 3 && textdist.lcs_length("ABCBDAB", "BDCABA") = 4)
+    failed := failed + expect("jaro", textdist.jaro_winkler("martha", "marhta") > 0.96)
+    var t: *table.Table := table.new(table.row2("name", "n"))
+    table.add(t, table.row2("ab", "1"))
+    failed := failed + expect("table", strings.contains(table.render(t), "| ab   | 1 |") = 1)
+    var rows: *ptrlist.List := csv.parse("a,b\n\"x,1\",\"say \"\"hi\"\"\"\n", 44)
+    failed := failed + expect("csv parse", ptrlist.len(rows) = 2 && csv.cell(rows, 1, 0) = "x,1" && csv.cell(rows, 1, 1) = "say \"hi\"")
+    failed := failed + expect("csv format", csv.format_row(ptrlist.get(rows, 1), 44) = "\"x,1\",\"say \"\"hi\"\"\"")
+    var config: *strmap.Map := ini.parse("; c\nname = top\n[db]\nport=5432\nssl = yes\n")
+    failed := failed + expect("ini", ini.get(config, "name", "") = "top" && ini.get_int(config, "db.port", 0) = 5432 && ini.get_bool(config, "db.ssl", 0) = 1)
+    var envs: *strmap.Map := dotenv.parse("A=1\nB=\"${A}2\" # x\nexport C='${A}'\n")
+    failed := failed + expect("dotenv", strmap.get(envs, "B", "") = "12" && strmap.get(envs, "C", "") = "${A}")
+    failed := failed + expect("html", html.escape("<a href='x'>&</a>") = "&lt;a href=&#39;x&#39;&gt;&amp;&lt;/a&gt;" && html.unescape("&lt;b&gt;") = "<b>" && html.strip_tags("<b>hi</b>!") = "hi!")
+    var u: *url.Url := url.parse("https://user@example.com:8443/a/b?q=1&x=hello%20world#top")
+    failed := failed + expect("url parse", u.host = "example.com" && u.port = 8443 && u.path = "/a/b" && u.fragment = "top" && u.user = "user")
+    failed := failed + expect("url query", strmap.get(url.parse_query(u.query), "x", "") = "hello world" && url.encode("a b/c") = "a%20b%2Fc")
+    failed := failed + expect("url join", url.join("http://h.com/a/b.html", "c.html") = "http://h.com/a/c.html")
+    var values: *strmap.Map := strmap.new()
+    strmap.put(values, "name", "<Xe>")
+    strmap.put(values, "show", "1")
+    failed := failed + expect("template", template.render("Hi {{name}}!{{#if show}} yes{{else}} no{{/if}}", values) = "Hi &lt;Xe&gt;! yes")
+    var s: *scanner.Scanner := scanner.new("  count = 42 rest")
+    failed := failed + expect("scanner", scanner.word(s) = "count" && scanner.accept(s, " =") = 1 && scanner.integer(s) = 42)
+    var email: *regex.Regex := regex.compile("([a-z0-9._]+)@([a-z]+)\\.(com|org)")
+    failed := failed + expect("regex find", regex.find(email, "mail bob.s@site.org now") = 5 && regex.group(email, 1) = "bob.s" && regex.group(email, 3) = "org")
+    failed := failed + expect("regex classes", regex.test("^\\d{3}-\\d{4}$", "555-1234") = 1 && regex.test("^\\d{3}-\\d{4}$", "55-1234") = 0)
+    failed := failed + expect("regex replace", regex.replace("(\\w+)@(\\w+)", "a@b c@d", "$2.$1") = "b.a d.c")
+    failed := failed + expect("regex find_all", strlist.join(regex.find_all(regex.compile("[0-9]+"), "a1b22c333"), ",") = "1,22,333")
+    failed := failed + expect("regex split", strlist.join(regex.split(regex.compile("\\s*,\\s*"), "a , b,c"), "|") = "a|b|c")
+    failed := failed + expect("regex lazy", regex.replace("<.+?>", "<a><b>", "X") = "XX" && regex.test("\\bcat\\b", "a cat!") = 1 && regex.test("\\bcat\\b", "concat") = 0)
+    failed := failed + expect("regex pathological", regex.test("^(a*)*b$", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac") = 0)
+    failed := failed + expect("regex error", regex.ok(regex.compile("(ab")) = 0)
+    if failed = 0 { writeln("text ok") }
+    return failed
+end

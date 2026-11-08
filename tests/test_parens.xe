@@ -1,0 +1,16 @@
+// Parenthesised names and literals must behave like the bare expression.
+fn scale(n: int): int
+begin
+    return (n) * 8
+end
+
+fn main(): int
+begin
+    var p: *void := alloc((scale(2)) * 2)
+    free(p)
+    if (scale(3)) != 24 { return 1 }
+    if ((7)) + (1) != 8 { return 2 }
+    if (-(5)) != -5 { return 3 }
+    writeln("parens ok")
+    return 0
+end

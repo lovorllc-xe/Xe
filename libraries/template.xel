@@ -1,0 +1,89 @@
+// template: {{name}} substitution, {{#if name}}...{{/if}} sections and HTML-safe output.
+uses strmap
+uses strings
+
+module template
+begin
+    fn render(text: string, values: *strmap.Map): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var open: int := strings.index_from(text, "{{", index)
+            if open < 0 {
+                out := str.append(out, str.slice(text, index, size))
+                index := size
+            }
+            else {
+                out := str.append(out, str.slice(text, index, open))
+                var close: int := strings.index_from(text, "}}", open + 2)
+                if close < 0 {
+                    out := str.append(out, str.slice(text, open, size))
+                    index := size
+                }
+                else {
+                    var tag: string := strings.trim(str.slice(text, open + 2, close))
+                    if strings.starts_with(tag, "#if ") = 1 {
+                        var name: string := strings.trim(str.slice(tag, 4, str.length(tag)))
+                        var finish: int := strings.index_from(text, "{{/if}}", close)
+                        if finish < 0 { finish := size }
+                        var inner: string := str.slice(text, close + 2, finish)
+                        var elseAt: int := strings.index_of(inner, "{{else}}")
+                        var whenTrue: string := inner
+                        var whenFalse: string := ""
+                        if elseAt >= 0 {
+                            whenTrue := str.slice(inner, 0, elseAt)
+                            whenFalse := str.slice(inner, elseAt + 8, str.length(inner))
+                        }
+                        var value: string := strmap.get(values, name, "")
+                        if str.length(value) > 0 && value != "0" && value != "false" { out := str.append(out, render(whenTrue, values)) }
+                        else { out := str.append(out, render(whenFalse, values)) }
+                        index := finish + 7
+                        if index > size { index := size }
+                    }
+                    else {
+                        if strings.starts_with(tag, "&") = 1 { out := str.append(out, strmap.get(values, strings.trim(str.slice(tag, 1, str.length(tag))), "")) }
+                        else { out := str.append(out, escape(strmap.get(values, tag, ""))) }
+                        index := close + 2
+                    }
+                }
+            }
+        }
+        return out
+    end
+
+    fn escape(text: string): string
+    begin
+        var out: string := strings.replace(text, "&", "&amp;")
+        out := strings.replace(out, "<", "&lt;")
+        out := strings.replace(out, ">", "&gt;")
+        return strings.replace(out, str.fromchar(34), "&quot;")
+    end
+
+    // Plain substitution without escaping: replaces ${name} placeholders.
+    fn substitute(text: string, values: *strmap.Map): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            if str.char(text, index) = 36 && index + 1 < size && str.char(text, index + 1) = 123 {
+                var close: int := strings.index_from(text, "}", index)
+                if close > 0 {
+                    out := str.append(out, strmap.get(values, str.slice(text, index + 2, close), ""))
+                    index := close + 1
+                }
+                else {
+                    out := str.append(out, "$")
+                    index := index + 1
+                }
+            }
+            else {
+                out := str.append(out, str.fromchar(str.char(text, index)))
+                index := index + 1
+            }
+        }
+        return out
+    end
+end

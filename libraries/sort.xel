@@ -1,0 +1,231 @@
+// sort: sorting algorithms for int buffers, intlist and strlist.
+uses intlist
+uses strlist
+
+module sort
+begin
+    fn quick(list: *intlist.List)
+    begin
+        intlist.sort(list)
+    end
+
+    fn is_sorted(list: *intlist.List): int
+    begin
+        var index: int := 1
+        while index < intlist.len(list) {
+            if intlist.get(list, index - 1) > intlist.get(list, index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn merge_range(data: *int, scratch: *int, low: int, high: int)
+    begin
+        if high - low < 2 { return }
+        var middle: int := (low + high) / 2
+        merge_range(data, scratch, low, middle)
+        merge_range(data, scratch, middle, high)
+        var i: int := low
+        var j: int := middle
+        var k: int := low
+        while i < middle && j < high {
+            if *(data + j) < *(data + i) {
+                *(scratch + k) := *(data + j)
+                j := j + 1
+            }
+            else {
+                *(scratch + k) := *(data + i)
+                i := i + 1
+            }
+            k := k + 1
+        }
+        while i < middle {
+            *(scratch + k) := *(data + i)
+            i := i + 1
+            k := k + 1
+        }
+        while j < high {
+            *(scratch + k) := *(data + j)
+            j := j + 1
+            k := k + 1
+        }
+        runtime.mem.copy(data + low, scratch + low, (high - low) * 8)
+    end
+
+    // Stable merge sort.
+    fn merge(list: *intlist.List)
+    begin
+        var n: int := intlist.len(list)
+        if n < 2 { return }
+        var scratch: *int := alloc(n * 8)
+        merge_range(list.data, scratch, 0, n)
+        free(scratch)
+    end
+
+    fn sift(data: *int, start: int, finish: int)
+    begin
+        var root: int := start
+        var moving: int := 1
+        while moving = 1 {
+            var child: int := root * 2 + 1
+            if child > finish { moving := 0 }
+            else {
+                if child + 1 <= finish && *(data + child) < *(data + child + 1) { child := child + 1 }
+                if *(data + root) < *(data + child) {
+                    var swap: int := *(data + root)
+                    *(data + root) := *(data + child)
+                    *(data + child) := swap
+                    root := child
+                }
+                else { moving := 0 }
+            }
+        }
+    end
+
+    fn heap(list: *intlist.List)
+    begin
+        var n: int := intlist.len(list)
+        var data: *int := list.data
+        var start: int := (n - 2) / 2
+        while start >= 0 {
+            sift(data, start, n - 1)
+            start := start - 1
+        }
+        var finish: int := n - 1
+        while finish > 0 {
+            var swap: int := *data
+            *data := *(data + finish)
+            *(data + finish) := swap
+            finish := finish - 1
+            sift(data, 0, finish)
+        }
+    end
+
+    fn insertion(list: *intlist.List)
+    begin
+        var data: *int := list.data
+        var outer: int := 1
+        while outer < intlist.len(list) {
+            var value: int := *(data + outer)
+            var inner: int := outer - 1
+            var moving: int := 1
+            while moving = 1 {
+                if inner < 0 { moving := 0 }
+                else {
+                    if *(data + inner) > value {
+                        *(data + inner + 1) := *(data + inner)
+                        inner := inner - 1
+                    }
+                    else { moving := 0 }
+                }
+            }
+            *(data + inner + 1) := value
+            outer := outer + 1
+        }
+    end
+
+    // LSD radix sort on 64-bit ints (handles negatives).
+    fn radix(list: *intlist.List)
+    begin
+        var n: int := intlist.len(list)
+        if n < 2 { return }
+        var source: *int := list.data
+        var target: *int := alloc(n * 8)
+        var counts: *int := alloc(256 * 8)
+        var pass: int := 0
+        while pass < 8 {
+            runtime.mem.set(counts, 0, 2048)
+            var shift: int := pass * 8
+            var index: int := 0
+            while index < n {
+                var key: int := *(source + index)
+                if pass = 7 { key := key ^ (-9223372036854775807 - 1) }
+                var digit: int := (key >> shift) & 255
+                *(counts + digit) := *(counts + digit) + 1
+                index := index + 1
+            }
+            var total: int := 0
+            var bucket: int := 0
+            while bucket < 256 {
+                var c: int := *(counts + bucket)
+                *(counts + bucket) := total
+                total := total + c
+                bucket := bucket + 1
+            }
+            index := 0
+            while index < n {
+                var value: int := *(source + index)
+                var key2: int := value
+                if pass = 7 { key2 := key2 ^ (-9223372036854775807 - 1) }
+                var digit2: int := (key2 >> shift) & 255
+                *(target + *(counts + digit2)) := value
+                *(counts + digit2) := *(counts + digit2) + 1
+                index := index + 1
+            }
+            var swap: *int := source
+            source := target
+            target := swap
+            pass := pass + 1
+        }
+        free(counts)
+        free(target)
+    end
+
+    fn counting(list: *intlist.List, maximum: int)
+    begin
+        var counts: *int := alloc((maximum + 1) * 8)
+        runtime.mem.set(counts, 0, (maximum + 1) * 8)
+        var index: int := 0
+        while index < intlist.len(list) {
+            var value: int := intlist.get(list, index)
+            *(counts + value) := *(counts + value) + 1
+            index := index + 1
+        }
+        var out: int := 0
+        var value2: int := 0
+        while value2 <= maximum {
+            var c: int := *(counts + value2)
+            while c > 0 {
+                intlist.set(list, out, value2)
+                out := out + 1
+                c := c - 1
+            }
+            value2 := value2 + 1
+        }
+        free(counts)
+    end
+
+    fn descending(list: *intlist.List)
+    begin
+        intlist.sort(list)
+        intlist.reverse(list)
+    end
+
+    fn strings(list: *strlist.List)
+    begin
+        var n: int := strlist.len(list)
+        if n < 2 { return }
+        var gap: int := n / 2
+        while gap > 0 {
+            var index: int := gap
+            while index < n {
+                var value: string := strlist.get(list, index)
+                var inner: int := index
+                var moving: int := 1
+                while moving = 1 {
+                    if inner < gap { moving := 0 }
+                    else {
+                        if strlist.compare(strlist.get(list, inner - gap), value) > 0 {
+                            strlist.set(list, inner, strlist.get(list, inner - gap))
+                            inner := inner - gap
+                        }
+                        else { moving := 0 }
+                    }
+                }
+                strlist.set(list, inner, value)
+                index := index + 1
+            }
+            gap := gap / 2
+        }
+    end
+end

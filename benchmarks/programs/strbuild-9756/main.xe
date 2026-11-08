@@ -1,0 +1,34 @@
+fn strbuild(n: int): int
+begin
+    var s: string := str.builder("")
+    var i: int := 0
+    while i < n {
+        s := str.append(s, str.fromchar(97 + i % 26))
+        i := i + 1
+    }
+    var c: int := 0
+    i := 0
+    while i < n {
+        if str.char(s, i) = 97 { c := c + 1 }
+        i := i + 1
+    }
+    return c
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(strbuild(n))
+    return 0
+end

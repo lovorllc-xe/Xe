@@ -1,0 +1,100 @@
+// hmac: HMAC-SHA256 message authentication and PBKDF2-HMAC-SHA256 key derivation.
+uses bytes
+uses sha256
+
+module hmac
+begin
+    // Raw HMAC over byte buffers; returns 32 bytes.
+    fn sha256_raw(key: *bytes.Buffer, message: *bytes.Buffer): *bytes.Buffer
+    begin
+        var block: *void := alloc(64)
+        runtime.mem.set(block, 0, 64)
+        if key.size > 64 {
+            var hashed: *bytes.Buffer := sha256.buffer_digest(key)
+            runtime.mem.copy(block, hashed.data, 32)
+        }
+        else {
+            if key.size > 0 { runtime.mem.copy(block, key.data, key.size) }
+        }
+        var inner: *bytes.Buffer := bytes.new()
+        var outer: *bytes.Buffer := bytes.new()
+        var index: int := 0
+        while index < 64 {
+            bytes.push(inner, runtime.hw.read8(block + index) ^ 54)
+            bytes.push(outer, runtime.hw.read8(block + index) ^ 92)
+            index := index + 1
+        }
+        index := 0
+        while index < message.size {
+            bytes.push(inner, bytes.get(message, index))
+            index := index + 1
+        }
+        var innerHash: *bytes.Buffer := sha256.buffer_digest(inner)
+        index := 0
+        while index < 32 {
+            bytes.push(outer, bytes.get(innerHash, index))
+            index := index + 1
+        }
+        var result: *bytes.Buffer := sha256.buffer_digest(outer)
+        free(block)
+        bytes.release(inner)
+        bytes.release(outer)
+        bytes.release(innerHash)
+        return result
+    end
+
+    fn sha256(key: string, message: string): string
+    begin
+        return bytes.hex(sha256_raw(bytes.from_string(key), bytes.from_string(message)))
+    end
+
+    fn equal_constant_time(a: string, b: string): int
+    begin
+        if str.length(a) != str.length(b) { return 0 }
+        var difference: int := 0
+        var index: int := 0
+        while index < str.length(a) {
+            difference := difference | (str.char(a, index) ^ str.char(b, index))
+            index := index + 1
+        }
+        return difference = 0
+    end
+
+    // PBKDF2-HMAC-SHA256; returns length bytes as hex.
+    fn pbkdf2_sha256(password: string, salt: string, iterations: int, length: int): string
+    begin
+        var key: *bytes.Buffer := bytes.from_string(password)
+        var output: *bytes.Buffer := bytes.new()
+        var block: int := 1
+        while output.size < length {
+            var start: *bytes.Buffer := bytes.from_string(salt)
+            bytes.write_be(start, block, 4)
+            var u: *bytes.Buffer := sha256_raw(key, start)
+            var t: *bytes.Buffer := bytes.new()
+            var index: int := 0
+            while index < 32 {
+                bytes.push(t, bytes.get(u, index))
+                index := index + 1
+            }
+            var round: int := 1
+            while round < iterations {
+                var next: *bytes.Buffer := sha256_raw(key, u)
+                bytes.release(u)
+                u := next
+                index := 0
+                while index < 32 {
+                    bytes.set(t, index, bytes.get(t, index) ^ bytes.get(u, index))
+                    index := index + 1
+                }
+                round := round + 1
+            }
+            index := 0
+            while index < 32 && output.size < length {
+                bytes.push(output, bytes.get(t, index))
+                index := index + 1
+            }
+            block := block + 1
+        }
+        return bytes.hex(output)
+    end
+end

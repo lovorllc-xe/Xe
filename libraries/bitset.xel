@@ -1,0 +1,86 @@
+// bitset: a fixed-size set of bits with fast counting.
+module bitset
+begin
+    type Bits: record
+    begin
+        words: *int
+        count: int
+        size: int
+    end
+
+    fn new(size: int): *bitset.Bits
+    begin
+        var bits: *bitset.Bits := alloc(24)
+        var count: int := (size + 63) / 64
+        if count < 1 { count := 1 }
+        bits.words := alloc(count * 8)
+        bits.count := count
+        bits.size := size
+        return bits
+    end
+
+    fn set(bits: *bitset.Bits, index: int)
+    begin
+        if index < 0 || index >= bits.size { return }
+        var word: *int := bits.words + index / 64
+        *word := *word | (1 << (index % 64))
+    end
+
+    fn clear(bits: *bitset.Bits, index: int)
+    begin
+        if index < 0 || index >= bits.size { return }
+        var word: *int := bits.words + index / 64
+        *word := *word & ~(1 << (index % 64))
+    end
+
+    fn toggle(bits: *bitset.Bits, index: int)
+    begin
+        if index < 0 || index >= bits.size { return }
+        var word: *int := bits.words + index / 64
+        *word := *word ^ (1 << (index % 64))
+    end
+
+    fn get(bits: *bitset.Bits, index: int): int
+    begin
+        if index < 0 || index >= bits.size { return 0 }
+        return (*(bits.words + index / 64) >> (index % 64)) & 1
+    end
+
+    fn popcount(value: int): int
+    begin
+        var x: int := value
+        var total: int := 0
+        while x != 0 {
+            x := x & (x - 1)
+            total := total + 1
+        }
+        return total
+    end
+
+    fn cardinality(bits: *bitset.Bits): int
+    begin
+        var total: int := 0
+        var index: int := 0
+        while index < bits.count {
+            total := total + popcount(*(bits.words + index))
+            index := index + 1
+        }
+        return total
+    end
+
+    fn reset(bits: *bitset.Bits)
+    begin
+        runtime.mem.set(bits.words, 0, bits.count * 8)
+    end
+
+    fn len(bits: *bitset.Bits): int
+    begin
+        return bits.size
+    end
+
+    fn release(bits: *bitset.Bits)
+    begin
+        free(bits.words)
+        free(bits)
+    end
+end

@@ -1,0 +1,75 @@
+// mmapfile: map files into memory read-only, and anonymous shared memory regions.
+uses cstr
+
+module mmapfile
+begin
+    type Mapping: record
+    begin
+        data: *void
+        size: int
+    end
+
+    fn open(path: string): *mmapfile.Mapping
+    begin
+        var mapping: *mmapfile.Mapping := alloc(16)
+        mapping.size := 0
+        mapping.data := 0
+        var fd: int := syscall.invoke3(2, path, 0, 0)
+        if fd < 0 { return mapping }
+        var info: *int := alloc(160)
+        syscall.invoke3(5, fd, info, 0)
+        var size: int := *(info + 6)
+        free(info)
+        if size > 0 {
+            var address: int := syscall.invoke6(9, 0, size, 1, 2, fd, 0)
+            if address > 0 {
+                var cell: *int := alloc(8)
+                *cell := address
+                var raw: *void := cell
+                mapping.data := runtime.pointer.read(raw)
+                mapping.size := size
+                free(cell)
+            }
+        }
+        syscall.invoke3(3, fd, 0, 0)
+        return mapping
+    end
+
+    fn byte(mapping: *mmapfile.Mapping, offset: int): int
+    begin
+        if offset < 0 || offset >= mapping.size { return -1 }
+        return runtime.hw.read8(mapping.data + offset)
+    end
+
+    fn len(mapping: *mmapfile.Mapping): int
+    begin
+        return mapping.size
+    end
+
+    fn text(mapping: *mmapfile.Mapping, start: int, finish: int): string
+    begin
+        var first: int := start
+        var last: int := finish
+        if first < 0 { first := 0 }
+        if last > mapping.size { last := mapping.size }
+        if last <= first { return "" }
+        return cstr.from_bytes(mapping.data + first, last - first)
+    end
+
+    fn count_byte(mapping: *mmapfile.Mapping, value: int): int
+    begin
+        var total: int := 0
+        var index: int := 0
+        while index < mapping.size {
+            if runtime.hw.read8(mapping.data + index) = value { total := total + 1 }
+            index := index + 1
+        }
+        return total
+    end
+
+    fn close(mapping: *mmapfile.Mapping)
+    begin
+        if mapping.size > 0 { syscall.invoke3(11, mapping.data, mapping.size, 0) }
+        mapping.size := 0
+    end
+end

@@ -1,0 +1,602 @@
+// jsonx: a complete JSON parser, document tree, path queries, builder and serializer.
+//   var doc: *jsonx.Doc := jsonx.parse(text)
+//   jsonx.text(doc, jsonx.path(doc, 0, "users[1].name"))
+// Kinds: 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object. Node 0 is the root after parse.
+uses intlist
+uses fltlist
+uses strlist
+uses utf8
+
+module jsonx
+begin
+    type Doc: record
+    begin
+        kinds: *intlist.List
+        numbers: *fltlist.List
+        strings: *strlist.List
+        keys: *strlist.List
+        first: *intlist.List
+        last: *intlist.List
+        next: *intlist.List
+        counts: *intlist.List
+        error: string
+        source: string
+        position: int
+    end
+
+    fn new(): *jsonx.Doc
+    begin
+        var doc: *jsonx.Doc := alloc(88)
+        doc.kinds := intlist.new()
+        doc.numbers := fltlist.new()
+        doc.strings := strlist.new()
+        doc.keys := strlist.new()
+        doc.first := intlist.new()
+        doc.last := intlist.new()
+        doc.next := intlist.new()
+        doc.counts := intlist.new()
+        doc.error := ""
+        doc.source := ""
+        doc.position := 0
+        return doc
+    end
+
+    fn node(doc: *jsonx.Doc, kind: int): int
+    begin
+        intlist.push(doc.kinds, kind)
+        fltlist.push(doc.numbers, 0.0)
+        strlist.push(doc.strings, "")
+        strlist.push(doc.keys, "")
+        intlist.push(doc.first, -1)
+        intlist.push(doc.last, -1)
+        intlist.push(doc.next, -1)
+        intlist.push(doc.counts, 0)
+        return intlist.len(doc.kinds) - 1
+    end
+
+    // Builder API.
+    fn null(doc: *jsonx.Doc): int
+    begin
+        return node(doc, 0)
+    end
+
+    fn boolean(doc: *jsonx.Doc, value: int): int
+    begin
+        var n: int := node(doc, 1)
+        if value != 0 { fltlist.set(doc.numbers, n, 1.0) }
+        return n
+    end
+
+    fn number(doc: *jsonx.Doc, value: flt): int
+    begin
+        var n: int := node(doc, 2)
+        fltlist.set(doc.numbers, n, value)
+        return n
+    end
+
+    fn integer(doc: *jsonx.Doc, value: int): int
+    begin
+        return number(doc, value * 1.0)
+    end
+
+    fn string(doc: *jsonx.Doc, value: string): int
+    begin
+        var n: int := node(doc, 3)
+        strlist.set(doc.strings, n, value)
+        return n
+    end
+
+    fn array(doc: *jsonx.Doc): int
+    begin
+        return node(doc, 4)
+    end
+
+    fn object(doc: *jsonx.Doc): int
+    begin
+        return node(doc, 5)
+    end
+
+    fn append(doc: *jsonx.Doc, parent: int, child: int)
+    begin
+        if intlist.get(doc.first, parent) < 0 { intlist.set(doc.first, parent, child) }
+        else { intlist.set(doc.next, intlist.get(doc.last, parent), child) }
+        intlist.set(doc.last, parent, child)
+        intlist.set(doc.counts, parent, intlist.get(doc.counts, parent) + 1)
+    end
+
+    fn push(doc: *jsonx.Doc, arr: int, child: int)
+    begin
+        append(doc, arr, child)
+    end
+
+    fn set(doc: *jsonx.Doc, obj: int, key: string, child: int)
+    begin
+        var existing: int := intlist.get(doc.first, obj)
+        while existing >= 0 {
+            if strlist.get(doc.keys, existing) = key {
+                strlist.set(doc.keys, child, key)
+                replace(doc, obj, existing, child)
+                return
+            }
+            existing := intlist.get(doc.next, existing)
+        }
+        strlist.set(doc.keys, child, key)
+        append(doc, obj, child)
+    end
+
+    fn replace(doc: *jsonx.Doc, parent: int, old: int, child: int)
+    begin
+        intlist.set(doc.next, child, intlist.get(doc.next, old))
+        if intlist.get(doc.first, parent) = old { intlist.set(doc.first, parent, child) }
+        else {
+            var cursor: int := intlist.get(doc.first, parent)
+            while intlist.get(doc.next, cursor) != old { cursor := intlist.get(doc.next, cursor) }
+            intlist.set(doc.next, cursor, child)
+        }
+        if intlist.get(doc.last, parent) = old { intlist.set(doc.last, parent, child) }
+    end
+
+    // Accessors.
+    fn kind(doc: *jsonx.Doc, n: int): int
+    begin
+        if n < 0 { return -1 }
+        return intlist.get(doc.kinds, n)
+    end
+
+    fn len(doc: *jsonx.Doc, n: int): int
+    begin
+        if n < 0 { return 0 }
+        return intlist.get(doc.counts, n)
+    end
+
+    fn get(doc: *jsonx.Doc, obj: int, key: string): int
+    begin
+        if kind(doc, obj) != 5 { return -1 }
+        var child: int := intlist.get(doc.first, obj)
+        while child >= 0 {
+            if strlist.get(doc.keys, child) = key { return child }
+            child := intlist.get(doc.next, child)
+        }
+        return -1
+    end
+
+    fn at(doc: *jsonx.Doc, arr: int, index: int): int
+    begin
+        if arr < 0 { return -1 }
+        var child: int := intlist.get(doc.first, arr)
+        var position: int := 0
+        while child >= 0 && position < index {
+            child := intlist.get(doc.next, child)
+            position := position + 1
+        }
+        return child
+    end
+
+    fn first_child(doc: *jsonx.Doc, n: int): int
+    begin
+        if n < 0 { return -1 }
+        return intlist.get(doc.first, n)
+    end
+
+    fn next_sibling(doc: *jsonx.Doc, n: int): int
+    begin
+        if n < 0 { return -1 }
+        return intlist.get(doc.next, n)
+    end
+
+    fn key(doc: *jsonx.Doc, n: int): string
+    begin
+        return strlist.get(doc.keys, n)
+    end
+
+    fn text(doc: *jsonx.Doc, n: int): string
+    begin
+        if n < 0 { return "" }
+        var k: int := kind(doc, n)
+        if k = 3 { return strlist.get(doc.strings, n) }
+        if k = 2 || k = 1 || k = 0 { return stringify(doc, n) }
+        return stringify(doc, n)
+    end
+
+    fn num(doc: *jsonx.Doc, n: int): flt
+    begin
+        if n < 0 { return 0.0 }
+        return fltlist.get(doc.numbers, n)
+    end
+
+    fn int(doc: *jsonx.Doc, n: int): int
+    begin
+        return flt.toint(num(doc, n))
+    end
+
+    fn bool(doc: *jsonx.Doc, n: int): int
+    begin
+        return kind(doc, n) = 1 && num(doc, n) = 1.0
+    end
+
+    fn is_null(doc: *jsonx.Doc, n: int): int
+    begin
+        return kind(doc, n) = 0
+    end
+
+    // Path like "a.b[2].c" (also "[0]" at the start).
+    fn path(doc: *jsonx.Doc, start: int, query: string): int
+    begin
+        var current: int := start
+        var index: int := 0
+        var size: int := str.length(query)
+        while index < size && current >= 0 {
+            var c: int := str.char(query, index)
+            if c = 46 { index := index + 1 }
+            else {
+                if c = 91 {
+                    var value: int := 0
+                    index := index + 1
+                    while index < size && str.char(query, index) != 93 {
+                        value := value * 10 + str.char(query, index) - 48
+                        index := index + 1
+                    }
+                    index := index + 1
+                    current := at(doc, current, value)
+                }
+                else {
+                    var finish: int := index
+                    while finish < size && str.char(query, finish) != 46 && str.char(query, finish) != 91 { finish := finish + 1 }
+                    current := get(doc, current, str.slice(query, index, finish))
+                    index := finish
+                }
+            }
+        }
+        return current
+    end
+
+    // Parsing.
+    fn peek(doc: *jsonx.Doc): int
+    begin
+        if doc.position >= str.length(doc.source) { return -1 }
+        return str.char(doc.source, doc.position)
+    end
+
+    fn skip(doc: *jsonx.Doc)
+    begin
+        var c: int := peek(doc)
+        while c = 32 || c = 9 || c = 10 || c = 13 {
+            doc.position := doc.position + 1
+            c := peek(doc)
+        }
+    end
+
+    fn fail(doc: *jsonx.Doc, message: string): int
+    begin
+        if str.length(doc.error) = 0 { doc.error := message + " at offset " + str.number(doc.position) }
+        return node(doc, 0)
+    end
+
+    fn hex4(doc: *jsonx.Doc): int
+    begin
+        var value: int := 0
+        var k: int := 0
+        while k < 4 {
+            var c: int := peek(doc)
+            var v: int := -1
+            if c >= 48 && c <= 57 { v := c - 48 }
+            if c >= 97 && c <= 102 { v := c - 87 }
+            if c >= 65 && c <= 70 { v := c - 55 }
+            if v < 0 { return -1 }
+            value := value * 16 + v
+            doc.position := doc.position + 1
+            k := k + 1
+        }
+        return value
+    end
+
+    fn parse_string(doc: *jsonx.Doc): string
+    begin
+        doc.position := doc.position + 1
+        var out: string := str.builder("")
+        var going: int := 1
+        while going = 1 {
+            var c: int := peek(doc)
+            if c < 0 {
+                fail(doc, "unterminated string")
+                going := 0
+            }
+            else {
+                doc.position := doc.position + 1
+                if c = 34 { going := 0 }
+                else {
+                    if c = 92 {
+                        var e: int := peek(doc)
+                        doc.position := doc.position + 1
+                        if e = 110 { out := str.append(out, str.fromchar(10)) }
+                        else {
+                            if e = 116 { out := str.append(out, str.fromchar(9)) }
+                            else {
+                                if e = 114 { out := str.append(out, str.fromchar(13)) }
+                                else {
+                                    if e = 98 { out := str.append(out, str.fromchar(8)) }
+                                    else {
+                                        if e = 102 { out := str.append(out, str.fromchar(12)) }
+                                        else {
+                                            if e = 117 {
+                                                var code: int := hex4(doc)
+                                                if code >= 55296 && code <= 56319 && peek(doc) = 92 {
+                                                    doc.position := doc.position + 2
+                                                    var low: int := hex4(doc)
+                                                    code := 65536 + (code - 55296) * 1024 + (low - 56320)
+                                                }
+                                                if code < 0 { fail(doc, "bad unicode escape") }
+                                                else { out := str.append(out, utf8.encode(code)) }
+                                            }
+                                            else { out := str.append(out, str.fromchar(e)) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else { out := str.append(out, str.fromchar(c)) }
+                }
+            }
+        }
+        return out
+    end
+
+    fn parse_number(doc: *jsonx.Doc): int
+    begin
+        var start: int := doc.position
+        var c: int := peek(doc)
+        while (c >= 48 && c <= 57) || c = 45 || c = 43 || c = 46 || c = 101 || c = 69 {
+            doc.position := doc.position + 1
+            c := peek(doc)
+        }
+        var textValue: string := str.slice(doc.source, start, doc.position)
+        var value: flt := 0.0
+        var index: int := 0
+        var negative: int := 0
+        if str.length(textValue) > 0 && str.char(textValue, 0) = 45 {
+            negative := 1
+            index := 1
+        }
+        while index < str.length(textValue) && str.char(textValue, index) >= 48 && str.char(textValue, index) <= 57 {
+            value := value * 10.0 + (str.char(textValue, index) - 48)
+            index := index + 1
+        }
+        if index < str.length(textValue) && str.char(textValue, index) = 46 {
+            index := index + 1
+            var scale: flt := 0.1
+            while index < str.length(textValue) && str.char(textValue, index) >= 48 && str.char(textValue, index) <= 57 {
+                value := value + scale * (str.char(textValue, index) - 48)
+                scale := scale * 0.1
+                index := index + 1
+            }
+        }
+        if index < str.length(textValue) && (str.char(textValue, index) = 101 || str.char(textValue, index) = 69) {
+            index := index + 1
+            var expNegative: int := 0
+            if index < str.length(textValue) && (str.char(textValue, index) = 45 || str.char(textValue, index) = 43) {
+                expNegative := str.char(textValue, index) = 45
+                index := index + 1
+            }
+            var exponent: int := 0
+            while index < str.length(textValue) {
+                exponent := exponent * 10 + str.char(textValue, index) - 48
+                index := index + 1
+            }
+            while exponent > 0 {
+                if expNegative = 1 { value := value / 10.0 }
+                else { value := value * 10.0 }
+                exponent := exponent - 1
+            }
+        }
+        if negative = 1 { value := -value }
+        if str.length(textValue) = 0 || textValue = "-" { return fail(doc, "invalid number") }
+        return number(doc, value)
+    end
+
+    fn parse_value(doc: *jsonx.Doc, depth: int): int
+    begin
+        if depth > 512 { return fail(doc, "nesting too deep") }
+        skip(doc)
+        var c: int := peek(doc)
+        if c = 123 {
+            doc.position := doc.position + 1
+            var obj: int := object(doc)
+            skip(doc)
+            if peek(doc) = 125 {
+                doc.position := doc.position + 1
+                return obj
+            }
+            var going: int := 1
+            while going = 1 {
+                skip(doc)
+                if peek(doc) != 34 { return fail(doc, "expected a string key") }
+                var name: string := parse_string(doc)
+                skip(doc)
+                if peek(doc) != 58 { return fail(doc, "expected ':'") }
+                doc.position := doc.position + 1
+                var child: int := parse_value(doc, depth + 1)
+                strlist.set(doc.keys, child, name)
+                append(doc, obj, child)
+                skip(doc)
+                if peek(doc) = 44 { doc.position := doc.position + 1 }
+                else {
+                    if peek(doc) = 125 {
+                        doc.position := doc.position + 1
+                        going := 0
+                    }
+                    else { return fail(doc, "expected ',' or '}'") }
+                }
+            }
+            return obj
+        }
+        if c = 91 {
+            doc.position := doc.position + 1
+            var arr: int := array(doc)
+            skip(doc)
+            if peek(doc) = 93 {
+                doc.position := doc.position + 1
+                return arr
+            }
+            var more: int := 1
+            while more = 1 {
+                var item: int := parse_value(doc, depth + 1)
+                append(doc, arr, item)
+                skip(doc)
+                if peek(doc) = 44 { doc.position := doc.position + 1 }
+                else {
+                    if peek(doc) = 93 {
+                        doc.position := doc.position + 1
+                        more := 0
+                    }
+                    else { return fail(doc, "expected ',' or ']'") }
+                }
+            }
+            return arr
+        }
+        if c = 34 { return string(doc, parse_string(doc)) }
+        if c = 116 && str.slice(doc.source, doc.position, doc.position + 4) = "true" {
+            doc.position := doc.position + 4
+            return boolean(doc, 1)
+        }
+        if c = 102 && str.slice(doc.source, doc.position, doc.position + 5) = "false" {
+            doc.position := doc.position + 5
+            return boolean(doc, 0)
+        }
+        if c = 110 && str.slice(doc.source, doc.position, doc.position + 4) = "null" {
+            doc.position := doc.position + 4
+            return null(doc)
+        }
+        if c = 45 || (c >= 48 && c <= 57) { return parse_number(doc) }
+        return fail(doc, "unexpected character")
+    end
+
+    fn parse(source: string): *jsonx.Doc
+    begin
+        var doc: *jsonx.Doc := jsonx.new()
+        doc.source := source
+        intlist.push(doc.kinds, 0)
+        fltlist.push(doc.numbers, 0.0)
+        strlist.push(doc.strings, "")
+        strlist.push(doc.keys, "")
+        intlist.push(doc.first, -1)
+        intlist.push(doc.last, -1)
+        intlist.push(doc.next, -1)
+        intlist.push(doc.counts, 0)
+        var root: int := parse_value(doc, 0)
+        skip(doc)
+        if doc.position < str.length(source) { fail(doc, "trailing characters") }
+        intlist.set(doc.kinds, 0, intlist.get(doc.kinds, root))
+        fltlist.set(doc.numbers, 0, fltlist.get(doc.numbers, root))
+        strlist.set(doc.strings, 0, strlist.get(doc.strings, root))
+        intlist.set(doc.first, 0, intlist.get(doc.first, root))
+        intlist.set(doc.last, 0, intlist.get(doc.last, root))
+        intlist.set(doc.counts, 0, intlist.get(doc.counts, root))
+        doc.source := ""
+        return doc
+    end
+
+    fn ok(doc: *jsonx.Doc): int
+    begin
+        return str.length(doc.error) = 0
+    end
+
+    fn error(doc: *jsonx.Doc): string
+    begin
+        return doc.error
+    end
+
+    // Serialization.
+    fn quote(value: string): string
+    begin
+        var out: string := str.builder(str.fromchar(34))
+        var index: int := 0
+        while index < str.length(value) {
+            var c: int := str.char(value, index)
+            if c = 34 { out := str.append(out, "\\" + str.fromchar(34)) }
+            else {
+                if c = 92 { out := str.append(out, "\\\\") }
+                else {
+                    if c = 10 { out := str.append(out, "\\n") }
+                    else {
+                        if c = 9 { out := str.append(out, "\\t") }
+                        else {
+                            if c = 13 { out := str.append(out, "\\r") }
+                            else {
+                                if c < 32 { out := str.append(out, "\\u00" + str.slice("0123456789abcdef", c / 16, c / 16 + 1) + str.slice("0123456789abcdef", c % 16, c % 16 + 1)) }
+                                else { out := str.append(out, str.fromchar(c)) }
+                            }
+                        }
+                    }
+                }
+            }
+            index := index + 1
+        }
+        return str.append(out, str.fromchar(34))
+    end
+
+    fn format_number(value: flt): string
+    begin
+        var whole: int := flt.toint(value)
+        if whole * 1.0 = value && value < 9007199254740992.0 && value > -9007199254740992.0 { return str.number(whole) }
+        var textValue: string := flt.format(value, 15)
+        while str.length(textValue) > 1 && str.char(textValue, str.length(textValue) - 1) = 48 { textValue := str.slice(textValue, 0, str.length(textValue) - 1) }
+        return textValue
+    end
+
+    fn write_node(doc: *jsonx.Doc, n: int, indent: int, level: int): string
+    begin
+        var k: int := kind(doc, n)
+        if k = 0 { return "null" }
+        if k = 1 {
+            if num(doc, n) = 1.0 { return "true" }
+            return "false"
+        }
+        if k = 2 { return format_number(num(doc, n)) }
+        if k = 3 { return quote(strlist.get(doc.strings, n)) }
+        var open: string := "["
+        var close: string := "]"
+        if k = 5 {
+            open := "{"
+            close := "}"
+        }
+        if len(doc, n) = 0 { return open + close }
+        var out: string := str.builder(open)
+        var child: int := intlist.get(doc.first, n)
+        var first: int := 1
+        while child >= 0 {
+            if first = 0 { out := str.append(out, ",") }
+            if indent > 0 { out := str.append(out, "\n" + spaces(indent * (level + 1))) }
+            if k = 5 {
+                out := str.append(out, quote(strlist.get(doc.keys, child)) + ":")
+                if indent > 0 { out := str.append(out, " ") }
+            }
+            out := str.append(out, write_node(doc, child, indent, level + 1))
+            first := 0
+            child := intlist.get(doc.next, child)
+        }
+        if indent > 0 { out := str.append(out, "\n" + spaces(indent * level)) }
+        return str.append(out, close)
+    end
+
+    fn spaces(count: int): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < count {
+            out := str.append(out, " ")
+            index := index + 1
+        }
+        return out
+    end
+
+    fn stringify(doc: *jsonx.Doc, n: int): string
+    begin
+        return write_node(doc, n, 0, 0)
+    end
+
+    fn pretty(doc: *jsonx.Doc, n: int): string
+    begin
+        return write_node(doc, n, 2, 0)
+    end
+end

@@ -1,0 +1,120 @@
+// md5: MD5 digests (RFC 1321) for checksums and legacy formats; not for security.
+uses bytes
+
+module md5
+begin
+    fn rotl(v: int, n: int): int
+    begin
+        return ((v << n) | (v >> (32 - n))) & 4294967295
+    end
+
+    fn hex(text: string): string
+    begin
+        var shifts: string := "07121722071217220712172207121722050914200509142005091420050914200411162304111623041116230411162306101521061015210610152106101521"
+        var data: *bytes.Buffer := bytes.from_string(text)
+        var size: int := data.size
+        var total: int := ((size + 9 + 63) / 64) * 64
+        var message: *void := alloc(total + 8)
+        runtime.mem.set(message, 0, total)
+        if size > 0 { runtime.mem.copy(message, data.data, size) }
+        runtime.hw.write8(message + size, 128)
+        var bits: int := size * 8
+        var b: int := 0
+        while b < 8 {
+            runtime.hw.write8(message + total - 8 + b, (bits >> (b * 8)) & 255)
+            b := b + 1
+        }
+        var k: *int := alloc(64 * 8)
+        var i: int := 0
+        var sineTable: string := "d76aa478e8c7b756242070dbc1bdceeef57c0faf4787c62aa8304613fd469501698098d88b44f7afffff5bb1895cd7be6b901122fd987193a679438e49b40821f61e2562c040b340265e5a51e9b6c7aad62f105d02441453d8a1e681e7d3fbc821e1cde6c33707d6f4d50d87455a14eda9e3e905fcefa3f8676f02d98d2a4c8afffa39428771f6816d9d6122fde5380ca4beea444bdecfa9f6bb4b60bebfbc70289b7ec6eaa127fad4ef308504881d05d9d4d039e6db99e51fa27cf8c4ac5665f4292244432aff97ab9423a7fc93a039655b59c38f0ccc92ffeff47d85845dd16fa87e4ffe2ce6e0a30143144e0811a1f7537e82bd3af2352ad7d2bbeb86d391"
+        while i < 64 {
+            var value: int := 0
+            var d: int := 0
+            while d < 8 {
+                var c: int := str.char(sineTable, i * 8 + d)
+                var v: int := c - 48
+                if c >= 97 { v := c - 87 }
+                value := value * 16 + v
+                d := d + 1
+            }
+            *(k + i) := value
+            i := i + 1
+        }
+        var a0: int := 1732584193
+        var b0: int := 4023233417
+        var c0: int := 2562383102
+        var d0: int := 271733878
+        var chunk: int := 0
+        while chunk < total {
+            var m: [16]int
+            var t: int := 0
+            while t < 16 {
+                var p: *void := message + chunk + t * 4
+                m[t] := runtime.hw.read8(p) | (runtime.hw.read8(p + 1) << 8) | (runtime.hw.read8(p + 2) << 16) | (runtime.hw.read8(p + 3) << 24)
+                t := t + 1
+            }
+            var a: int := a0
+            var bb: int := b0
+            var c2: int := c0
+            var d2: int := d0
+            i := 0
+            while i < 64 {
+                var f: int := 0
+                var g: int := 0
+                if i < 16 {
+                    f := (bb & c2) | ((~bb & 4294967295) & d2)
+                    g := i
+                }
+                else {
+                    if i < 32 {
+                        f := (d2 & bb) | ((~d2 & 4294967295) & c2)
+                        g := (5 * i + 1) % 16
+                    }
+                    else {
+                        if i < 48 {
+                            f := bb ^ c2 ^ d2
+                            g := (3 * i + 5) % 16
+                        }
+                        else {
+                            f := c2 ^ (bb | (~d2 & 4294967295))
+                            g := (7 * i) % 16
+                        }
+                    }
+                }
+                var s: int := (str.char(shifts, i * 2) - 48) * 10 + str.char(shifts, i * 2 + 1) - 48
+                f := (f + a + *(k + i) + m[g]) & 4294967295
+                a := d2
+                d2 := c2
+                c2 := bb
+                bb := (bb + rotl(f, s)) & 4294967295
+                i := i + 1
+            }
+            a0 := (a0 + a) & 4294967295
+            b0 := (b0 + bb) & 4294967295
+            c0 := (c0 + c2) & 4294967295
+            d0 := (d0 + d2) & 4294967295
+            chunk := chunk + 64
+        }
+        var words: [4]int
+        words[0] := a0
+        words[1] := b0
+        words[2] := c0
+        words[3] := d0
+        var digits: string := "0123456789abcdef"
+        var result: string := str.builder("")
+        var w: int := 0
+        while w < 4 {
+            var byte: int := 0
+            while byte < 4 {
+                var v2: int := (words[w] >> (byte * 8)) & 255
+                result := str.append(result, str.slice(digits, v2 / 16, v2 / 16 + 1) + str.slice(digits, v2 % 16, v2 % 16 + 1))
+                byte := byte + 1
+            }
+            w := w + 1
+        }
+        free(message)
+        free(k)
+        bytes.release(data)
+        return result
+    end
+end

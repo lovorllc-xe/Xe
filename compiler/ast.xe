@@ -2,7 +2,7 @@ module ast
 begin
     type Node: [12]int
     type Program: [4]int
-    type Pool: [524288]int
+    type Pool: [12582912]int
 
     fn literalKind(): int
     begin
@@ -137,10 +137,13 @@ begin
         return result
     end
 
-    fn store(pool: *[524288]int, count: *int, node: [12]int): int
+    fn store(pool: *[12582912]int, count: *int, node: [12]int): int
     begin
         var id: int := *count
-        if id < 0 || id >= 43690 { return -1 }
+        if id < 0 || id >= 1048576 {
+            (*pool)[12582908] := 1
+            return -1
+        }
         var field: int := 0
         while field < 12 {
             (*pool)[id * 12 + field] := node[field]
@@ -150,15 +153,15 @@ begin
         return id
     end
 
-    fn read(pool: *[524288]int, id: int, field: int): int
+    fn read(pool: *[12582912]int, id: int, field: int): int
     begin
-        if id < 0 || id >= 43690 || field < 0 || field >= 12 { return -1 }
+        if id < 0 || id >= 1048576 || field < 0 || field >= 12 { return -1 }
         return (*pool)[id * 12 + field]
     end
 
-    fn write(pool: *[524288]int, id: int, field: int, value: int): int
+    fn write(pool: *[12582912]int, id: int, field: int, value: int): int
     begin
-        if id < 0 || id >= 43690 || field < 0 || field >= 12 { return 0 }
+        if id < 0 || id >= 1048576 || field < 0 || field >= 12 { return 0 }
         (*pool)[id * 12 + field] := value
         return 1
     end

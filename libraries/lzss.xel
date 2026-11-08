@@ -1,0 +1,114 @@
+// lzss: LZ77-family compression (4 KiB window, hash chains) over byte buffers.
+// Format: "LZSS" + 4-byte length, then groups of 8 items each preceded by a flag byte.
+uses bytes
+
+module lzss
+begin
+    fn compress(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        bytes.append_string(out, "LZSS")
+        bytes.write_le(out, input.size, 4)
+        var head: *int := alloc(65536 * 8)
+        var prev: *int := alloc((input.size + 1) * 8)
+        var index: int := 0
+        while index < 65536 {
+            *(head + index) := -1
+            index := index + 1
+        }
+        var position: int := 0
+        while position < input.size {
+            var flagAt: int := out.size
+            bytes.push(out, 0)
+            var flags: int := 0
+            var item: int := 0
+            while item < 8 && position < input.size {
+                var bestLength: int := 0
+                var bestOffset: int := 0
+                if position + 2 < input.size {
+                    var key: int := ((bytes.get(input, position) << 8) ^ (bytes.get(input, position + 1) << 4) ^ bytes.get(input, position + 2)) & 65535
+                    var candidate: int := *(head + key)
+                    var chain: int := 0
+                    while candidate >= 0 && position - candidate < 4096 && chain < 64 {
+                        var length: int := 0
+                        while length < 18 && position + length < input.size && bytes.get(input, candidate + length) = bytes.get(input, position + length) { length := length + 1 }
+                        if length > bestLength {
+                            bestLength := length
+                            bestOffset := position - candidate
+                        }
+                        candidate := *(prev + candidate)
+                        chain := chain + 1
+                    }
+                }
+                var advance: int := 1
+                if bestLength >= 3 {
+                    flags := flags | (1 << item)
+                    bytes.push(out, (bestOffset - 1) & 255)
+                    bytes.push(out, (((bestOffset - 1) >> 8) << 4) | (bestLength - 3))
+                    advance := bestLength
+                }
+                else { bytes.push(out, bytes.get(input, position)) }
+                var step: int := 0
+                while step < advance {
+                    var p: int := position + step
+                    if p + 2 < input.size {
+                        var k: int := ((bytes.get(input, p) << 8) ^ (bytes.get(input, p + 1) << 4) ^ bytes.get(input, p + 2)) & 65535
+                        *(prev + p) := *(head + k)
+                        *(head + k) := p
+                    }
+                    step := step + 1
+                }
+                position := position + advance
+                item := item + 1
+            }
+            bytes.set(out, flagAt, flags)
+        }
+        free(head)
+        free(prev)
+        return out
+    end
+
+    fn decompress(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        if input.size < 8 || bytes.slice_string(input, 0, 4) != "LZSS" { return out }
+        var total: int := bytes.read_le_at(input, 4, 4)
+        bytes.reserve(out, total)
+        var position: int := 8
+        while position < input.size && out.size < total {
+            var flags: int := bytes.get(input, position)
+            position := position + 1
+            var item: int := 0
+            while item < 8 && position < input.size && out.size < total {
+                if ((flags >> item) & 1) = 1 {
+                    var low: int := bytes.get(input, position)
+                    var high: int := bytes.get(input, position + 1)
+                    position := position + 2
+                    var offset: int := (low | ((high >> 4) << 8)) + 1
+                    var length: int := (high & 15) + 3
+                    var k: int := 0
+                    while k < length {
+                        bytes.push(out, bytes.get(out, out.size - offset))
+                        k := k + 1
+                    }
+                }
+                else {
+                    bytes.push(out, bytes.get(input, position))
+                    position := position + 1
+                }
+                item := item + 1
+            }
+        }
+        return out
+    end
+
+    fn compress_string(text: string): *bytes.Buffer
+    begin
+        return compress(bytes.from_string(text))
+    end
+
+    fn decompress_string(data: *bytes.Buffer): string
+    begin
+        return bytes.to_string(decompress(data))
+    end
+end

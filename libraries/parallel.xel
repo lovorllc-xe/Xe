@@ -1,0 +1,117 @@
+// parallel: split integer ranges across threads and combine results (parallel for / reduce).
+//   fn work(task: *void): int    -- read the range with parallel.start(task) / parallel.finish(task)
+//   var total: int := parallel.sum(&work, 0, 1000000, 8, data)
+uses sysinfo
+
+module parallel
+begin
+    type Task: record
+    begin
+        start: int
+        finish: int
+        index: int
+        data: *void
+    end
+
+    fn start(task: *void): int
+    begin
+        var t: *parallel.Task := task
+        return t.start
+    end
+
+    fn finish(task: *void): int
+    begin
+        var t: *parallel.Task := task
+        return t.finish
+    end
+
+    fn index(task: *void): int
+    begin
+        var t: *parallel.Task := task
+        return t.index
+    end
+
+    fn data(task: *void): *void
+    begin
+        var t: *parallel.Task := task
+        return t.data
+    end
+
+    fn workers(): int
+    begin
+        return sysinfo.cpu_count()
+    end
+
+    // Runs worker on `threads` equal slices of [low, high) and returns the sum of worker results.
+    fn sum(worker: *void, low: int, high: int, threads: int, shared: *void): int
+    begin
+        var count: int := threads
+        if count < 1 { count := workers() }
+        if count > high - low { count := high - low }
+        if count < 1 { count := 1 }
+        var tasks: *parallel.Task := alloc(count * 32)
+        var ids: *int := alloc(count * 8)
+        var span: int := (high - low) / count
+        var extra: int := (high - low) % count
+        var cursor: int := low
+        var index: int := 0
+        while index < count {
+            var task: *parallel.Task := tasks + index * 4
+            var size: int := span
+            if index < extra { size := size + 1 }
+            task.start := cursor
+            task.finish := cursor + size
+            task.index := index
+            task.data := shared
+            cursor := cursor + size
+            *(ids + index) := thread.start(worker, task)
+            index := index + 1
+        }
+        var total: int := 0
+        index := 0
+        while index < count {
+            total := total + thread.join(*(ids + index))
+            index := index + 1
+        }
+        free(ids)
+        free(tasks)
+        return total
+    end
+
+    // Same as sum but returns the largest worker result.
+    fn max(worker: *void, low: int, high: int, threads: int, shared: *void): int
+    begin
+        var count: int := threads
+        if count < 1 { count := workers() }
+        if count > high - low { count := high - low }
+        if count < 1 { count := 1 }
+        var tasks: *parallel.Task := alloc(count * 32)
+        var ids: *int := alloc(count * 8)
+        var span: int := (high - low) / count
+        var extra: int := (high - low) % count
+        var cursor: int := low
+        var index: int := 0
+        while index < count {
+            var task: *parallel.Task := tasks + index * 4
+            var size: int := span
+            if index < extra { size := size + 1 }
+            task.start := cursor
+            task.finish := cursor + size
+            task.index := index
+            task.data := shared
+            cursor := cursor + size
+            *(ids + index) := thread.start(worker, task)
+            index := index + 1
+        }
+        var best: int := -9223372036854775807
+        index := 0
+        while index < count {
+            var result: int := thread.join(*(ids + index))
+            if result > best { best := result }
+            index := index + 1
+        }
+        free(ids)
+        free(tasks)
+        return best
+    end
+end

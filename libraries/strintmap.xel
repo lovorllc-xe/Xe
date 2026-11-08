@@ -1,0 +1,180 @@
+// strintmap: string -> int hash map, handy for counters and symbol tables.
+module strintmap
+begin
+    type Map: record
+    begin
+        keys: *string
+        values: *int
+        hashes: *int
+        capacity: int
+        size: int
+        used: int
+    end
+
+    fn hash(key: string): int
+    begin
+        var value: int := 1469598103934665603
+        var index: int := 0
+        var size: int := str.length(key)
+        while index < size {
+            value := (value ^ str.char(key, index)) * 1099511628211
+            index := index + 1
+        }
+        if value <= 1 { value := value + 2 }
+        return value
+    end
+
+    fn new(): *strintmap.Map
+    begin
+        var map: *strintmap.Map := alloc(48)
+        map.keys := alloc(128)
+        map.values := alloc(128)
+        map.hashes := alloc(128)
+        map.capacity := 16
+        map.size := 0
+        map.used := 0
+        return map
+    end
+
+    fn find(map: *strintmap.Map, key: string): int
+    begin
+        var wanted: int := hash(key)
+        var mask: int := map.capacity - 1
+        var index: int := wanted & mask
+        var probes: int := 0
+        while probes < map.capacity {
+            var stored: int := *(map.hashes + index)
+            if stored = 0 { return -1 }
+            if stored = wanted {
+                if *(map.keys + index) = key { return index }
+            }
+            index := (index + 1) & mask
+            probes := probes + 1
+        }
+        return -1
+    end
+
+    fn grow(map: *strintmap.Map)
+    begin
+        var oldKeys: *string := map.keys
+        var oldValues: *int := map.values
+        var oldHashes: *int := map.hashes
+        var oldCapacity: int := map.capacity
+        var capacity: int := oldCapacity
+        if map.size * 2 >= oldCapacity { capacity := oldCapacity * 2 }
+        map.keys := alloc(capacity * 8)
+        map.values := alloc(capacity * 8)
+        map.hashes := alloc(capacity * 8)
+        map.capacity := capacity
+        map.size := 0
+        map.used := 0
+        var index: int := 0
+        while index < oldCapacity {
+            if *(oldHashes + index) > 1 || *(oldHashes + index) < 0 { put(map, *(oldKeys + index), *(oldValues + index)) }
+            index := index + 1
+        }
+        free(oldKeys)
+        free(oldValues)
+        free(oldHashes)
+    end
+
+    fn put(map: *strintmap.Map, key: string, value: int)
+    begin
+        if (map.used + 1) * 4 >= map.capacity * 3 { grow(map) }
+        var wanted: int := hash(key)
+        var mask: int := map.capacity - 1
+        var index: int := wanted & mask
+        var tomb: int := -1
+        var searching: int := 1
+        while searching = 1 {
+            var stored: int := *(map.hashes + index)
+            if stored = 0 {
+                if tomb >= 0 { index := tomb }
+                else { map.used := map.used + 1 }
+                *(map.keys + index) := key
+                *(map.values + index) := value
+                *(map.hashes + index) := wanted
+                map.size := map.size + 1
+                searching := 0
+            }
+            else {
+                if stored = wanted && *(map.keys + index) = key {
+                    *(map.values + index) := value
+                    searching := 0
+                }
+                else {
+                    if stored = 1 && tomb < 0 { tomb := index }
+                    index := (index + 1) & mask
+                }
+            }
+        }
+    end
+
+    fn get(map: *strintmap.Map, key: string, fallback: int): int
+    begin
+        var index: int := find(map, key)
+        if index < 0 { return fallback }
+        return *(map.values + index)
+    end
+
+    fn has(map: *strintmap.Map, key: string): int
+    begin
+        return find(map, key) >= 0
+    end
+
+    fn add(map: *strintmap.Map, key: string, amount: int): int
+    begin
+        var index: int := find(map, key)
+        if index < 0 {
+            put(map, key, amount)
+            return amount
+        }
+        *(map.values + index) := *(map.values + index) + amount
+        return *(map.values + index)
+    end
+
+    fn remove(map: *strintmap.Map, key: string): int
+    begin
+        var index: int := find(map, key)
+        if index < 0 { return 0 }
+        *(map.hashes + index) := 1
+        *(map.keys + index) := ""
+        map.size := map.size - 1
+        return 1
+    end
+
+    fn len(map: *strintmap.Map): int
+    begin
+        return map.size
+    end
+
+    fn capacity(map: *strintmap.Map): int
+    begin
+        return map.capacity
+    end
+
+    fn occupied(map: *strintmap.Map, slot: int): int
+    begin
+        if slot < 0 || slot >= map.capacity { return 0 }
+        var stored: int := *(map.hashes + slot)
+        return stored > 1 || stored < 0
+    end
+
+    fn key_at(map: *strintmap.Map, slot: int): string
+    begin
+        return *(map.keys + slot)
+    end
+
+    fn value_at(map: *strintmap.Map, slot: int): int
+    begin
+        return *(map.values + slot)
+    end
+
+    fn release(map: *strintmap.Map)
+    begin
+        free(map.keys)
+        free(map.values)
+        free(map.hashes)
+        free(map)
+    end
+end

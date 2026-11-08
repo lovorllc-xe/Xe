@@ -1,0 +1,109 @@
+// hex: hexadecimal encoding, decoding and dumps.
+module hex
+begin
+    fn encode(text: string): string
+    begin
+        var digits: string := "0123456789abcdef"
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            out := str.append(out, str.slice(digits, c / 16, c / 16 + 1) + str.slice(digits, c % 16, c % 16 + 1))
+            index := index + 1
+        }
+        return out
+    end
+
+    fn encode_upper(text: string): string
+    begin
+        var digits: string := "0123456789ABCDEF"
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            out := str.append(out, str.slice(digits, c / 16, c / 16 + 1) + str.slice(digits, c % 16, c % 16 + 1))
+            index := index + 1
+        }
+        return out
+    end
+
+    fn nibble(c: int): int
+    begin
+        if c >= 48 && c <= 57 { return c - 48 }
+        if c >= 97 && c <= 102 { return c - 87 }
+        if c >= 65 && c <= 70 { return c - 55 }
+        return -1
+    end
+
+    fn decode(text: string): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        var pending: int := -1
+        while index < str.length(text) {
+            var v: int := nibble(str.char(text, index))
+            if v >= 0 {
+                if pending < 0 { pending := v }
+                else {
+                    out := str.append(out, str.fromchar(pending * 16 + v))
+                    pending := -1
+                }
+            }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn from_int(value: int, width: int): string
+    begin
+        var digits: string := "0123456789abcdef"
+        var out: string := ""
+        var index: int := 0
+        while index < width {
+            var v: int := (value >> (index * 4)) & 15
+            out := str.slice(digits, v, v + 1) + out
+            index := index + 1
+        }
+        return out
+    end
+
+    fn to_int(text: string): int
+    begin
+        var value: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            var v: int := nibble(str.char(text, index))
+            if v >= 0 { value := value * 16 + v }
+            index := index + 1
+        }
+        return value
+    end
+
+    // Classic hex dump: offset, 16 bytes, ASCII column.
+    fn dump(text: string): string
+    begin
+        var out: string := str.builder("")
+        var offset: int := 0
+        var size: int := str.length(text)
+        while offset < size {
+            out := str.append(out, from_int(offset, 8) + "  ")
+            var k: int := 0
+            while k < 16 {
+                if offset + k < size { out := str.append(out, from_int(str.char(text, offset + k), 2) + " ") }
+                else { out := str.append(out, "   ") }
+                k := k + 1
+            }
+            out := str.append(out, " |")
+            k := 0
+            while k < 16 && offset + k < size {
+                var c: int := str.char(text, offset + k)
+                if c >= 32 && c < 127 { out := str.append(out, str.fromchar(c)) }
+                else { out := str.append(out, ".") }
+                k := k + 1
+            }
+            out := str.append(out, "|\n")
+            offset := offset + 16
+        }
+        return out
+    end
+end

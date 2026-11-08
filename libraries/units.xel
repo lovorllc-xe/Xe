@@ -1,0 +1,112 @@
+// units: convert between length, mass, volume, time, speed, data-size and temperature units.
+uses strings
+
+module units
+begin
+    // Each table is "name=factor" pairs relative to the base unit of the category.
+    fn table(category: int): string
+    begin
+        if category = 0 { return "mm=0.001 cm=0.01 m=1 km=1000 in=0.0254 ft=0.3048 yd=0.9144 mi=1609.344 nmi=1852" }
+        if category = 1 { return "mg=0.000001 g=0.001 kg=1 t=1000 oz=0.028349523125 lb=0.45359237 st=6.35029318" }
+        if category = 2 { return "ml=0.001 cl=0.01 l=1 m3=1000 tsp=0.00492892159375 tbsp=0.01478676478125 floz=0.0295735295625 cup=0.2365882365 pt=0.473176473 qt=0.946352946 gal=3.785411784" }
+        if category = 3 { return "ns=0.000000001 us=0.000001 ms=0.001 s=1 min=60 h=3600 d=86400 wk=604800 yr=31557600" }
+        if category = 4 { return "mps=1 kph=0.277777777777778 mph=0.44704 kn=0.514444444444444 fps=0.3048" }
+        return "b=1 kb=1000 mb=1000000 gb=1000000000 tb=1000000000000 kib=1024 mib=1048576 gib=1073741824 tib=1099511627776 bit=0.125"
+    end
+
+    fn factor_in(category: int, unit: string): flt
+    begin
+        var entries: string := table(category)
+        var start: int := 0
+        var index: int := 0
+        while index <= str.length(entries) {
+            if index = str.length(entries) || str.char(entries, index) = 32 {
+                var entry: string := str.slice(entries, start, index)
+                var eq: int := strings.index_of(entry, "=")
+                if str.slice(entry, 0, eq) = unit { return parse_number(str.slice(entry, eq + 1, str.length(entry))) }
+                start := index + 1
+            }
+            index := index + 1
+        }
+        return -1.0
+    end
+
+    fn parse_number(text: string): flt
+    begin
+        var value: flt := 0.0
+        var i: int := 0
+        while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+            value := value * 10.0 + (str.char(text, i) - 48)
+            i := i + 1
+        }
+        if i < str.length(text) && str.char(text, i) = 46 {
+            i := i + 1
+            var scale: flt := 0.1
+            while i < str.length(text) {
+                value := value + scale * (str.char(text, i) - 48)
+                scale := scale * 0.1
+                i := i + 1
+            }
+        }
+        return value
+    end
+
+    fn category_of(unit: string): int
+    begin
+        var c: int := 0
+        while c < 6 {
+            if factor_in(c, unit) > 0.0 { return c }
+            c := c + 1
+        }
+        return -1
+    end
+
+    fn is_temperature(unit: string): int
+    begin
+        return unit = "c" || unit = "f" || unit = "k"
+    end
+
+    fn convert_temperature(value: flt, from: string, to: string): flt
+    begin
+        var kelvin: flt := value
+        if from = "c" { kelvin := value + 273.15 }
+        if from = "f" { kelvin := (value - 32.0) * 5.0 / 9.0 + 273.15 }
+        if to = "c" { return kelvin - 273.15 }
+        if to = "f" { return (kelvin - 273.15) * 9.0 / 5.0 + 32.0 }
+        return kelvin
+    end
+
+    // Returns NaN-like 0 when units are unknown or incompatible; check with compatible() first.
+    fn convert(value: flt, from: string, to: string): flt
+    begin
+        var a: string := strings.to_lower(from)
+        var b: string := strings.to_lower(to)
+        if is_temperature(a) = 1 && is_temperature(b) = 1 { return convert_temperature(value, a, b) }
+        var category: int := category_of(a)
+        if category < 0 || category != category_of(b) { return 0.0 }
+        return value * factor_in(category, a) / factor_in(category, b)
+    end
+
+    fn compatible(from: string, to: string): int
+    begin
+        var a: string := strings.to_lower(from)
+        var b: string := strings.to_lower(to)
+        if is_temperature(a) = 1 && is_temperature(b) = 1 { return 1 }
+        var category: int := category_of(a)
+        return category >= 0 && category = category_of(b)
+    end
+
+    fn human_bytes(count: int): string
+    begin
+        var names: string := "B KBMBGBTBPB"
+        var value: flt := count * 1.0
+        var step: int := 0
+        while value >= 1024.0 && step < 5 {
+            value := value / 1024.0
+            step := step + 1
+        }
+        var parts: string := str.slice(names, step * 2, step * 2 + 2)
+        if step = 0 { return str.number(count) + " B" }
+        return flt.format(value, 1) + " " + strings.trim(parts)
+    end
+end

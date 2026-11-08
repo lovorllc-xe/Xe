@@ -1,0 +1,41 @@
+fn queens_rec(n: int, row: int, cols: int, d1: int, d2: int): int
+begin
+    if row = n {
+        return 1
+    }
+    var count: int := 0
+    var c: int := 0
+    while c < n {
+        var b1: int := 1 << c
+        var b2: int := 1 << (row + c)
+        var b3: int := 1 << (row - c + n)
+        if (cols & b1) = 0 && (d1 & b2) = 0 && (d2 & b3) = 0 {
+            count := count + queens_rec(n, row + 1, cols | b1, d1 | b2, d2 | b3)
+        }
+        c := c + 1
+    }
+    return count
+end
+
+fn queens(n: int): int
+begin
+    return queens_rec(n, 0, 0, 0, 0)
+end
+
+fn parse(text: string): int
+begin
+    var value: int := 0
+    var i: int := 0
+    while i < str.length(text) {
+        value := value * 10 + str.char(text, i) - 48
+        i := i + 1
+    }
+    return value
+end
+
+fn main(): int
+begin
+    var n: int := parse(arg.get(0))
+    writeln(queens(n))
+    return 0
+end

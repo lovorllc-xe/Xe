@@ -1,0 +1,98 @@
+// rational: exact fractions with normalized sign and lowest terms.
+uses numeric
+
+module rational
+begin
+    type Ratio: record
+    begin
+        num: int
+        den: int
+    end
+
+    fn make(num: int, den: int): rational.Ratio
+    begin
+        var result: rational.Ratio
+        var n: int := num
+        var d: int := den
+        if d = 0 {
+            result.num := 0
+            result.den := 0
+            return result
+        }
+        if d < 0 {
+            n := -n
+            d := -d
+        }
+        var divisor: int := numeric.gcd(n, d)
+        if divisor = 0 { divisor := 1 }
+        result.num := n / divisor
+        result.den := d / divisor
+        return result
+    end
+
+    fn from_int(value: int): rational.Ratio
+    begin
+        return make(value, 1)
+    end
+
+    fn add(a: rational.Ratio, b: rational.Ratio): rational.Ratio
+    begin
+        return make(a.num * b.den + b.num * a.den, a.den * b.den)
+    end
+
+    fn sub(a: rational.Ratio, b: rational.Ratio): rational.Ratio
+    begin
+        return make(a.num * b.den - b.num * a.den, a.den * b.den)
+    end
+
+    fn mul(a: rational.Ratio, b: rational.Ratio): rational.Ratio
+    begin
+        return make(a.num * b.num, a.den * b.den)
+    end
+
+    fn div(a: rational.Ratio, b: rational.Ratio): rational.Ratio
+    begin
+        return make(a.num * b.den, a.den * b.num)
+    end
+
+    fn compare(a: rational.Ratio, b: rational.Ratio): int
+    begin
+        var left: int := a.num * b.den
+        var right: int := b.num * a.den
+        if left < right { return -1 }
+        if left > right { return 1 }
+        return 0
+    end
+
+    fn equal(a: rational.Ratio, b: rational.Ratio): int
+    begin
+        return a.num = b.num && a.den = b.den
+    end
+
+    fn to_flt(a: rational.Ratio): flt
+    begin
+        if a.den = 0 { return 0.0 }
+        return a.num / (a.den * 1.0)
+    end
+
+    fn to_string(a: rational.Ratio): string
+    begin
+        if a.den = 1 { return str.number(a.num) }
+        return str.number(a.num) + "/" + str.number(a.den)
+    end
+
+    fn reciprocal(a: rational.Ratio): rational.Ratio
+    begin
+        return make(a.den, a.num)
+    end
+
+    fn numerator(a: rational.Ratio): int
+    begin
+        return a.num
+    end
+
+    fn denominator(a: rational.Ratio): int
+    begin
+        return a.den
+    end
+end

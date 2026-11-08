@@ -1,0 +1,119 @@
+module memo
+begin
+    // A process-wide string-to-string cache. The compiler's type and symbol
+    // lookups are pure functions of the source text, so their results can be
+    // reused for the rest of a compilation.
+    fn mask(): int
+    begin
+        return 524287
+    end
+
+    fn ready()
+    begin
+        var words: *[256]int := runtime.globals()
+        if (*words)[0] != 0 { return }
+        var slots: *[256]*void := runtime.globals()
+        (*slots)[1] := alloc(524289 * 8)
+        (*slots)[2] := alloc(524289 * 8)
+        (*slots)[3] := alloc(524289 * 8)
+        (*words)[4] := 0
+        (*words)[0] := 1
+    end
+
+    fn hash(key: string): int
+    begin
+        var value: int := 1469598103934665603
+        var index: int := 0
+        var size: int := str.length(key)
+        while index < size {
+            value := (value ^ str.char(key, index)) * 1099511628211
+            index := index + 1
+        }
+        return value | 1
+    end
+
+    fn slot(key: string, wanted: int): int
+    begin
+        ready()
+        var slots: *[256]*void := runtime.globals()
+        var keys: *[524288]string := (*slots)[1]
+        var hashes: *[524288]int := (*slots)[3]
+        var index: int := wanted & mask()
+        var probes: int := 0
+        while probes < 524288 {
+            var stored: int := (*hashes)[index]
+            if stored = 0 { return index }
+            if stored = wanted {
+                if (*keys)[index] = key { return index }
+            }
+            index := (index + 1) & mask()
+            probes := probes + 1
+        }
+        return -1
+    end
+
+    fn has(key: string): int
+    begin
+        var wanted: int := hash(key)
+        var index: int := slot(key, wanted)
+        if index < 0 { return 0 }
+        var slots: *[256]*void := runtime.globals()
+        var hashes: *[524288]int := (*slots)[3]
+        if (*hashes)[index] = wanted { return 1 }
+        return 0
+    end
+
+    fn get(key: string): string
+    begin
+        var wanted: int := hash(key)
+        var index: int := slot(key, wanted)
+        if index < 0 { return "" }
+        var slots: *[256]*void := runtime.globals()
+        var hashes: *[524288]int := (*slots)[3]
+        var values: *[524288]string := (*slots)[2]
+        if (*hashes)[index] != wanted { return "" }
+        return (*values)[index]
+    end
+
+    fn put(key: string, value: string): string
+    begin
+        var wanted: int := hash(key)
+        var index: int := slot(key, wanted)
+        if index < 0 { return value }
+        var words: *[256]int := runtime.globals()
+        var slots: *[256]*void := runtime.globals()
+        var keys: *[524288]string := (*slots)[1]
+        var values: *[524288]string := (*slots)[2]
+        var hashes: *[524288]int := (*slots)[3]
+        if (*hashes)[index] != wanted {
+            if (*words)[4] >= 393216 { return value }
+            (*words)[4] := (*words)[4] + 1
+            (*keys)[index] := key
+            (*hashes)[index] := wanted
+        }
+        (*values)[index] := value
+        return value
+    end
+
+    fn putNumber(key: string, value: int): int
+    begin
+        put(key, str.number(value))
+        return value
+    end
+
+    fn number(text: string): int
+    begin
+        var index: int := 0
+        var sign: int := 1
+        var value: int := 0
+        if str.length(text) > 0 && str.char(text, 0) = 45 {
+            sign := -1
+            index := 1
+        }
+        while index < str.length(text) {
+            value := value * 10 + str.char(text, index) - 48
+            index := index + 1
+        }
+        return value * sign
+    end
+end

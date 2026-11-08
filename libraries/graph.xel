@@ -1,0 +1,229 @@
+// graph: weighted directed graphs over nodes 0..n-1 with BFS, Dijkstra, topological sort, components.
+uses intlist
+uses deque
+uses heap
+uses unionfind
+
+module graph
+begin
+    type Graph: record
+    begin
+        nodes: int
+        head: *intlist.List
+        target: *intlist.List
+        weight: *intlist.List
+        next: *intlist.List
+    end
+
+    fn new(nodes: int): *graph.Graph
+    begin
+        var g: *graph.Graph := alloc(40)
+        g.nodes := nodes
+        g.head := intlist.with_capacity(nodes)
+        var i: int := 0
+        while i < nodes {
+            intlist.push(g.head, -1)
+            i := i + 1
+        }
+        g.target := intlist.new()
+        g.weight := intlist.new()
+        g.next := intlist.new()
+        return g
+    end
+
+    fn add_edge(g: *graph.Graph, from: int, to: int, weight: int)
+    begin
+        intlist.push(g.target, to)
+        intlist.push(g.weight, weight)
+        intlist.push(g.next, intlist.get(g.head, from))
+        intlist.set(g.head, from, intlist.len(g.target) - 1)
+    end
+
+    fn add_undirected(g: *graph.Graph, a: int, b: int, weight: int)
+    begin
+        add_edge(g, a, b, weight)
+        add_edge(g, b, a, weight)
+    end
+
+    fn edge_count(g: *graph.Graph): int
+    begin
+        return intlist.len(g.target)
+    end
+
+    fn degree(g: *graph.Graph, node: int): int
+    begin
+        var total: int := 0
+        var edge: int := intlist.get(g.head, node)
+        while edge >= 0 {
+            total := total + 1
+            edge := intlist.get(g.next, edge)
+        }
+        return total
+    end
+
+    fn neighbors(g: *graph.Graph, node: int): *intlist.List
+    begin
+        var out: *intlist.List := intlist.new()
+        var edge: int := intlist.get(g.head, node)
+        while edge >= 0 {
+            intlist.push(out, intlist.get(g.target, edge))
+            edge := intlist.get(g.next, edge)
+        }
+        intlist.reverse(out)
+        return out
+    end
+
+    // Unweighted hop counts from start; -1 for unreachable nodes.
+    fn bfs(g: *graph.Graph, start: int): *intlist.List
+    begin
+        var dist: *intlist.List := intlist.new()
+        var i: int := 0
+        while i < g.nodes {
+            intlist.push(dist, -1)
+            i := i + 1
+        }
+        var queue: *deque.Deque := deque.new()
+        intlist.set(dist, start, 0)
+        deque.push_back(queue, start)
+        while deque.empty(queue) = 0 {
+            var node: int := deque.pop_front(queue)
+            var edge: int := intlist.get(g.head, node)
+            while edge >= 0 {
+                var to: int := intlist.get(g.target, edge)
+                if intlist.get(dist, to) < 0 {
+                    intlist.set(dist, to, intlist.get(dist, node) + 1)
+                    deque.push_back(queue, to)
+                }
+                edge := intlist.get(g.next, edge)
+            }
+        }
+        deque.release(queue)
+        return dist
+    end
+
+    fn infinity(): int
+    begin
+        return 4611686018427387903
+    end
+
+    // Shortest weighted distances (non-negative weights); infinity() for unreachable nodes.
+    fn dijkstra(g: *graph.Graph, start: int): *intlist.List
+    begin
+        var dist: *intlist.List := intlist.new()
+        var i: int := 0
+        while i < g.nodes {
+            intlist.push(dist, infinity())
+            i := i + 1
+        }
+        var queue: *heap.Heap := heap.new()
+        intlist.set(dist, start, 0)
+        heap.push(queue, 0, start)
+        while heap.empty(queue) = 0 {
+            var d: int := heap.peek_priority(queue)
+            var node: int := heap.pop(queue)
+            if d <= intlist.get(dist, node) {
+                var edge: int := intlist.get(g.head, node)
+                while edge >= 0 {
+                    var to: int := intlist.get(g.target, edge)
+                    var candidate: int := d + intlist.get(g.weight, edge)
+                    if candidate < intlist.get(dist, to) {
+                        intlist.set(dist, to, candidate)
+                        heap.push(queue, candidate, to)
+                    }
+                    edge := intlist.get(g.next, edge)
+                }
+            }
+        }
+        heap.release(queue)
+        return dist
+    end
+
+    // Kahn's algorithm. Returns the order, or a shorter list when the graph has a cycle.
+    fn topological(g: *graph.Graph): *intlist.List
+    begin
+        var indegree: *intlist.List := intlist.new()
+        var i: int := 0
+        while i < g.nodes {
+            intlist.push(indegree, 0)
+            i := i + 1
+        }
+        var e: int := 0
+        while e < intlist.len(g.target) {
+            var to: int := intlist.get(g.target, e)
+            intlist.set(indegree, to, intlist.get(indegree, to) + 1)
+            e := e + 1
+        }
+        var queue: *deque.Deque := deque.new()
+        i := 0
+        while i < g.nodes {
+            if intlist.get(indegree, i) = 0 { deque.push_back(queue, i) }
+            i := i + 1
+        }
+        var order: *intlist.List := intlist.new()
+        while deque.empty(queue) = 0 {
+            var node: int := deque.pop_front(queue)
+            intlist.push(order, node)
+            var edge: int := intlist.get(g.head, node)
+            while edge >= 0 {
+                var to2: int := intlist.get(g.target, edge)
+                intlist.set(indegree, to2, intlist.get(indegree, to2) - 1)
+                if intlist.get(indegree, to2) = 0 { deque.push_back(queue, to2) }
+                edge := intlist.get(g.next, edge)
+            }
+        }
+        deque.release(queue)
+        return order
+    end
+
+    fn has_cycle(g: *graph.Graph): int
+    begin
+        return intlist.len(topological(g)) < g.nodes
+    end
+
+    // Number of connected components treating every edge as undirected.
+    fn components(g: *graph.Graph): int
+    begin
+        var sets: *unionfind.Sets := unionfind.new(g.nodes)
+        var node: int := 0
+        while node < g.nodes {
+            var edge: int := intlist.get(g.head, node)
+            while edge >= 0 {
+                unionfind.union(sets, node, intlist.get(g.target, edge))
+                edge := intlist.get(g.next, edge)
+            }
+            node := node + 1
+        }
+        return unionfind.groups(sets)
+    end
+
+    fn dfs_visit(g: *graph.Graph, node: int, seen: *intlist.List, order: *intlist.List)
+    begin
+        intlist.set(seen, node, 1)
+        intlist.push(order, node)
+        var edge: int := intlist.get(g.head, node)
+        var children: *intlist.List := intlist.new()
+        while edge >= 0 {
+            intlist.push(children, intlist.get(g.target, edge))
+            edge := intlist.get(g.next, edge)
+        }
+        var k: int := intlist.len(children) - 1
+        while k >= 0 {
+            var to: int := intlist.get(children, k)
+            if intlist.get(seen, to) = 0 { dfs_visit(g, to, seen, order) }
+            k := k - 1
+        }
+    end
+
+    fn dfs(g: *graph.Graph, start: int): *intlist.List
+    begin
+        var seen: *intlist.List := intlist.new()
+        var i: int := 0
+        while i < g.nodes {
+            intlist.push(seen, 0)
+            i := i + 1
+        }
+        var order: *intlist.List := intlist.new()
+        dfs_visit(g, start, seen, order)
+        return order
+    end
+end

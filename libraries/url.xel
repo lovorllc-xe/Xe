@@ -1,0 +1,189 @@
+// url: parse URLs, percent-encode/decode and parse query strings.
+uses strmap
+uses strings
+
+module url
+begin
+    type Url: record
+    begin
+        scheme: string
+        user: string
+        host: string
+        port: int
+        path: string
+        query: string
+        fragment: string
+    end
+
+    fn parse(text: string): *url.Url
+    begin
+        var result: *url.Url := alloc(56)
+        result.scheme := ""
+        result.user := ""
+        result.host := ""
+        result.port := 0
+        result.path := ""
+        result.query := ""
+        result.fragment := ""
+        var rest: string := text
+        var hash: int := strings.index_of(rest, "#")
+        if hash >= 0 {
+            result.fragment := str.slice(rest, hash + 1, str.length(rest))
+            rest := str.slice(rest, 0, hash)
+        }
+        var question: int := strings.index_of(rest, "?")
+        if question >= 0 {
+            result.query := str.slice(rest, question + 1, str.length(rest))
+            rest := str.slice(rest, 0, question)
+        }
+        var colon: int := strings.index_of(rest, "://")
+        if colon > 0 {
+            result.scheme := strings.to_lower(str.slice(rest, 0, colon))
+            rest := str.slice(rest, colon + 3, str.length(rest))
+            var slash: int := strings.index_of(rest, "/")
+            var authority: string := rest
+            if slash >= 0 {
+                authority := str.slice(rest, 0, slash)
+                result.path := str.slice(rest, slash, str.length(rest))
+            }
+            var at: int := strings.last_index_of(authority, "@")
+            if at >= 0 {
+                result.user := str.slice(authority, 0, at)
+                authority := str.slice(authority, at + 1, str.length(authority))
+            }
+            var portColon: int := strings.last_index_of(authority, ":")
+            if portColon >= 0 && strings.index_of(authority, "]") < portColon {
+                var portText: string := str.slice(authority, portColon + 1, str.length(authority))
+                var port: int := 0
+                var k: int := 0
+                while k < str.length(portText) {
+                    port := port * 10 + str.char(portText, k) - 48
+                    k := k + 1
+                }
+                result.port := port
+                authority := str.slice(authority, 0, portColon)
+            }
+            result.host := authority
+        }
+        else { result.path := rest }
+        if result.port = 0 {
+            if result.scheme = "http" { result.port := 80 }
+            if result.scheme = "https" { result.port := 443 }
+            if result.scheme = "ftp" { result.port := 21 }
+        }
+        if str.length(result.path) = 0 && str.length(result.host) > 0 { result.path := "/" }
+        return result
+    end
+
+    fn unreserved(c: int): int
+    begin
+        return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c = 45 || c = 46 || c = 95 || c = 126
+    end
+
+    fn encode(text: string): string
+    begin
+        var digits: string := "0123456789ABCDEF"
+        var out: string := str.builder("")
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            if unreserved(c) = 1 { out := str.append(out, str.fromchar(c)) }
+            else { out := str.append(out, "%" + str.slice(digits, c / 16, c / 16 + 1) + str.slice(digits, c % 16, c % 16 + 1)) }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn hex_value(c: int): int
+    begin
+        if c >= 48 && c <= 57 { return c - 48 }
+        if c >= 97 && c <= 102 { return c - 87 }
+        if c >= 65 && c <= 70 { return c - 55 }
+        return -1
+    end
+
+    fn decode(text: string): string
+    begin
+        var out: string := str.builder("")
+        var index: int := 0
+        var size: int := str.length(text)
+        while index < size {
+            var c: int := str.char(text, index)
+            if c = 37 && index + 2 < size && hex_value(str.char(text, index + 1)) >= 0 && hex_value(str.char(text, index + 2)) >= 0 {
+                out := str.append(out, str.fromchar(hex_value(str.char(text, index + 1)) * 16 + hex_value(str.char(text, index + 2))))
+                index := index + 3
+            }
+            else {
+                if c = 43 { out := str.append(out, " ") }
+                else { out := str.append(out, str.fromchar(c)) }
+                index := index + 1
+            }
+        }
+        return out
+    end
+
+    fn parse_query(query: string): *strmap.Map
+    begin
+        var map: *strmap.Map := strmap.new()
+        var start: int := 0
+        var index: int := 0
+        var size: int := str.length(query)
+        while index <= size {
+            if index = size || str.char(query, index) = 38 {
+                if index > start {
+                    var pair: string := str.slice(query, start, index)
+                    var eq: int := strings.index_of(pair, "=")
+                    if eq >= 0 { strmap.put(map, decode(str.slice(pair, 0, eq)), decode(str.slice(pair, eq + 1, str.length(pair)))) }
+                    else { strmap.put(map, decode(pair), "") }
+                }
+                start := index + 1
+            }
+            index := index + 1
+        }
+        return map
+    end
+
+    fn build_query(map: *strmap.Map): string
+    begin
+        var out: string := str.builder("")
+        var slot: int := 0
+        var first: int := 1
+        while slot < strmap.capacity(map) {
+            if strmap.occupied(map, slot) = 1 {
+                if first = 0 { out := str.append(out, "&") }
+                out := str.append(out, encode(strmap.key_at(map, slot)) + "=" + encode(strmap.value_at(map, slot)))
+                first := 0
+            }
+            slot := slot + 1
+        }
+        return out
+    end
+
+    fn to_string(u: *url.Url): string
+    begin
+        var out: string := str.builder("")
+        if str.length(u.scheme) > 0 { out := str.append(out, u.scheme + "://") }
+        if str.length(u.user) > 0 { out := str.append(out, u.user + "@") }
+        out := str.append(out, u.host)
+        var defaultPort: int := (u.scheme = "http" && u.port = 80) || (u.scheme = "https" && u.port = 443)
+        if u.port > 0 && defaultPort = 0 { out := str.append(out, ":" + str.number(u.port)) }
+        out := str.append(out, u.path)
+        if str.length(u.query) > 0 { out := str.append(out, "?" + u.query) }
+        if str.length(u.fragment) > 0 { out := str.append(out, "#" + u.fragment) }
+        return out
+    end
+
+    fn join(base: string, relative: string): string
+    begin
+        if strings.index_of(relative, "://") > 0 { return relative }
+        var u: *url.Url := parse(base)
+        if strings.starts_with(relative, "/") = 1 { u.path := relative }
+        else {
+            var slash: int := strings.last_index_of(u.path, "/")
+            u.path := str.slice(u.path, 0, slash + 1) + relative
+        }
+        u.query := ""
+        u.fragment := ""
+        return to_string(u)
+    end
+end

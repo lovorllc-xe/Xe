@@ -1,0 +1,184 @@
+// intmap: int -> int hash map with open addressing and automatic growth.
+module intmap
+begin
+    // states: 0 empty, 1 used, 2 deleted
+    type Map: record
+    begin
+        keys: *int
+        values: *int
+        states: *int
+        capacity: int
+        size: int
+        used: int
+    end
+
+    fn hash(key: int): int
+    begin
+        var value: int := key * 1099511628211
+        value := value ^ (value >> 29)
+        return value * 1609587929392839161
+    end
+
+    fn new(): *intmap.Map
+    begin
+        return intmap.with_capacity(16)
+    end
+
+    fn with_capacity(wanted: int): *intmap.Map
+    begin
+        var capacity: int := 16
+        while capacity < wanted * 2 { capacity := capacity * 2 }
+        var map: *intmap.Map := alloc(48)
+        map.keys := alloc(capacity * 8)
+        map.values := alloc(capacity * 8)
+        map.states := alloc(capacity * 8)
+        map.capacity := capacity
+        map.size := 0
+        map.used := 0
+        return map
+    end
+
+    fn find(map: *intmap.Map, key: int): int
+    begin
+        var mask: int := map.capacity - 1
+        var index: int := hash(key) & mask
+        var probes: int := 0
+        while probes < map.capacity {
+            var state: int := *(map.states + index)
+            if state = 0 { return -1 }
+            if state = 1 && *(map.keys + index) = key { return index }
+            index := (index + 1) & mask
+            probes := probes + 1
+        }
+        return -1
+    end
+
+    fn grow(map: *intmap.Map)
+    begin
+        var oldKeys: *int := map.keys
+        var oldValues: *int := map.values
+        var oldStates: *int := map.states
+        var oldCapacity: int := map.capacity
+        var capacity: int := oldCapacity
+        if map.size * 2 >= oldCapacity { capacity := oldCapacity * 2 }
+        map.keys := alloc(capacity * 8)
+        map.values := alloc(capacity * 8)
+        map.states := alloc(capacity * 8)
+        map.capacity := capacity
+        map.size := 0
+        map.used := 0
+        var index: int := 0
+        while index < oldCapacity {
+            if *(oldStates + index) = 1 { put(map, *(oldKeys + index), *(oldValues + index)) }
+            index := index + 1
+        }
+        free(oldKeys)
+        free(oldValues)
+        free(oldStates)
+    end
+
+    fn put(map: *intmap.Map, key: int, value: int)
+    begin
+        if (map.used + 1) * 4 >= map.capacity * 3 { grow(map) }
+        var mask: int := map.capacity - 1
+        var index: int := hash(key) & mask
+        var tomb: int := -1
+        var searching: int := 1
+        while searching = 1 {
+            var state: int := *(map.states + index)
+            if state = 0 {
+                if tomb >= 0 { index := tomb }
+                else { map.used := map.used + 1 }
+                *(map.keys + index) := key
+                *(map.values + index) := value
+                *(map.states + index) := 1
+                map.size := map.size + 1
+                searching := 0
+            }
+            else {
+                if state = 1 && *(map.keys + index) = key {
+                    *(map.values + index) := value
+                    searching := 0
+                }
+                else {
+                    if state = 2 && tomb < 0 { tomb := index }
+                    index := (index + 1) & mask
+                }
+            }
+        }
+    end
+
+    fn get(map: *intmap.Map, key: int, fallback: int): int
+    begin
+        var index: int := find(map, key)
+        if index < 0 { return fallback }
+        return *(map.values + index)
+    end
+
+    fn has(map: *intmap.Map, key: int): int
+    begin
+        return find(map, key) >= 0
+    end
+
+    fn add(map: *intmap.Map, key: int, amount: int): int
+    begin
+        var index: int := find(map, key)
+        if index < 0 {
+            put(map, key, amount)
+            return amount
+        }
+        *(map.values + index) := *(map.values + index) + amount
+        return *(map.values + index)
+    end
+
+    fn remove(map: *intmap.Map, key: int): int
+    begin
+        var index: int := find(map, key)
+        if index < 0 { return 0 }
+        *(map.states + index) := 2
+        map.size := map.size - 1
+        return 1
+    end
+
+    fn len(map: *intmap.Map): int
+    begin
+        return map.size
+    end
+
+    // Iteration: slot indexes from 0 to capacity()-1; skip slots where occupied() is 0.
+    fn capacity(map: *intmap.Map): int
+    begin
+        return map.capacity
+    end
+
+    fn occupied(map: *intmap.Map, slot: int): int
+    begin
+        if slot < 0 || slot >= map.capacity { return 0 }
+        return *(map.states + slot) = 1
+    end
+
+    fn key_at(map: *intmap.Map, slot: int): int
+    begin
+        return *(map.keys + slot)
+    end
+
+    fn value_at(map: *intmap.Map, slot: int): int
+    begin
+        return *(map.values + slot)
+    end
+
+    fn clear(map: *intmap.Map)
+    begin
+        runtime.mem.set(map.states, 0, map.capacity * 8)
+        map.size := 0
+        map.used := 0
+    end
+
+    fn release(map: *intmap.Map)
+    begin
+        free(map.keys)
+        free(map.values)
+        free(map.states)
+        free(map)
+    end
+end

@@ -1,65 +1,49 @@
-Xe Linux installer bundle
-=============================
+Xe 2.0.0 for Linux x86-64
+=========================
 
-This folder contains the Xe sources, a temporary C++ bootstrap compiler
-source, the self-hosted compiler source, standard modules, and source
-libraries. It is intended for Linux x86-64 PCs.
+Option 1: prebuilt release tarball (recommended)
+------------------------------------------------
 
-Requirements
-------------
+    tar xzf xe-2.0.0-linux-x86_64.tar.gz
+    cd xe-2.0.0-linux-x86_64
+    ./install.sh
 
-- CMake 3.16 or newer
-- A C++20 compiler (g++ or clang++)
-- GNU assembler and linker (as and ld)
-- GNU coreutils and the test utilities used by `tests/run_tests.sh`
+Run as a normal user to install into ~/.local, or with sudo to install into
+/usr/local. Choose another prefix with:
 
-Install
--------
+    PREFIX=/opt/xe ./install.sh
 
-Copy this entire xelang-linux-installer folder to the Linux PC. In a terminal,
-open that folder and run:
+The tarball contains bin/xe, lib/xelang/{std,compiler,libraries}, share/xe
+(logo, docs), install.sh and uninstall.sh. The compiler finds its libraries
+relative to its own location (../lib/xelang), so the folder can also be used
+in place: ./bin/xe works without installing as long as lib/ stays next to it.
+To remove Xe: ./uninstall.sh (same PREFIX rules).
+
+Option 2: build from the repository
+-----------------------------------
+
+Requirements: GNU as and ld (binutils), gzip, bash.
+No C or C++ compiler and no CMake are needed.
 
     ./install/install.sh
 
-The script builds the C++ bootstrap compiler and uses it to build the
-self-hosted compiler. It installs the self-hosted compiler as `xe` in
-`$HOME/.local/bin` for a normal user or `/usr/local/bin` when run as root. The
-compiler and library files are installed under the matching `lib/xelang`
-directory. It runs `tests/run_tests.sh` after installation. Temporary build
-files are removed automatically. Use `sudo ./install/install.sh` to install system
-wide, or set `PREFIX` to choose another destination.
+The script assembles bootstrap/xe-seed.s.gz, compiles the compiler with itself
+twice, verifies that both generations produce byte-identical assembly (the
+self-hosting fixpoint), installs xe and the libraries, and runs tests/run_tests.sh.
+
+Make your own tarball:
+
+    scripts/make-release.sh        # writes dist/xe-2.0.0-linux-x86_64.tar.gz
+
+After changing compiler/*.xe, refresh the seed so fresh checkouts still build:
+
+    scripts/update-seed.sh
 
 Verify
 ------
 
-    xe --version
+    xe --version        # prints the colored logo and "Xe 2.0.0"
+    xe --build hello.xe -o hello
+    ./hello
 
-Build and run a Xe source file:
-
-    xe --build hello.xe -o hello.xee
-    ./hello.xee
-
-To install into a different writable location:
-
-    PREFIX="$HOME/.local" ./install/install.sh
-    "$HOME/.local/bin/xe" --version
-
-Current implementation notes
------------------------------
-
-The installed `xe` command is built from the self-hosted compiler sources,
-including support for records, fixed arrays, and library imports. It supplies
-the installed `.xel` library directory by default. Generated programs include
-their runtime directly.
-
-Create macOS and Windows installer bundles
-------------------------------------------
-
-Run this on any machine with Python 3:
-
-    python3 scripts/build_platform_installers.py
-
-It creates a macOS `.tar.gz` bundle and a Windows `.zip` bundle under `dist/`.
-The bundles build the Xe compiler on their target operating system. See
-`README-INSTALL-MACOS.txt` and `README-INSTALL-WINDOWS.txt` inside each bundle
-for platform requirements and current backend limitations.
+Environment: XE_HOME overrides the directory that holds std/ and libraries/.

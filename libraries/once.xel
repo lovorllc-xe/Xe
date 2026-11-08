@@ -1,0 +1,56 @@
+// once: run initialization exactly once across threads; also a simple spinlock.
+uses mutex
+
+module once
+begin
+    type Once: record
+    begin
+        state: *void
+        lock: *void
+    end
+
+    fn new(): *once.Once
+    begin
+        var o: *once.Once := alloc(16)
+        o.state := alloc(8)
+        atomic.store(o.state, 0)
+        o.lock := mutex.new()
+        return o
+    end
+
+    // Returns 1 for exactly one caller, which must then call finish(); other callers wait.
+    fn begin_once(o: *once.Once): int
+    begin
+        if atomic.load(o.state) = 2 { return 0 }
+        mutex.lock(o.lock)
+        if atomic.load(o.state) = 0 {
+            atomic.store(o.state, 1)
+            return 1
+        }
+        mutex.unlock(o.lock)
+        return 0
+    end
+
+    fn finish(o: *once.Once)
+    begin
+        atomic.store(o.state, 2)
+        mutex.unlock(o.lock)
+    end
+
+    fn done(o: *once.Once): int
+    begin
+        return atomic.load(o.state) = 2
+    end
+
+    fn spin_lock(cell: *void)
+    begin
+        while atomic.compare_exchange(cell, 0, 1) = 0 {
+            while atomic.load(cell) != 0 { }
+        }
+    end
+
+    fn spin_unlock(cell: *void)
+    begin
+        atomic.store(cell, 0)
+    end
+end

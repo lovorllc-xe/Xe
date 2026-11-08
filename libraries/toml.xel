@@ -1,0 +1,119 @@
+// toml: parse a practical TOML subset into a strmap keyed by "table.key" (strings, ints, floats, bools, arrays).
+uses strmap
+uses strlist
+uses strings
+
+module toml
+begin
+    fn parse_value(raw: string): string
+    begin
+        var v: string := strings.trim(raw)
+        if str.length(v) >= 2 && str.char(v, 0) = 34 {
+            var close: int := strings.last_index_of(v, str.fromchar(34))
+            if close > 0 {
+                var inner: string := str.slice(v, 1, close)
+                inner := strings.replace(inner, "\\n", "\n")
+                inner := strings.replace(inner, "\\t", "\t")
+                inner := strings.replace(inner, "\\" + str.fromchar(34), str.fromchar(34))
+                return strings.replace(inner, "\\\\", "\\")
+            }
+        }
+        if str.length(v) >= 2 && str.char(v, 0) = 39 { return str.slice(v, 1, strings.last_index_of(v, "'")) }
+        var hash: int := strings.index_of(v, " #")
+        if hash >= 0 { v := strings.trim(str.slice(v, 0, hash)) }
+        return strings.replace(v, "_", "")
+    end
+
+    fn parse(text: string): *strmap.Map
+    begin
+        var map: *strmap.Map := strmap.new()
+        var lines: *strlist.List := strlist.lines(text)
+        var table: string := ""
+        var i: int := 0
+        while i < strlist.len(lines) {
+            var line: string := strings.trim(strlist.get(lines, i))
+            if str.length(line) > 0 && str.char(line, 0) != 35 {
+                if str.char(line, 0) = 91 && strings.ends_with(line, "]") = 1 {
+                    table := strings.trim(str.slice(line, 1, str.length(line) - 1))
+                }
+                else {
+                    var eq: int := strings.index_of(line, "=")
+                    if eq > 0 {
+                        var key: string := strings.trim(str.slice(line, 0, eq))
+                        var raw: string := strings.trim(str.slice(line, eq + 1, str.length(line)))
+                        while strings.starts_with(raw, "[") = 1 && strings.contains(raw, "]") = 0 && i + 1 < strlist.len(lines) {
+                            i := i + 1
+                            raw := raw + " " + strings.trim(strlist.get(lines, i))
+                        }
+                        if str.length(table) > 0 { key := table + "." + key }
+                        if strings.starts_with(raw, "[") = 1 { strmap.put(map, key, strings.trim(raw)) }
+                        else { strmap.put(map, key, parse_value(raw)) }
+                    }
+                }
+            }
+            i := i + 1
+        }
+        return map
+    end
+
+    fn load(path: string): *strmap.Map
+    begin
+        return parse(file.read(path))
+    end
+
+    fn get(map: *strmap.Map, key: string, fallback: string): string
+    begin
+        return strmap.get(map, key, fallback)
+    end
+
+    fn get_int(map: *strmap.Map, key: string, fallback: int): int
+    begin
+        var t: string := strmap.get(map, key, "")
+        if str.length(t) = 0 { return fallback }
+        var negative: int := 0
+        var i: int := 0
+        if str.char(t, 0) = 45 {
+            negative := 1
+            i := 1
+        }
+        var v: int := 0
+        while i < str.length(t) && str.char(t, i) >= 48 && str.char(t, i) <= 57 {
+            v := v * 10 + str.char(t, i) - 48
+            i := i + 1
+        }
+        if negative = 1 { return -v }
+        return v
+    end
+
+    fn get_bool(map: *strmap.Map, key: string, fallback: int): int
+    begin
+        var t: string := strmap.get(map, key, "")
+        if str.length(t) = 0 { return fallback }
+        return t = "true"
+    end
+
+    // Items of an array value such as ["a", 2, 3.5] as a list of strings (quotes removed).
+    fn get_array(map: *strmap.Map, key: string): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var raw: string := strmap.get(map, key, "")
+        if str.length(raw) < 2 { return out }
+        var inner: string := strings.trim(str.slice(raw, 1, strings.last_index_of(raw, "]")))
+        var current: string := str.builder("")
+        var quote: int := 0
+        var i: int := 0
+        while i <= str.length(inner) {
+            var c: int := 44
+            if i < str.length(inner) { c := str.char(inner, i) }
+            if c = 34 { quote := 1 - quote }
+            if c = 44 && quote = 0 {
+                var item: string := strings.trim(current)
+                if str.length(item) > 0 { strlist.push(out, parse_value(item)) }
+                current := str.builder("")
+            }
+            else { current := str.append(current, str.fromchar(c)) }
+            i := i + 1
+        }
+        return out
+    end
+end

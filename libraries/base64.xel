@@ -1,0 +1,86 @@
+// base64: standard and URL-safe Base64 encoding and decoding.
+module base64
+begin
+    fn encode_with(text: string, alphabet: string, pad: int): string
+    begin
+        var out: string := str.builder("")
+        var size: int := str.length(text)
+        var index: int := 0
+        while index + 2 < size {
+            var n: int := (str.char(text, index) << 16) | (str.char(text, index + 1) << 8) | str.char(text, index + 2)
+            out := str.append(out, str.slice(alphabet, (n >> 18) & 63, ((n >> 18) & 63) + 1))
+            out := str.append(out, str.slice(alphabet, (n >> 12) & 63, ((n >> 12) & 63) + 1))
+            out := str.append(out, str.slice(alphabet, (n >> 6) & 63, ((n >> 6) & 63) + 1))
+            out := str.append(out, str.slice(alphabet, n & 63, (n & 63) + 1))
+            index := index + 3
+        }
+        var rest: int := size - index
+        if rest = 1 {
+            var a: int := str.char(text, index) << 16
+            out := str.append(out, str.slice(alphabet, (a >> 18) & 63, ((a >> 18) & 63) + 1))
+            out := str.append(out, str.slice(alphabet, (a >> 12) & 63, ((a >> 12) & 63) + 1))
+            if pad = 1 { out := str.append(out, "==") }
+        }
+        if rest = 2 {
+            var b: int := (str.char(text, index) << 16) | (str.char(text, index + 1) << 8)
+            out := str.append(out, str.slice(alphabet, (b >> 18) & 63, ((b >> 18) & 63) + 1))
+            out := str.append(out, str.slice(alphabet, (b >> 12) & 63, ((b >> 12) & 63) + 1))
+            out := str.append(out, str.slice(alphabet, (b >> 6) & 63, ((b >> 6) & 63) + 1))
+            if pad = 1 { out := str.append(out, "=") }
+        }
+        return out
+    end
+
+    fn encode(text: string): string
+    begin
+        return encode_with(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", 1)
+    end
+
+    fn encode_url(text: string): string
+    begin
+        return encode_with(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", 0)
+    end
+
+    fn value(c: int): int
+    begin
+        if c >= 65 && c <= 90 { return c - 65 }
+        if c >= 97 && c <= 122 { return c - 71 }
+        if c >= 48 && c <= 57 { return c + 4 }
+        if c = 43 || c = 45 { return 62 }
+        if c = 47 || c = 95 { return 63 }
+        return -1
+    end
+
+    // Decodes standard or URL-safe input; whitespace and padding are ignored.
+    fn decode(text: string): string
+    begin
+        var out: string := str.builder("")
+        var accumulator: int := 0
+        var bits: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            var v: int := value(str.char(text, index))
+            if v >= 0 {
+                accumulator := (accumulator << 6) | v
+                bits := bits + 6
+                if bits >= 8 {
+                    bits := bits - 8
+                    out := str.append(out, str.fromchar((accumulator >> bits) & 255))
+                }
+            }
+            index := index + 1
+        }
+        return out
+    end
+
+    fn valid(text: string): int
+    begin
+        var index: int := 0
+        while index < str.length(text) {
+            var c: int := str.char(text, index)
+            if value(c) < 0 && c != 61 && c != 10 && c != 13 && c != 32 { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+end

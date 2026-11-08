@@ -1,0 +1,126 @@
+// trie: prefix tree over bytes for string sets, prefix counts and autocompletion.
+uses strlist
+
+module trie
+begin
+    // Each node has 256 child slots stored in one growing int table.
+    type Trie: record
+    begin
+        children: *int
+        terminal: *int
+        passing: *int
+        nodes: int
+        capacity: int
+        words: int
+    end
+
+    fn new(): *trie.Trie
+    begin
+        var tree: *trie.Trie := alloc(48)
+        tree.capacity := 64
+        tree.children := alloc(64 * 256 * 8)
+        tree.terminal := alloc(64 * 8)
+        tree.passing := alloc(64 * 8)
+        tree.nodes := 1
+        tree.words := 0
+        return tree
+    end
+
+    fn node(tree: *trie.Trie): int
+    begin
+        if tree.nodes = tree.capacity {
+            var room: int := tree.capacity * 2
+            var children: *int := alloc(room * 256 * 8)
+            var terminal: *int := alloc(room * 8)
+            var passing: *int := alloc(room * 8)
+            runtime.mem.copy(children, tree.children, tree.capacity * 256 * 8)
+            runtime.mem.copy(terminal, tree.terminal, tree.capacity * 8)
+            runtime.mem.copy(passing, tree.passing, tree.capacity * 8)
+            free(tree.children)
+            free(tree.terminal)
+            free(tree.passing)
+            tree.children := children
+            tree.terminal := terminal
+            tree.passing := passing
+            tree.capacity := room
+        }
+        tree.nodes := tree.nodes + 1
+        return tree.nodes - 1
+    end
+
+    fn insert(tree: *trie.Trie, word: string): int
+    begin
+        var current: int := 0
+        var index: int := 0
+        var size: int := str.length(word)
+        while index < size {
+            var slot: *int := tree.children + current * 256 + str.char(word, index)
+            if *slot = 0 {
+                var created: int := node(tree)
+                slot := tree.children + current * 256 + str.char(word, index)
+                *slot := created
+            }
+            current := *slot
+            *(tree.passing + current) := *(tree.passing + current) + 1
+            index := index + 1
+        }
+        if *(tree.terminal + current) = 1 { return 0 }
+        *(tree.terminal + current) := 1
+        tree.words := tree.words + 1
+        return 1
+    end
+
+    fn walk(tree: *trie.Trie, prefix: string): int
+    begin
+        var current: int := 0
+        var index: int := 0
+        var size: int := str.length(prefix)
+        while index < size {
+            current := *(tree.children + current * 256 + str.char(prefix, index))
+            if current = 0 { return -1 }
+            index := index + 1
+        }
+        return current
+    end
+
+    fn contains(tree: *trie.Trie, word: string): int
+    begin
+        var found: int := walk(tree, word)
+        if found < 0 { return 0 }
+        return *(tree.terminal + found)
+    end
+
+    // Counts inserted words that begin with prefix (duplicates counted once per insert).
+    fn count_prefix(tree: *trie.Trie, prefix: string): int
+    begin
+        if str.length(prefix) = 0 { return tree.words }
+        var found: int := walk(tree, prefix)
+        if found < 0 { return 0 }
+        return *(tree.passing + found)
+    end
+
+    fn collect(tree: *trie.Trie, current: int, prefix: string, out: *strlist.List, limit: int)
+    begin
+        if strlist.len(out) >= limit { return }
+        if *(tree.terminal + current) = 1 { strlist.push(out, prefix) }
+        var byte: int := 0
+        while byte < 256 {
+            var child: int := *(tree.children + current * 256 + byte)
+            if child != 0 { collect(tree, child, prefix + str.fromchar(byte), out, limit) }
+            byte := byte + 1
+        }
+    end
+
+    fn complete(tree: *trie.Trie, prefix: string, limit: int): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var found: int := walk(tree, prefix)
+        if found >= 0 { collect(tree, found, prefix, out, limit) }
+        return out
+    end
+
+    fn len(tree: *trie.Trie): int
+    begin
+        return tree.words
+    end
+end

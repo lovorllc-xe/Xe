@@ -1,0 +1,185 @@
+// markdown: convert a practical Markdown subset to HTML (headings, lists, quotes, code, emphasis, links).
+uses strlist
+uses strings
+uses html
+
+module markdown
+begin
+    // Inline: `code`, **bold**, *italic*, [text](url). Text is HTML-escaped.
+    fn inline(text: string): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        var size: int := str.length(text)
+        while i < size {
+            var c: int := str.char(text, i)
+            var handled: int := 0
+            if c = 96 {
+                var close: int := strings.index_from(text, "`", i + 1)
+                if close > 0 {
+                    out := str.append(out, "<code>" + html.escape(str.slice(text, i + 1, close)) + "</code>")
+                    i := close + 1
+                    handled := 1
+                }
+            }
+            if handled = 0 && c = 42 && i + 1 < size && str.char(text, i + 1) = 42 {
+                var closeBold: int := strings.index_from(text, "**", i + 2)
+                if closeBold > 0 {
+                    out := str.append(out, "<strong>" + inline(str.slice(text, i + 2, closeBold)) + "</strong>")
+                    i := closeBold + 2
+                    handled := 1
+                }
+            }
+            if handled = 0 && (c = 42 || c = 95) {
+                var closeItalic: int := strings.index_from(text, str.fromchar(c), i + 1)
+                if closeItalic > i + 1 {
+                    out := str.append(out, "<em>" + inline(str.slice(text, i + 1, closeItalic)) + "</em>")
+                    i := closeItalic + 1
+                    handled := 1
+                }
+            }
+            if handled = 0 && c = 91 {
+                var closeText: int := strings.index_from(text, "](", i)
+                if closeText > 0 {
+                    var closeUrl: int := strings.index_from(text, ")", closeText)
+                    if closeUrl > 0 {
+                        out := str.append(out, "<a href=\"" + html.escape(str.slice(text, closeText + 2, closeUrl)) + "\">" + inline(str.slice(text, i + 1, closeText)) + "</a>")
+                        i := closeUrl + 1
+                        handled := 1
+                    }
+                }
+            }
+            if handled = 0 {
+                out := str.append(out, html.escape(str.fromchar(c)))
+                i := i + 1
+            }
+        }
+        return out
+    end
+
+    fn heading_level(line: string): int
+    begin
+        var level: int := 0
+        while level < str.length(line) && str.char(line, level) = 35 { level := level + 1 }
+        if level >= 1 && level <= 6 && level < str.length(line) && str.char(line, level) = 32 { return level }
+        return 0
+    end
+
+    fn is_bullet(line: string): int
+    begin
+        return strings.starts_with(line, "- ") = 1 || strings.starts_with(line, "* ") = 1
+    end
+
+    fn ordered_prefix(line: string): int
+    begin
+        var i: int := 0
+        while i < str.length(line) && str.char(line, i) >= 48 && str.char(line, i) <= 57 { i := i + 1 }
+        if i > 0 && i + 1 < str.length(line) && str.char(line, i) = 46 && str.char(line, i + 1) = 32 { return i + 2 }
+        return 0
+    end
+
+    fn to_html(source: string): string
+    begin
+        var lines: *strlist.List := strlist.lines(source)
+        var out: string := str.builder("")
+        var paragraph: string := ""
+        var mode: int := 0
+        var inCode: int := 0
+        var i: int := 0
+        while i < strlist.len(lines) {
+            var line: string := strlist.get(lines, i)
+            var trimmed: string := strings.trim(line)
+            if strings.starts_with(trimmed, "```") = 1 {
+                if inCode = 1 {
+                    out := str.append(out, "</code></pre>\n")
+                    inCode := 0
+                }
+                else {
+                    if str.length(paragraph) > 0 {
+                        out := str.append(out, "<p>" + inline(paragraph) + "</p>\n")
+                        paragraph := ""
+                    }
+                    if mode = 1 { out := str.append(out, "</ul>\n") }
+                    if mode = 2 { out := str.append(out, "</ol>\n") }
+                    mode := 0
+                    out := str.append(out, "<pre><code>")
+                    inCode := 1
+                }
+            }
+            else {
+                if inCode = 1 { out := str.append(out, html.escape(line) + "\n") }
+                else {
+                    var bullet: int := is_bullet(trimmed)
+                    var ordered: int := ordered_prefix(trimmed)
+                    var level: int := heading_level(trimmed)
+                    if mode = 1 && bullet = 0 {
+                        out := str.append(out, "</ul>\n")
+                        mode := 0
+                    }
+                    if mode = 2 && ordered = 0 {
+                        out := str.append(out, "</ol>\n")
+                        mode := 0
+                    }
+                    if str.length(trimmed) = 0 {
+                        if str.length(paragraph) > 0 {
+                            out := str.append(out, "<p>" + inline(paragraph) + "</p>\n")
+                            paragraph := ""
+                        }
+                    }
+                    else {
+                        if level > 0 {
+                            if str.length(paragraph) > 0 {
+                                out := str.append(out, "<p>" + inline(paragraph) + "</p>\n")
+                                paragraph := ""
+                            }
+                            out := str.append(out, "<h" + str.number(level) + ">" + inline(strings.trim(str.slice(trimmed, level, str.length(trimmed)))) + "</h" + str.number(level) + ">\n")
+                        }
+                        else {
+                            if bullet = 1 || ordered > 0 {
+                                if str.length(paragraph) > 0 {
+                                    out := str.append(out, "<p>" + inline(paragraph) + "</p>\n")
+                                    paragraph := ""
+                                }
+                                if bullet = 1 && mode != 1 {
+                                    out := str.append(out, "<ul>\n")
+                                    mode := 1
+                                }
+                                if ordered > 0 && mode != 2 {
+                                    out := str.append(out, "<ol>\n")
+                                    mode := 2
+                                }
+                                var skip: int := 2
+                                if ordered > 0 { skip := ordered }
+                                out := str.append(out, "<li>" + inline(str.slice(trimmed, skip, str.length(trimmed))) + "</li>\n")
+                            }
+                            else {
+                                if strings.starts_with(trimmed, "> ") = 1 {
+                                    if str.length(paragraph) > 0 {
+                                        out := str.append(out, "<p>" + inline(paragraph) + "</p>\n")
+                                        paragraph := ""
+                                    }
+                                    out := str.append(out, "<blockquote>" + inline(str.slice(trimmed, 2, str.length(trimmed))) + "</blockquote>\n")
+                                }
+                                else {
+                                    if str.length(paragraph) > 0 { paragraph := paragraph + " " }
+                                    paragraph := paragraph + trimmed
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            i := i + 1
+        }
+        if str.length(paragraph) > 0 { out := str.append(out, "<p>" + inline(paragraph) + "</p>\n") }
+        if mode = 1 { out := str.append(out, "</ul>\n") }
+        if mode = 2 { out := str.append(out, "</ol>\n") }
+        if inCode = 1 { out := str.append(out, "</code></pre>\n") }
+        return out
+    end
+
+    fn document(title: string, source: string): string
+    begin
+        return html.page(title, to_html(source))
+    end
+end

@@ -1,0 +1,125 @@
+// dir: list, walk, create and remove directories.
+uses strlist
+uses path
+uses stat
+
+module dir
+begin
+    // Entry names in a directory (without "." and ".."), unsorted.
+    fn list(target: string): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var fd: int := syscall.invoke3(2, target, 65536, 0)
+        if fd < 0 { return out }
+        var buffer: *void := alloc(32768)
+        var going: int := 1
+        while going = 1 {
+            var count: int := syscall.invoke3(217, fd, buffer, 32768)
+            if count <= 0 { going := 0 }
+            else {
+                var offset: int := 0
+                while offset < count {
+                    var length: int := runtime.hw.read8(buffer + offset + 16) | (runtime.hw.read8(buffer + offset + 17) << 8)
+                    var name: string := str.builder("")
+                    var k: int := offset + 19
+                    var reading: int := 1
+                    while reading = 1 && k < offset + length {
+                        var c: int := runtime.hw.read8(buffer + k)
+                        if c = 0 { reading := 0 }
+                        else { name := str.append(name, str.fromchar(c)) }
+                        k := k + 1
+                    }
+                    if name != "." && name != ".." { strlist.push(out, name) }
+                    offset := offset + length
+                }
+            }
+        }
+        free(buffer)
+        syscall.invoke3(3, fd, 0, 0)
+        return out
+    end
+
+    fn sorted(target: string): *strlist.List
+    begin
+        var names: *strlist.List := list(target)
+        strlist.sort(names)
+        return names
+    end
+
+    fn walk_into(target: string, out: *strlist.List, depth: int)
+    begin
+        if depth > 64 { return }
+        var names: *strlist.List := sorted(target)
+        var index: int := 0
+        while index < strlist.len(names) {
+            var full: string := path.join(target, strlist.get(names, index))
+            strlist.push(out, full)
+            if stat.is_link(full) = 0 && stat.is_dir(full) = 1 { walk_into(full, out, depth + 1) }
+            index := index + 1
+        }
+    end
+
+    // Every path below target, depth-first, in sorted order.
+    fn walk(target: string): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        walk_into(target, out, 0)
+        return out
+    end
+
+    fn make(target: string, mode: int): int
+    begin
+        var result: int := syscall.invoke3(83, target, mode, 0)
+        return result = 0 || result = -17
+    end
+
+    fn make_all(target: string): int
+    begin
+        if stat.is_dir(target) = 1 { return 1 }
+        var parent: string := path.dirname(target)
+        if parent != target && stat.is_dir(parent) = 0 { make_all(parent) }
+        return make(target, 493)
+    end
+
+    fn remove(target: string): int
+    begin
+        return syscall.invoke3(84, target, 0, 0) = 0
+    end
+
+    fn remove_all(target: string): int
+    begin
+        if stat.is_link(target) = 0 && stat.is_dir(target) = 1 {
+            var names: *strlist.List := list(target)
+            var index: int := 0
+            while index < strlist.len(names) {
+                remove_all(path.join(target, strlist.get(names, index)))
+                index := index + 1
+            }
+            return syscall.invoke3(84, target, 0, 0) = 0
+        }
+        return syscall.invoke3(87, target, 0, 0) = 0
+    end
+
+    fn rename(from: string, to: string): int
+    begin
+        return syscall.invoke3(82, from, to, 0) = 0
+    end
+
+    fn remove_file(target: string): int
+    begin
+        return syscall.invoke3(87, target, 0, 0) = 0
+    end
+
+    fn files_with_extension(target: string, extension: string): *strlist.List
+    begin
+        var all: *strlist.List := walk(target)
+        var out: *strlist.List := strlist.new()
+        var index: int := 0
+        while index < strlist.len(all) {
+            var item: string := strlist.get(all, index)
+            if path.extension(item) = extension && stat.is_file(item) = 1 { strlist.push(out, item) }
+            index := index + 1
+        }
+        return out
+    end
+end

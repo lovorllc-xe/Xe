@@ -1,0 +1,114 @@
+// stat: file metadata (size, mode, type, timestamps) via the stat system call.
+module stat
+begin
+    type Info: record
+    begin
+        exists: int
+        size: int
+        mode: int
+        mtime: int
+        atime: int
+        ctime: int
+        inode: int
+        links: int
+        uid: int
+        gid: int
+    end
+
+    fn query(path: string, follow: int): stat.Info
+    begin
+        var info: stat.Info
+        var buffer: *void := alloc(160)
+        var number: int := 4
+        if follow = 0 { number := 6 }
+        var result: int := syscall.invoke3(number, path, buffer, 0)
+        info.exists := result = 0
+        if result = 0 {
+            var words: *int := buffer
+            info.inode := *(words + 1)
+            info.links := *(words + 2)
+            info.mode := runtime.hw.read32(buffer + 24)
+            info.uid := runtime.hw.read32(buffer + 28)
+            info.gid := runtime.hw.read32(buffer + 32)
+            info.size := *(words + 6)
+            info.atime := *(words + 9)
+            info.mtime := *(words + 11)
+            info.ctime := *(words + 13)
+        }
+        free(buffer)
+        return info
+    end
+
+    fn of(path: string): stat.Info
+    begin
+        return query(path, 1)
+    end
+
+    fn exists(path: string): int
+    begin
+        return syscall.invoke3(21, path, 0, 0) = 0
+    end
+
+    fn size(path: string): int
+    begin
+        var info: stat.Info := of(path)
+        if info.exists = 0 { return -1 }
+        return info.size
+    end
+
+    fn is_dir(path: string): int
+    begin
+        var info: stat.Info := of(path)
+        return info.exists = 1 && (info.mode & 61440) = 16384
+    end
+
+    fn is_file(path: string): int
+    begin
+        var info: stat.Info := of(path)
+        return info.exists = 1 && (info.mode & 61440) = 32768
+    end
+
+    fn is_link(path: string): int
+    begin
+        var info: stat.Info := query(path, 0)
+        return info.exists = 1 && (info.mode & 61440) = 40960
+    end
+
+    fn mtime(path: string): int
+    begin
+        var info: stat.Info := of(path)
+        return info.mtime
+    end
+
+    fn permissions(path: string): int
+    begin
+        var info: stat.Info := of(path)
+        return info.mode & 4095
+    end
+
+    fn is_executable(path: string): int
+    begin
+        return syscall.invoke3(21, path, 1, 0) = 0
+    end
+
+    fn chmod(path: string, mode: int): int
+    begin
+        return syscall.invoke3(90, path, mode, 0) = 0
+    end
+
+    // Formats permissions like "rwxr-xr-x".
+    fn mode_string(mode: int): string
+    begin
+        var letters: string := "rwxrwxrwx"
+        var out: string := str.builder("")
+        var bit: int := 8
+        var index: int := 0
+        while bit >= 0 {
+            if ((mode >> bit) & 1) = 1 { out := str.append(out, str.slice(letters, index, index + 1)) }
+            else { out := str.append(out, "-") }
+            bit := bit - 1
+            index := index + 1
+        }
+        return out
+    end
+end

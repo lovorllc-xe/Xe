@@ -1,0 +1,300 @@
+// intlist: a growable array of int values.
+module intlist
+begin
+    type List: record
+    begin
+        data: *int
+        size: int
+        capacity: int
+    end
+
+    fn new(): *intlist.List
+    begin
+        return with_capacity(8)
+    end
+
+    fn with_capacity(capacity: int): *intlist.List
+    begin
+        var list: *intlist.List := alloc(24)
+        var room: int := capacity
+        if room < 1 { room := 1 }
+        list.data := alloc(room * 8)
+        list.size := 0
+        list.capacity := room
+        return list
+    end
+
+    fn reserve(list: *intlist.List, wanted: int)
+    begin
+        if wanted <= list.capacity { return }
+        var room: int := list.capacity * 2
+        if room < wanted { room := wanted }
+        var bigger: *int := alloc(room * 8)
+        if list.size > 0 { runtime.mem.copy(bigger, list.data, list.size * 8) }
+        free(list.data)
+        list.data := bigger
+        list.capacity := room
+    end
+
+    fn push(list: *intlist.List, value: int)
+    begin
+        if list.size >= list.capacity { reserve(list, list.size + 1) }
+        *(list.data + list.size) := value
+        list.size := list.size + 1
+    end
+
+    fn pop(list: *intlist.List): int
+    begin
+        if list.size = 0 { return 0 }
+        list.size := list.size - 1
+        return *(list.data + list.size)
+    end
+
+    fn len(list: *intlist.List): int
+    begin
+        return list.size
+    end
+
+    fn get(list: *intlist.List, index: int): int
+    begin
+        if index < 0 || index >= list.size { return 0 }
+        return *(list.data + index)
+    end
+
+    fn set(list: *intlist.List, index: int, value: int): int
+    begin
+        if index < 0 || index >= list.size { return 0 }
+        *(list.data + index) := value
+        return 1
+    end
+
+    fn first(list: *intlist.List): int
+    begin
+        return get(list, 0)
+    end
+
+    fn last(list: *intlist.List): int
+    begin
+        return get(list, list.size - 1)
+    end
+
+    fn clear(list: *intlist.List)
+    begin
+        list.size := 0
+    end
+
+    fn insert(list: *intlist.List, index: int, value: int): int
+    begin
+        if index < 0 || index > list.size { return 0 }
+        if list.size >= list.capacity { reserve(list, list.size + 1) }
+        var cursor: int := list.size
+        while cursor > index {
+            *(list.data + cursor) := *(list.data + cursor - 1)
+            cursor := cursor - 1
+        }
+        *(list.data + index) := value
+        list.size := list.size + 1
+        return 1
+    end
+
+    fn remove(list: *intlist.List, index: int): int
+    begin
+        if index < 0 || index >= list.size { return 0 }
+        var removed: int := *(list.data + index)
+        var cursor: int := index
+        while cursor < list.size - 1 {
+            *(list.data + cursor) := *(list.data + cursor + 1)
+            cursor := cursor + 1
+        }
+        list.size := list.size - 1
+        return removed
+    end
+
+    fn index_of(list: *intlist.List, value: int): int
+    begin
+        var index: int := 0
+        while index < list.size {
+            if *(list.data + index) = value { return index }
+            index := index + 1
+        }
+        return -1
+    end
+
+    fn contains(list: *intlist.List, value: int): int
+    begin
+        return index_of(list, value) >= 0
+    end
+
+    fn sum(list: *intlist.List): int
+    begin
+        var total: int := 0
+        var index: int := 0
+        while index < list.size {
+            total := total + *(list.data + index)
+            index := index + 1
+        }
+        return total
+    end
+
+    fn min(list: *intlist.List): int
+    begin
+        if list.size = 0 { return 0 }
+        var best: int := *list.data
+        var index: int := 1
+        while index < list.size {
+            if *(list.data + index) < best { best := *(list.data + index) }
+            index := index + 1
+        }
+        return best
+    end
+
+    fn max(list: *intlist.List): int
+    begin
+        if list.size = 0 { return 0 }
+        var best: int := *list.data
+        var index: int := 1
+        while index < list.size {
+            if *(list.data + index) > best { best := *(list.data + index) }
+            index := index + 1
+        }
+        return best
+    end
+
+    fn reverse(list: *intlist.List)
+    begin
+        var low: int := 0
+        var high: int := list.size - 1
+        while low < high {
+            var swap: int := *(list.data + low)
+            *(list.data + low) := *(list.data + high)
+            *(list.data + high) := swap
+            low := low + 1
+            high := high - 1
+        }
+    end
+
+    fn sort_range(data: *int, low: int, high: int)
+    begin
+        var left: int := low
+        var right: int := high
+        while right - left > 16 {
+            var middle: int := left + (right - left) / 2
+            var pivot: int := *(data + middle)
+            var i: int := left
+            var j: int := right
+            while i <= j {
+                while *(data + i) < pivot { i := i + 1 }
+                while *(data + j) > pivot { j := j - 1 }
+                if i <= j {
+                    var swap: int := *(data + i)
+                    *(data + i) := *(data + j)
+                    *(data + j) := swap
+                    i := i + 1
+                    j := j - 1
+                }
+            }
+            if j - left < right - i {
+                if left < j { sort_range(data, left, j) }
+                left := i
+            }
+            else {
+                if i < right { sort_range(data, i, right) }
+                right := j
+            }
+        }
+        var outer: int := left + 1
+        while outer <= right {
+            var value: int := *(data + outer)
+            var inner: int := outer - 1
+            var moving: int := 1
+            while moving = 1 {
+                if inner < left { moving := 0 }
+                else {
+                    if *(data + inner) > value {
+                        *(data + inner + 1) := *(data + inner)
+                        inner := inner - 1
+                    }
+                    else { moving := 0 }
+                }
+            }
+            *(data + inner + 1) := value
+            outer := outer + 1
+        }
+    end
+
+    fn sort(list: *intlist.List)
+    begin
+        if list.size > 1 { sort_range(list.data, 0, list.size - 1) }
+    end
+
+    fn copy(list: *intlist.List): *intlist.List
+    begin
+        var other: *intlist.List := with_capacity(list.size)
+        if list.size > 0 { runtime.mem.copy(other.data, list.data, list.size * 8) }
+        other.size := list.size
+        return other
+    end
+
+    fn slice(list: *intlist.List, low: int, high: int): *intlist.List
+    begin
+        var first: int := low
+        var last: int := high
+        if first < 0 { first := 0 }
+        if last > list.size { last := list.size }
+        var other: *intlist.List := with_capacity(last - first)
+        while first < last {
+            push(other, *(list.data + first))
+            first := first + 1
+        }
+        return other
+    end
+
+    fn equal(left: *intlist.List, right: *intlist.List): int
+    begin
+        if left.size != right.size { return 0 }
+        var index: int := 0
+        while index < left.size {
+            if *(left.data + index) != *(right.data + index) { return 0 }
+            index := index + 1
+        }
+        return 1
+    end
+
+    fn join(list: *intlist.List, separator: string): string
+    begin
+        var text: string := str.builder("")
+        var index: int := 0
+        while index < list.size {
+            if index > 0 { text := str.append(text, separator) }
+            text := str.append(text, str.number(*(list.data + index)))
+            index := index + 1
+        }
+        return text
+    end
+
+    fn range(start: int, finish: int, step: int): *intlist.List
+    begin
+        var list: *intlist.List := intlist.new()
+        if step = 0 { return list }
+        var value: int := start
+        if step > 0 {
+            while value < finish {
+                push(list, value)
+                value := value + step
+            }
+        }
+        else {
+            while value > finish {
+                push(list, value)
+                value := value + step
+            }
+        }
+        return list
+    end
+
+    fn release(list: *intlist.List)
+    begin
+        free(list.data)
+        free(list)
+    end
+end

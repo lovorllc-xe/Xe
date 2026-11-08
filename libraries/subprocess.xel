@@ -1,0 +1,138 @@
+// subprocess: run programs with captured stdout/stderr and exit status (fork/pipe/execve).
+uses strlist
+uses bytes
+uses cstr
+
+module subprocess
+begin
+    type Result: record
+    begin
+        status: int
+        output: string
+        errors: string
+    end
+
+    fn drain(fd: int): string
+    begin
+        var collected: *bytes.Buffer := bytes.new()
+        var chunk: *void := alloc(65536)
+        var going: int := 1
+        while going = 1 {
+            var got: int := syscall.invoke3(0, fd, chunk, 65536)
+            if got <= 0 { going := 0 }
+            else {
+                bytes.reserve(collected, collected.size + got)
+                runtime.mem.copy(collected.data + collected.size, chunk, got)
+                collected.size := collected.size + got
+            }
+        }
+        free(chunk)
+        var text: string := bytes.to_string(collected)
+        bytes.release(collected)
+        return text
+    end
+
+    // Runs argv[0] with arguments (no shell). The first item must be a path or found in /bin:/usr/bin.
+    fn run_argv(command: *strlist.List, input: string): *subprocess.Result
+    begin
+        var result: *subprocess.Result := alloc(24)
+        result.status := -1
+        result.output := ""
+        result.errors := ""
+        var outPipe: *void := alloc(16)
+        var errPipe: *void := alloc(16)
+        var inPipe: *void := alloc(16)
+        syscall.invoke3(293, outPipe, 524288, 0)
+        syscall.invoke3(293, errPipe, 524288, 0)
+        syscall.invoke3(293, inPipe, 524288, 0)
+        var program: string := strlist.get(command, 0)
+        var argvArray: *void := cstr.argv(command)
+        var pid: int := syscall.invoke3(57, 0, 0, 0)
+        if pid = 0 {
+            syscall.invoke3(33, runtime.hw.read32(inPipe), 0, 0)
+            syscall.invoke3(33, runtime.hw.read32(outPipe + 4), 1, 0)
+            syscall.invoke3(33, runtime.hw.read32(errPipe + 4), 2, 0)
+            var envp: *void := 0
+            if str.find(program, "/") < 0 {
+                syscall.invoke6(59, "/usr/bin/" + program, argvArray, envp, 0, 0, 0)
+                syscall.invoke6(59, "/bin/" + program, argvArray, envp, 0, 0, 0)
+            }
+            syscall.invoke6(59, program, argvArray, envp, 0, 0, 0)
+            syscall.invoke3(60, 127, 0, 0)
+        }
+        var readOut: int := runtime.hw.read32(outPipe)
+        var writeOut: int := runtime.hw.read32(outPipe + 4)
+        var readErr: int := runtime.hw.read32(errPipe)
+        var writeErr: int := runtime.hw.read32(errPipe + 4)
+        var readIn: int := runtime.hw.read32(inPipe)
+        var writeIn: int := runtime.hw.read32(inPipe + 4)
+        syscall.invoke3(3, writeOut, 0, 0)
+        syscall.invoke3(3, writeErr, 0, 0)
+        syscall.invoke3(3, readIn, 0, 0)
+        if str.length(input) > 0 { syscall.invoke3(1, writeIn, input, str.length(input)) }
+        syscall.invoke3(3, writeIn, 0, 0)
+        if pid < 0 { return result }
+        result.output := drain(readOut)
+        result.errors := drain(readErr)
+        syscall.invoke3(3, readOut, 0, 0)
+        syscall.invoke3(3, readErr, 0, 0)
+        var status: *int := alloc(8)
+        *status := 0
+        syscall.invoke6(61, pid, status, 0, 0, 0, 0)
+        var raw: int := *status & 65535
+        if (raw & 127) = 0 { result.status := (raw >> 8) & 255 }
+        else { result.status := 128 + (raw & 127) }
+        free(status)
+        free(outPipe)
+        free(errPipe)
+        free(inPipe)
+        return result
+    end
+
+    // Runs a command line through /bin/sh -c.
+    fn shell(command: string): *subprocess.Result
+    begin
+        var argv: *strlist.List := strlist.new()
+        strlist.push(argv, "/bin/sh")
+        strlist.push(argv, "-c")
+        strlist.push(argv, command)
+        return run_argv(argv, "")
+    end
+
+    fn shell_input(command: string, input: string): *subprocess.Result
+    begin
+        var argv: *strlist.List := strlist.new()
+        strlist.push(argv, "/bin/sh")
+        strlist.push(argv, "-c")
+        strlist.push(argv, command)
+        return run_argv(argv, input)
+    end
+
+    // Convenience: stdout of a shell command.
+    fn output(command: string): string
+    begin
+        var result: *subprocess.Result := shell(command)
+        return result.output
+    end
+
+    fn status(command: string): int
+    begin
+        return process.run(command)
+    end
+
+    fn which(program: string): string
+    begin
+        var path: string := env.get("PATH")
+        var start: int := 0
+        var index: int := 0
+        while index <= str.length(path) {
+            if index = str.length(path) || str.char(path, index) = 58 {
+                var candidate: string := str.slice(path, start, index) + "/" + program
+                if syscall.invoke3(21, candidate, 1, 0) = 0 { return candidate }
+                start := index + 1
+            }
+            index := index + 1
+        }
+        return ""
+    end
+end

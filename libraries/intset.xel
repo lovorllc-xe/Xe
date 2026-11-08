@@ -1,0 +1,74 @@
+// intset: a set of int values built on intmap.
+uses intmap
+
+module intset
+begin
+    fn new(): *intmap.Map
+    begin
+        return intmap.new()
+    end
+
+    fn add(set: *intmap.Map, value: int): int
+    begin
+        if intmap.has(set, value) = 1 { return 0 }
+        intmap.put(set, value, 1)
+        return 1
+    end
+
+    fn has(set: *intmap.Map, value: int): int
+    begin
+        return intmap.has(set, value)
+    end
+
+    fn remove(set: *intmap.Map, value: int): int
+    begin
+        return intmap.remove(set, value)
+    end
+
+    fn len(set: *intmap.Map): int
+    begin
+        return intmap.len(set)
+    end
+
+    fn union(left: *intmap.Map, right: *intmap.Map): *intmap.Map
+    begin
+        var result: *intmap.Map := intmap.new()
+        var slot: int := 0
+        while slot < intmap.capacity(left) {
+            if intmap.occupied(left, slot) = 1 { intmap.put(result, intmap.key_at(left, slot), 1) }
+            slot := slot + 1
+        }
+        slot := 0
+        while slot < intmap.capacity(right) {
+            if intmap.occupied(right, slot) = 1 { intmap.put(result, intmap.key_at(right, slot), 1) }
+            slot := slot + 1
+        }
+        return result
+    end
+
+    fn intersection(left: *intmap.Map, right: *intmap.Map): *intmap.Map
+    begin
+        var result: *intmap.Map := intmap.new()
+        var slot: int := 0
+        while slot < intmap.capacity(left) {
+            if intmap.occupied(left, slot) = 1 {
+                if intmap.has(right, intmap.key_at(left, slot)) = 1 { intmap.put(result, intmap.key_at(left, slot), 1) }
+            }
+            slot := slot + 1
+        }
+        return result
+    end
+
+    fn difference(left: *intmap.Map, right: *intmap.Map): *intmap.Map
+    begin
+        var result: *intmap.Map := intmap.new()
+        var slot: int := 0
+        while slot < intmap.capacity(left) {
+            if intmap.occupied(left, slot) = 1 {
+                if intmap.has(right, intmap.key_at(left, slot)) = 0 { intmap.put(result, intmap.key_at(left, slot), 1) }
+            }
+            slot := slot + 1
+        }
+        return result
+    end
+end

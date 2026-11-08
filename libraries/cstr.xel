@@ -1,0 +1,53 @@
+// cstr: bridges between Xe strings, raw byte pointers and C-style argument vectors.
+uses strlist
+
+module cstr
+begin
+    // Address of a string's bytes (valid while the string is alive).
+    fn pointer(text: string): *void
+    begin
+        var cell: *string := alloc(8)
+        *cell := text
+        var raw: *void := cell
+        var result: *void := runtime.pointer.read(raw)
+        free(cell)
+        return result
+    end
+
+    // Copies a NUL-terminated byte sequence into a new string.
+    fn from_pointer(data: *void, limit: int): string
+    begin
+        var size: int := 0
+        while size < limit && runtime.hw.read8(data + size) != 0 { size := size + 1 }
+        return from_bytes(data, size)
+    end
+
+    // Copies exactly size bytes (stopping early at a zero byte) into a new string.
+    fn from_bytes(data: *void, size: int): string
+    begin
+        var copy: *void := alloc(size + 1)
+        if size > 0 { runtime.mem.copy(copy, data, size) }
+        runtime.hw.write8(copy + size, 0)
+        var cell: *void := alloc(8)
+        runtime.pointer.write(cell, copy)
+        var view: *string := cell
+        var text: string := *view
+        free(cell)
+        return text
+    end
+
+    // NULL-terminated array of char* for execve and friends.
+    fn argv(items: *strlist.List): *void
+    begin
+        var count: int := strlist.len(items)
+        var array: **void := alloc((count + 1) * 8)
+        var index: int := 0
+        while index < count {
+            runtime.pointer.write(array + index, pointer(strlist.get(items, index)))
+            index := index + 1
+        }
+        var empty: *void := 0
+        runtime.pointer.write(array + count, empty)
+        return array
+    end
+end

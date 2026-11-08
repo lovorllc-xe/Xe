@@ -1,0 +1,159 @@
+// table: render rows of strings as aligned plain-text or Markdown tables.
+uses strlist
+uses ptrlist
+
+module table
+begin
+    type Table: record
+    begin
+        header: *strlist.List
+        rows: *ptrlist.List
+        right: *strlist.List
+    end
+
+    fn new(header: *strlist.List): *table.Table
+    begin
+        var t: *table.Table := alloc(24)
+        t.header := header
+        t.rows := ptrlist.new()
+        t.right := strlist.new()
+        return t
+    end
+
+    fn add(t: *table.Table, row: *strlist.List)
+    begin
+        ptrlist.push(t.rows, row)
+    end
+
+    // Right-align a column (numbers usually look better that way).
+    fn align_right(t: *table.Table, column: int)
+    begin
+        strlist.push(t.right, str.number(column))
+    end
+
+    fn widths(t: *table.Table): *strlist.List
+    begin
+        var out: *strlist.List := strlist.new()
+        var col: int := 0
+        while col < strlist.len(t.header) {
+            var width: int := str.length(strlist.get(t.header, col))
+            var r: int := 0
+            while r < ptrlist.len(t.rows) {
+                var row: *strlist.List := ptrlist.get(t.rows, r)
+                if str.length(strlist.get(row, col)) > width { width := str.length(strlist.get(row, col)) }
+                r := r + 1
+            }
+            strlist.push(out, str.number(width))
+            col := col + 1
+        }
+        return out
+    end
+
+    fn pad(text: string, width: int, right: int): string
+    begin
+        var result: string := str.builder("")
+        var missing: int := width - str.length(text)
+        if right = 1 {
+            while missing > 0 {
+                result := str.append(result, " ")
+                missing := missing - 1
+            }
+            return str.append(result, text)
+        }
+        result := str.append(result, text)
+        while missing > 0 {
+            result := str.append(result, " ")
+            missing := missing - 1
+        }
+        return result
+    end
+
+    fn width_at(sizes: *strlist.List, col: int): int
+    begin
+        var text: string := strlist.get(sizes, col)
+        var value: int := 0
+        var index: int := 0
+        while index < str.length(text) {
+            value := value * 10 + str.char(text, index) - 48
+            index := index + 1
+        }
+        return value
+    end
+
+    fn line(t: *table.Table, row: *strlist.List, sizes: *strlist.List, separator: string): string
+    begin
+        var text: string := str.builder(separator)
+        var col: int := 0
+        while col < strlist.len(t.header) {
+            var right: int := strlist.contains(t.right, str.number(col))
+            text := str.append(text, " " + pad(strlist.get(row, col), width_at(sizes, col), right) + " " + separator)
+            col := col + 1
+        }
+        return text
+    end
+
+    fn rule(sizes: *strlist.List, corner: string, fill: string): string
+    begin
+        var text: string := str.builder(corner)
+        var col: int := 0
+        while col < strlist.len(sizes) {
+            var count: int := width_at(sizes, col) + 2
+            while count > 0 {
+                text := str.append(text, fill)
+                count := count - 1
+            }
+            text := str.append(text, corner)
+            col := col + 1
+        }
+        return text
+    end
+
+    fn render(t: *table.Table): string
+    begin
+        var sizes: *strlist.List := widths(t)
+        var out: string := str.builder(rule(sizes, "+", "-") + "\n")
+        out := str.append(out, line(t, t.header, sizes, "|") + "\n")
+        out := str.append(out, rule(sizes, "+", "=") + "\n")
+        var r: int := 0
+        while r < ptrlist.len(t.rows) {
+            out := str.append(out, line(t, ptrlist.get(t.rows, r), sizes, "|") + "\n")
+            r := r + 1
+        }
+        return str.append(out, rule(sizes, "+", "-") + "\n")
+    end
+
+    fn markdown(t: *table.Table): string
+    begin
+        var sizes: *strlist.List := widths(t)
+        var out: string := str.builder(line(t, t.header, sizes, "|") + "\n")
+        out := str.append(out, rule(sizes, "|", "-") + "\n")
+        var r: int := 0
+        while r < ptrlist.len(t.rows) {
+            out := str.append(out, line(t, ptrlist.get(t.rows, r), sizes, "|") + "\n")
+            r := r + 1
+        }
+        return out
+    end
+
+    fn row2(a: string, b: string): *strlist.List
+    begin
+        var r: *strlist.List := strlist.new()
+        strlist.push(r, a)
+        strlist.push(r, b)
+        return r
+    end
+
+    fn row3(a: string, b: string, c: string): *strlist.List
+    begin
+        var r: *strlist.List := row2(a, b)
+        strlist.push(r, c)
+        return r
+    end
+
+    fn row4(a: string, b: string, c: string, d: string): *strlist.List
+    begin
+        var r: *strlist.List := row3(a, b, c)
+        strlist.push(r, d)
+        return r
+    end
+end

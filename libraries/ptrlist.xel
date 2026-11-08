@@ -1,0 +1,71 @@
+// ptrlist: a growable array of opaque pointers.
+module ptrlist
+begin
+    type List: record
+    begin
+        data: **void
+        size: int
+        capacity: int
+    end
+
+    fn new(): *ptrlist.List
+    begin
+        var list: *ptrlist.List := alloc(24)
+        list.data := alloc(64)
+        list.size := 0
+        list.capacity := 8
+        return list
+    end
+
+    fn push(list: *ptrlist.List, value: *void)
+    begin
+        if list.size >= list.capacity {
+            var room: int := list.capacity * 2
+            var bigger: **void := alloc(room * 8)
+            runtime.mem.copy(bigger, list.data, list.size * 8)
+            free(list.data)
+            list.data := bigger
+            list.capacity := room
+        }
+        runtime.pointer.write(list.data + list.size, value)
+        list.size := list.size + 1
+    end
+
+    fn len(list: *ptrlist.List): int
+    begin
+        return list.size
+    end
+
+    fn get(list: *ptrlist.List, index: int): *void
+    begin
+        var empty: *void := 0
+        if index < 0 || index >= list.size { return empty }
+        return runtime.pointer.read(list.data + index)
+    end
+
+    fn set(list: *ptrlist.List, index: int, value: *void): int
+    begin
+        if index < 0 || index >= list.size { return 0 }
+        runtime.pointer.write(list.data + index, value)
+        return 1
+    end
+
+    fn pop(list: *ptrlist.List): *void
+    begin
+        var empty: *void := 0
+        if list.size = 0 { return empty }
+        list.size := list.size - 1
+        return runtime.pointer.read(list.data + list.size)
+    end
+
+    fn clear(list: *ptrlist.List)
+    begin
+        list.size := 0
+    end
+
+    fn release(list: *ptrlist.List)
+    begin
+        free(list.data)
+        free(list)
+    end
+end

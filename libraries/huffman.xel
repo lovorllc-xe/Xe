@@ -1,0 +1,194 @@
+// huffman: canonical Huffman coding of byte buffers.
+// Format: "HUF1" + 4-byte length + 256 code-length bytes + bit stream (MSB first).
+uses bytes
+uses heap
+
+module huffman
+begin
+    fn code_lengths(input: *bytes.Buffer, lengths: *int)
+    begin
+        var freq: *int := alloc(512 * 8)
+        var parent: *int := alloc(512 * 8)
+        runtime.mem.set(freq, 0, 4096)
+        var index: int := 0
+        while index < input.size {
+            var b: int := bytes.get(input, index)
+            *(freq + b) := *(freq + b) + 1
+            index := index + 1
+        }
+        var queue: *heap.Heap := heap.new()
+        var symbol: int := 0
+        var used: int := 0
+        while symbol < 256 {
+            *(lengths + symbol) := 0
+            if *(freq + symbol) > 0 {
+                heap.push(queue, *(freq + symbol), symbol)
+                used := used + 1
+            }
+            symbol := symbol + 1
+        }
+        if used = 1 {
+            symbol := 0
+            while symbol < 256 {
+                if *(freq + symbol) > 0 { *(lengths + symbol) := 1 }
+                symbol := symbol + 1
+            }
+        }
+        var next: int := 256
+        while heap.len(queue) > 1 {
+            var weightA: int := heap.peek_priority(queue)
+            var a: int := heap.pop(queue)
+            var weightB: int := heap.peek_priority(queue)
+            var b2: int := heap.pop(queue)
+            *(parent + a) := next
+            *(parent + b2) := next
+            heap.push(queue, weightA + weightB, next)
+            next := next + 1
+        }
+        if used > 1 {
+            var root: int := heap.pop(queue)
+            *(parent + root) := -1
+            symbol := 0
+            while symbol < 256 {
+                if *(freq + symbol) > 0 {
+                    var depth: int := 0
+                    var cursor: int := symbol
+                    while cursor != root {
+                        cursor := *(parent + cursor)
+                        depth := depth + 1
+                    }
+                    *(lengths + symbol) := depth
+                }
+                symbol := symbol + 1
+            }
+        }
+        free(freq)
+        free(parent)
+    end
+
+    // Assigns canonical codes from lengths.
+    fn canonical(lengths: *int, codes: *int)
+    begin
+        var code: int := 0
+        var length: int := 1
+        while length <= 64 {
+            var symbol: int := 0
+            while symbol < 256 {
+                if *(lengths + symbol) = length {
+                    *(codes + symbol) := code
+                    code := code + 1
+                }
+                symbol := symbol + 1
+            }
+            code := code << 1
+            length := length + 1
+        }
+    end
+
+    fn encode(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var lengths: *int := alloc(256 * 8)
+        var codes: *int := alloc(256 * 8)
+        code_lengths(input, lengths)
+        canonical(lengths, codes)
+        var out: *bytes.Buffer := bytes.new()
+        bytes.append_string(out, "HUF1")
+        bytes.write_le(out, input.size, 4)
+        var symbol: int := 0
+        while symbol < 256 {
+            bytes.push(out, *(lengths + symbol))
+            symbol := symbol + 1
+        }
+        var current: int := 0
+        var filled: int := 0
+        var index: int := 0
+        while index < input.size {
+            var b: int := bytes.get(input, index)
+            var length: int := *(lengths + b)
+            var bit: int := length - 1
+            while bit >= 0 {
+                current := (current << 1) | ((*(codes + b) >> bit) & 1)
+                filled := filled + 1
+                if filled = 8 {
+                    bytes.push(out, current)
+                    current := 0
+                    filled := 0
+                }
+                bit := bit - 1
+            }
+            index := index + 1
+        }
+        if filled > 0 { bytes.push(out, current << (8 - filled)) }
+        free(lengths)
+        free(codes)
+        return out
+    end
+
+    fn decode(input: *bytes.Buffer): *bytes.Buffer
+    begin
+        var out: *bytes.Buffer := bytes.new()
+        if input.size < 264 || bytes.slice_string(input, 0, 4) != "HUF1" { return out }
+        var total: int := bytes.read_le_at(input, 4, 4)
+        var lengths: *int := alloc(256 * 8)
+        var codes: *int := alloc(256 * 8)
+        var symbol: int := 0
+        var maxLength: int := 0
+        while symbol < 256 {
+            *(lengths + symbol) := bytes.get(input, 8 + symbol)
+            if *(lengths + symbol) > maxLength { maxLength := *(lengths + symbol) }
+            symbol := symbol + 1
+        }
+        canonical(lengths, codes)
+        var counts: *int := alloc(65 * 8)
+        var firsts: *int := alloc(65 * 8)
+        var offsets: *int := alloc(65 * 8)
+        var ordered: *int := alloc(256 * 8)
+        runtime.mem.set(counts, 0, 520)
+        symbol := 0
+        while symbol < 256 {
+            *(counts + *(lengths + symbol)) := *(counts + *(lengths + symbol)) + 1
+            symbol := symbol + 1
+        }
+        var length: int := 1
+        var position: int := 0
+        while length <= maxLength {
+            *(offsets + length) := position
+            *(firsts + length) := -1
+            symbol := 0
+            while symbol < 256 {
+                if *(lengths + symbol) = length {
+                    if *(firsts + length) < 0 { *(firsts + length) := *(codes + symbol) }
+                    *(ordered + position) := symbol
+                    position := position + 1
+                }
+                symbol := symbol + 1
+            }
+            length := length + 1
+        }
+        var bitIndex: int := 264 * 8
+        while out.size < total {
+            var code: int := 0
+            var len2: int := 0
+            var found: int := 0
+            while found = 0 && len2 < maxLength {
+                var byteIndex: int := bitIndex / 8
+                var bit: int := (bytes.get(input, byteIndex) >> (7 - bitIndex % 8)) & 1
+                bitIndex := bitIndex + 1
+                code := (code << 1) | bit
+                len2 := len2 + 1
+                if *(counts + len2) > 0 && code >= *(firsts + len2) && code < *(firsts + len2) + *(counts + len2) {
+                    bytes.push(out, *(ordered + *(offsets + len2) + code - *(firsts + len2)))
+                    found := 1
+                }
+            }
+            if found = 0 { return out }
+        }
+        free(lengths)
+        free(codes)
+        free(counts)
+        free(firsts)
+        free(offsets)
+        free(ordered)
+        return out
+    end
+end

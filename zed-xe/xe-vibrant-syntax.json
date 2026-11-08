@@ -1,0 +1,18 @@
+{
+  "experimental.theme_overrides": {
+    "syntax": {
+      "comment.xe": { "color": "#858A9E", "font_style": "italic" },
+      "keyword.xe": { "color": "#C792EA" },
+      "type.xe": { "color": "#66D9EF" },
+      "function.xe": { "color": "#82AAFF" },
+      "namespace.xe": { "color": "#F78C6C" },
+      "string.xe": { "color": "#A6E22E" },
+      "string.escape.xe": { "color": "#FD971F" },
+      "number.xe": { "color": "#FD971F" },
+      "operator.xe": { "color": "#F92672" },
+      "keyword.embedded.xe": { "color": "#E6DB74" },
+      "embedded.xe": { "color": "#E6DB74" },
+      "punctuation.bracket.embedded.xe": { "color": "#F0F0FA" }
+    }
+  }
+}

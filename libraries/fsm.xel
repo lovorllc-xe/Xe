@@ -1,0 +1,84 @@
+// fsm: finite state machines driven by named events.
+uses strintmap
+uses strlist
+
+module fsm
+begin
+    type Machine: record
+    begin
+        names: *strlist.List
+        table: *strintmap.Map
+        current: int
+        transitions: int
+        history: *strlist.List
+    end
+
+    fn new(initial: string): *fsm.Machine
+    begin
+        var m: *fsm.Machine := alloc(40)
+        m.names := strlist.new()
+        m.table := strintmap.new()
+        m.history := strlist.new()
+        m.current := state_id(m, initial)
+        m.transitions := 0
+        strlist.push(m.history, initial)
+        return m
+    end
+
+    fn state_id(m: *fsm.Machine, name: string): int
+    begin
+        var index: int := strlist.index_of(m.names, name)
+        if index >= 0 { return index }
+        strlist.push(m.names, name)
+        return strlist.len(m.names) - 1
+    end
+
+    fn add(m: *fsm.Machine, from: string, event: string, to: string)
+    begin
+        strintmap.put(m.table, str.number(state_id(m, from)) + "|" + event, state_id(m, to))
+    end
+
+    fn can(m: *fsm.Machine, event: string): int
+    begin
+        return strintmap.has(m.table, str.number(m.current) + "|" + event)
+    end
+
+    // Applies the event; returns 0 if no transition exists from the current state.
+    fn fire(m: *fsm.Machine, event: string): int
+    begin
+        var target: int := strintmap.get(m.table, str.number(m.current) + "|" + event, -1)
+        if target < 0 { return 0 }
+        m.current := target
+        m.transitions := m.transitions + 1
+        strlist.push(m.history, strlist.get(m.names, target))
+        return 1
+    end
+
+    fn state(m: *fsm.Machine): string
+    begin
+        return strlist.get(m.names, m.current)
+    end
+
+    fn is_in(m: *fsm.Machine, name: string): int
+    begin
+        return state(m) = name
+    end
+
+    fn steps(m: *fsm.Machine): int
+    begin
+        return m.transitions
+    end
+
+    fn trace(m: *fsm.Machine): string
+    begin
+        return strlist.join(m.history, " -> ")
+    end
+
+    fn reset(m: *fsm.Machine, initial: string)
+    begin
+        m.current := state_id(m, initial)
+        strlist.clear(m.history)
+        strlist.push(m.history, initial)
+        m.transitions := 0
+    end
+end

@@ -1,0 +1,80 @@
+// retry: exponential backoff schedules with jitter for retrying flaky operations.
+uses random
+uses clock
+
+module retry
+begin
+    type Policy: record
+    begin
+        attempts: int
+        base: int
+        cap: int
+        jitter: int
+        rng: *random.Rng
+    end
+
+    // base and cap in nanoseconds; jitter in percent (0 = none, 100 = full).
+    fn new(attempts: int, base: int, cap: int, jitter: int): *retry.Policy
+    begin
+        var p: *retry.Policy := alloc(40)
+        p.attempts := attempts
+        p.base := base
+        p.cap := cap
+        p.jitter := jitter
+        p.rng := random.new_random()
+        return p
+    end
+
+    fn standard(): *retry.Policy
+    begin
+        return retry.new(5, 100000000, 5000000000, 50)
+    end
+
+    // Delay before attempt number `attempt` (1-based; the first attempt has no delay).
+    fn delay(p: *retry.Policy, attempt: int): int
+    begin
+        if attempt <= 1 { return 0 }
+        var d: int := p.base
+        var i: int := 2
+        while i < attempt && d < p.cap {
+            d := d * 2
+            i := i + 1
+        }
+        if d > p.cap { d := p.cap }
+        if p.jitter > 0 {
+            var spread: int := d * p.jitter / 100
+            d := d - spread + random.below(p.rng, spread * 2 + 1) / 2
+            if d < 0 { d := 0 }
+        }
+        return d
+    end
+
+    fn should_retry(p: *retry.Policy, attempt: int): int
+    begin
+        return attempt < p.attempts
+    end
+
+    fn wait(p: *retry.Policy, attempt: int)
+    begin
+        clock.sleep_ns(delay(p, attempt))
+    end
+
+    // Total worst-case delay (without jitter) across all attempts.
+    fn total_delay(p: *retry.Policy): int
+    begin
+        var total: int := 0
+        var attempt: int := 2
+        while attempt <= p.attempts {
+            var d: int := p.base
+            var i: int := 2
+            while i < attempt && d < p.cap {
+                d := d * 2
+                i := i + 1
+            }
+            if d > p.cap { d := p.cap }
+            total := total + d
+            attempt := attempt + 1
+        }
+        return total
+    end
+end
