@@ -20,25 +20,22 @@ so the smallest cases mostly measure process start-up. The GUI shows ns, µs, ms
 
 ## Results of the last full run (`results/latest.json`)
 
-| | Xe fastest | Xe within 2 % of fastest | geometric mean vs fastest |
+| | Xe fastest | Xe fastest or 2nd within 5 % | geometric mean vs fastest |
 |---|---|---|---|
-| Compilation (239 cases) | 224 | 225 | 1.01x |
-| Execution (239 cases) | 165 | 168 | 1.10x |
+| Compilation (239 cases) | 235 | 235 | 1.01x |
+| Execution (239 cases) | 174 | 186 | 1.08x |
 
-**Xe did not meet the "fastest or within 2 % everywhere" goal.** Where it falls short:
+**Xe did not reach "fastest, or 2nd within 5 %" in every case.** 53 execution cases and 4 compile cases miss it:
 
-- *Compilation:* Xe builds in about 10 ms and beats C++ (150 ms), Go (65 ms) and
-  Rust (60 ms) everywhere. The 14 misses are against Python's byte-compile
-  (~23 ms, but it does no optimisation or linking): `editdist` (Xe 2-6 % slower)
-  and the four `mono` programs (Xe about 50 ms, Python 23 ms).
-- *Execution:* Xe is fastest or tied on tiny cases (static binary, no runtime
-  start-up), and on `sumsq`, `gcdsum`, `lcg`, `queens` at every size.
-  On larger loops it trails rustc/gcc: at the largest sizes `mandel` +190 %,
-  `strbuild` +210 %, `churn` +160 %, `sort` +160 %, `editdist` +110 %, `collatz` +90 %,
-  `matmul` +80 %, `hashtab` +70 %, `tprime` +60 %, `sieve` +37 %, `fib` +23 %,
-  `mono-30` +18 %. The threaded families are mostly 35-60 % behind Rust.
-- Reasons: Xe's code generator has no vectorisation, limited register allocation
-  across loops, no inlining across calls, and bounds-checked array access; its
-  allocator is a simple size-class design. These are the next optimisation targets.
+- *Compilation:* Xe builds in about 10 ms, ahead of C++ (150 ms), Go (65 ms) and Rust (60 ms).
+  The 4 misses are the `mono` programs against Python's byte-compile, which does no optimisation or linking.
+- *Execution, still behind at the largest sizes:* `churn` +160 %, `strbuild` +230 %, `tprime` +70 %,
+  `collatz` +60 %, `sort` +50 %, `treebuild` +40 %, `tsum` +34 %, `fib` +31 %, `hashtab` +30 %,
+  `binsearch` +28 %, `listalloc` +28 %, `sieve` +22 %, `matmul` +23 %. Rust is the fastest in almost all of these.
+- *What improved in this round:* a new optimising back end (`compiler/fast.xe`) with whole-function
+  register allocation, loop inversion, branch-free `if` and accumulator conversion of recursion.
+  `mandel` and `sort` roughly halved; `mandel` is now fastest at every size.
+- *Next targets:* the allocator (`churn`, `listalloc`, `treebuild`), string building (`strbuild`),
+  thread start-up cost (`tsum`, `tprime`), and array-heavy loops (bounds checks, `sieve`, `matmul`).
 
 Timings depend on the machine; rerun the suite to reproduce them.

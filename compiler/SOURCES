@@ -6,6 +6,7 @@ diag.xe
 parser.xe
 checker.xe
 codegen.xe
+fast.xe
 optimizer.xe
 runtime.xe
 memory.xe

@@ -4438,7 +4438,10 @@ begin
             var name: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
             if name != "main" {
                 var statement: int := ast.read(pool, functionId, 6)
-                if statement >= 0 {
+                var quick: string := ""
+                if statement >= 0 { quick := fast.compile(source, pool, functionId) }
+                if str.length(quick) > 0 { output := str.append(output, quick) }
+                if statement >= 0 && str.length(quick) = 0 {
                     var label: string := functionLabel(qualifiedFunctionName(source, pool, functionId))
                     var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
                     var parameter: [4]int := parser.significant(source, opening[2], opening[3])

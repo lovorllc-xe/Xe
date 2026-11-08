@@ -1,0 +1,2095 @@
+module fast
+begin
+    // Optimizing back end for numeric functions.
+    //
+    // Functions whose locals are all int, flt, pointers or pointers to fixed
+    // arrays, and whose statements are var/assign/if/while/return/call/defer,
+    // are compiled here with whole-function register allocation (10 integer
+    // and 8 float registers), loop inversion, compare-and-branch conditions,
+    // direct array addressing and constant division by multiplication.
+    // Anything outside that subset makes function() return "" and the
+    // general code generator compiles the function instead.
+    //
+    // Context layout (c: *[65536]int):
+    //   0 variables  1 labels  2 failed  3 function id  4 has calls
+    //   5 spill slots  6 defers  7 busy int temps  8 busy xmm temps
+    //   9 pushed bytes  10 result class  11 int var regs  12 xmm var regs
+    //   13 return seen  14 saved count  15 frame size  20.. defer statements
+    //   100 + 8v: key, type, capacity, weight, register, offset, parameter, class
+    // Register codes: 0 rbx 1 r12 2 r13 3 r14 4 r15 5 rsi 6 rdi 7 r8 8 r9 9 r10 10 r11
+
+    fn regName(code: int): string
+    begin
+        if code = 0 { return "rbx" }
+        if code = 1 { return "r12" }
+        if code = 2 { return "r13" }
+        if code = 3 { return "r14" }
+        if code = 4 { return "r15" }
+        if code = 5 { return "rsi" }
+        if code = 6 { return "rdi" }
+        if code = 7 { return "r8" }
+        if code = 8 { return "r9" }
+        if code = 9 { return "r10" }
+        if code = 10 { return "r11" }
+        return "rax"
+    end
+
+    fn argName(index: int): string
+    begin
+        if index = 0 { return "rdi" }
+        if index = 1 { return "rsi" }
+        if index = 2 { return "rdx" }
+        if index = 3 { return "rcx" }
+        if index = 4 { return "r8" }
+        return "r9"
+    end
+
+    fn argCode(index: int): int
+    begin
+        if index = 0 { return 6 }
+        if index = 1 { return 5 }
+        if index = 4 { return 7 }
+        if index = 5 { return 8 }
+        return -1
+    end
+
+    fn bit(index: int): int
+    begin
+        return 1 << index
+    end
+
+    fn fail(c: *[65536]int): string
+    begin
+        (*c)[2] := 1
+        return ""
+    end
+
+    fn exhausted(c: *[65536]int): string
+    begin
+        if (*c)[2] = 0 { (*c)[2] := 2 }
+        return ""
+    end
+
+    fn resetAllocation(c: *[65536]int)
+    begin
+        (*c)[7] := 0
+        (*c)[8] := 0
+        (*c)[9] := 0
+        (*c)[11] := 0
+        (*c)[12] := 0
+        (*c)[14] := 0
+        (*c)[17] := 0
+        (*c)[19] := 0
+        var v: int := 0
+        while v < (*c)[0] {
+            (*c)[entry(v, 4)] := -1
+            (*c)[entry(v, 5)] := 0
+            v := v + 1
+        }
+    end
+
+    fn label(c: *[65536]int): string
+    begin
+        (*c)[1] := (*c)[1] + 1
+        return ".Lq" + token.number((*c)[3]) + "_" + token.number((*c)[1])
+    end
+
+    fn text(source: string, pool: *[12582912]int, id: int): string
+    begin
+        return str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2))
+    end
+
+    fn trimmed(value: string): string
+    begin
+        var first: int := 0
+        var last: int := str.length(value)
+        while first < last && (str.char(value, first) = 32 || str.char(value, first) = 9 || str.char(value, first) = 10) { first := first + 1 }
+        while last > first && (str.char(value, last - 1) = 32 || str.char(value, last - 1) = 9 || str.char(value, last - 1) = 10) { last := last - 1 }
+        return str.slice(value, first, last)
+    end
+
+    // Type codes: 1 int, 2 flt, 3 pointer to int array, 4 pointer to flt array, 5 other pointer.
+    fn typeCode(raw: string): int
+    begin
+        var type: string := trimmed(raw)
+        if type = "int" { return 1 }
+        if type = "flt" { return 2 }
+        var size: int := str.length(type)
+        if size >= 2 && str.char(type, 0) = 42 {
+            if size > 7 && str.char(type, 1) = 91 {
+                var tail: string := str.slice(type, size - 4, size)
+                var digits: string := str.slice(type, 2, size - 4)
+                var index: int := 0
+                var numeric: int := 1
+                while index < str.length(digits) {
+                    if str.char(digits, index) < 48 || str.char(digits, index) > 57 { numeric := 0 }
+                    index := index + 1
+                }
+                if numeric = 1 && str.length(digits) > 0 && str.length(digits) < 11 {
+                    if tail = "]int" { return 3 }
+                    if tail = "]flt" { return 4 }
+                }
+                return 0
+            }
+            if type = "*int" || type = "*flt" || type = "*void" { return 5 }
+            return 0
+        }
+        return 0
+    end
+
+    fn typeCapacity(raw: string): int
+    begin
+        var type: string := trimmed(raw)
+        var close: int := str.find(type, "]")
+        if close < 3 { return 0 }
+        return memo.number(str.slice(type, 2, close))
+    end
+
+    fn entry(v: int, field: int): int
+    begin
+        return 100 + v * 8 + field
+    end
+
+    fn addVariable(c: *[65536]int, key: int, type: int, capacity: int, parameter: int): int
+    begin
+        var v: int := (*c)[0]
+        if v >= 1900 { return -1 }
+        (*c)[entry(v, 0)] := key
+        (*c)[entry(v, 1)] := type
+        (*c)[entry(v, 2)] := capacity
+        (*c)[entry(v, 3)] := 0
+        (*c)[entry(v, 4)] := -1
+        (*c)[entry(v, 5)] := 0
+        (*c)[entry(v, 6)] := parameter
+        if type = 2 { (*c)[entry(v, 7)] := 2 } else { (*c)[entry(v, 7)] := 1 }
+        (*c)[0] := v + 1
+        return v
+    end
+
+    fn findVariable(c: *[65536]int, key: int): int
+    begin
+        var v: int := 0
+        var found: int := -1
+        while v < (*c)[0] {
+            if (*c)[entry(v, 0)] = key { found := v }
+            v := v + 1
+        }
+        return found
+    end
+
+    // The variable a name node refers to, or -1.
+    fn variableOf(source: string, pool: *[12582912]int, c: *[65536]int, id: int): int
+    begin
+        if id < 0 || ast.read(pool, id, 0) != ast.nameKind() { return -1 }
+        var binding: int := ast.read(pool, id, 11)
+        if binding = -1 { return -1 }
+        if str.find(text(source, pool, id), ".") >= 0 { return -1 }
+        return findVariable(c, binding)
+    end
+
+    fn isCall(source: string, pool: *[12582912]int, id: int): int
+    begin
+        if id >= 0 && ast.read(pool, id, 0) = ast.callKind() { return 1 }
+        return 0
+    end
+
+    // ------------------------------------------------------------ scanning
+    fn calleeOf(source: string, pool: *[12582912]int, id: int): int
+    begin
+        var called: int := ast.read(pool, id, 3)
+        if called < 0 || ast.read(pool, called, 0) != ast.nameKind() { return -3 }
+        var name: string := text(source, pool, called)
+        if name = "alloc" { return -1 }
+        if name = "free" { return -2 }
+        var target: int := ast.read(pool, called, 11)
+        if target <= 0 { return -3 }
+        return target - 1
+    end
+
+    fn resultClass(source: string, pool: *[12582912]int, target: int): int
+    begin
+        if target = -1 { return 1 }
+        if target = -2 { return 0 }
+        var type: string := trimmed(codegen.functionResultTypeAt(source, pool, target))
+        if str.length(type) = 0 || type = "void" { return 0 }
+        var code: int := typeCode(type)
+        if code = 2 { return 2 }
+        if code = 0 { return -1 }
+        return 1
+    end
+
+    fn argumentCount(pool: *[12582912]int, id: int): int
+    begin
+        var count: int := 0
+        var argument: int := ast.read(pool, id, 6)
+        while argument >= 0 && count < 64 {
+            count := count + 1
+            argument := ast.read(pool, argument, 5)
+        }
+        return count
+    end
+
+    fn argumentAt(pool: *[12582912]int, id: int, index: int): int
+    begin
+        var argument: int := ast.read(pool, id, 6)
+        var count: int := 0
+        while argument >= 0 && count < index {
+            argument := ast.read(pool, argument, 5)
+            count := count + 1
+        }
+        return argument
+    end
+
+    // Class of the callee's parameter: 1 integer register, 2 float register, 0 unsupported.
+    fn parameterClass(source: string, pool: *[12582912]int, target: int, index: int): int
+    begin
+        if target = -1 || target = -2 { return 1 }
+        var code: int := typeCode(codegen.functionParameterTypeAt(source, pool, target, index))
+        if code = 2 { return 2 }
+        if code = 0 { return 0 }
+        return 1
+    end
+
+    fn classOf(source: string, pool: *[12582912]int, c: *[65536]int, id: int): int
+    begin
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() {
+            if str.find(text(source, pool, id), ".") >= 0 { return 2 }
+            return 1
+        }
+        if kind = ast.nameKind() {
+            var v: int := variableOf(source, pool, c, id)
+            if v < 0 { return 0 }
+            return (*c)[entry(v, 7)]
+        }
+        if kind = ast.unaryKind() {
+            if ast.read(pool, id, 10) = 33 { return 1 }
+            return classOf(source, pool, c, ast.read(pool, id, 3))
+        }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 43 || operation = 45 || operation = 42 || operation = 47 {
+                if classOf(source, pool, c, ast.read(pool, id, 3)) = 2 || classOf(source, pool, c, ast.read(pool, id, 4)) = 2 { return 2 }
+            }
+            return 1
+        }
+        if kind = ast.indexKind() {
+            var v: int := variableOf(source, pool, c, ast.read(pool, ast.read(pool, id, 3), 3))
+            if v >= 0 && (*c)[entry(v, 1)] = 4 { return 2 }
+            return 1
+        }
+        if kind = ast.callKind() { return resultClass(source, pool, calleeOf(source, pool, id)) }
+        return 0
+    end
+
+    fn weight(depth: int): int
+    begin
+        var level: int := depth
+        if level > 6 { level := 6 }
+        return 1 << (level * 3)
+    end
+
+    fn scanExpression(source: string, pool: *[12582912]int, c: *[65536]int, id: int, depth: int)
+    begin
+        if (*c)[2] != 0 { return }
+        if id < 0 {
+            fail(c)
+            return
+        }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() {
+            if ast.read(pool, id, 10) != token.numberKind() { fail(c) }
+            return
+        }
+        if kind = ast.nameKind() {
+            var v: int := variableOf(source, pool, c, id)
+            if v < 0 {
+                fail(c)
+                return
+            }
+            (*c)[entry(v, 3)] := (*c)[entry(v, 3)] + weight(depth)
+            return
+        }
+        if kind = ast.unaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation != 45 && operation != 33 && operation != 126 {
+                fail(c)
+                return
+            }
+            scanExpression(source, pool, c, ast.read(pool, id, 3), depth)
+            if operation != 45 && classOf(source, pool, c, ast.read(pool, id, 3)) != 1 { fail(c) }
+            return
+        }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            scanExpression(source, pool, c, ast.read(pool, id, 3), depth)
+            scanExpression(source, pool, c, ast.read(pool, id, 4), depth)
+            if (*c)[2] != 0 { return }
+            var leftClass: int := classOf(source, pool, c, ast.read(pool, id, 3))
+            var rightClass: int := classOf(source, pool, c, ast.read(pool, id, 4))
+            if leftClass < 1 || rightClass < 1 {
+                fail(c)
+                return
+            }
+            var arithmetic: int := 0
+            if operation = 43 || operation = 45 || operation = 42 || operation = 47 { arithmetic := 1 }
+            var comparison: int := 0
+            if operation = 60 || operation = 62 || operation = 256 || operation = 257 || operation = 258 || operation = 259 { comparison := 1 }
+            if leftClass = 2 || rightClass = 2 {
+                if arithmetic = 0 && comparison = 0 { fail(c) }
+                return
+            }
+            if arithmetic = 1 || comparison = 1 || operation = 37 || operation = 38 || operation = 124 || operation = 94 || operation = 260 || operation = 261 || operation = 263 || operation = 264 { return }
+            fail(c)
+            return
+        }
+        if kind = ast.indexKind() {
+            var base: int := ast.read(pool, id, 3)
+            if base < 0 || ast.read(pool, base, 0) != ast.unaryKind() || ast.read(pool, base, 10) != 42 {
+                fail(c)
+                return
+            }
+            var v: int := variableOf(source, pool, c, ast.read(pool, base, 3))
+            if v < 0 || ((*c)[entry(v, 1)] != 3 && (*c)[entry(v, 1)] != 4) {
+                fail(c)
+                return
+            }
+            (*c)[entry(v, 3)] := (*c)[entry(v, 3)] + weight(depth)
+            scanExpression(source, pool, c, ast.read(pool, id, 4), depth)
+            if (*c)[2] = 0 && classOf(source, pool, c, ast.read(pool, id, 4)) != 1 { fail(c) }
+            return
+        }
+        if kind = ast.callKind() {
+            var target: int := calleeOf(source, pool, id)
+            if target = -3 {
+                fail(c)
+                return
+            }
+            if resultClass(source, pool, target) < 0 {
+                fail(c)
+                return
+            }
+            (*c)[4] := 1
+            var count: int := argumentCount(pool, id)
+            if target >= 0 && count != codegen.parameterCount(source, pool, target) {
+                fail(c)
+                return
+            }
+            if target < 0 && count != 1 {
+                fail(c)
+                return
+            }
+            var integers: int := 0
+            var floats: int := 0
+            var index: int := 0
+            while index < count {
+                var argument: int := argumentAt(pool, id, index)
+                scanExpression(source, pool, c, argument, depth)
+                var wanted: int := parameterClass(source, pool, target, index)
+                if wanted = 0 { fail(c) }
+                if (*c)[2] = 0 && classOf(source, pool, c, argument) != wanted { fail(c) }
+                if wanted = 2 { floats := floats + 1 } else { integers := integers + 1 }
+                index := index + 1
+            }
+            if integers > 6 || floats > 8 { fail(c) }
+            return
+        }
+        fail(c)
+    end
+
+    fn scanBlock(source: string, pool: *[12582912]int, c: *[65536]int, block: int, depth: int)
+    begin
+        if block < 0 { return }
+        scanStatements(source, pool, c, ast.read(pool, block, 6), depth, 0)
+    end
+
+    fn scanStatements(source: string, pool: *[12582912]int, c: *[65536]int, first: int, depth: int, top: int)
+    begin
+        var statement: int := first
+        var guard: int := 0
+        while statement >= 0 && (*c)[2] = 0 && guard < 100000 {
+            var kind: int := ast.read(pool, statement, 0)
+            var handled: int := 0
+            if kind = ast.variableKind() {
+                handled := 1
+                if ast.read(pool, statement, 10) != 0 { fail(c) }
+                var raw: string := codegen.typeTextForFunction(source, pool, (*c)[3], ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
+                var type: int := typeCode(raw)
+                if type = 0 { fail(c) }
+                else {
+                    var value: int := ast.read(pool, statement, 6)
+                    if value >= 0 {
+                        scanExpression(source, pool, c, value, depth)
+                        if (*c)[2] = 0 {
+                            var wanted: int := 1
+                            if type = 2 { wanted := 2 }
+                            if classOf(source, pool, c, value) != wanted { fail(c) }
+                        }
+                    }
+                    if addVariable(c, statement, type, typeCapacity(raw), -1) < 0 { fail(c) }
+                }
+            }
+            if kind = ast.assignKind() {
+                handled := 1
+                var target: int := ast.read(pool, statement, 3)
+                var value: int := ast.read(pool, statement, 4)
+                scanExpression(source, pool, c, value, depth)
+                if ast.read(pool, target, 0) = ast.nameKind() {
+                    var v: int := variableOf(source, pool, c, target)
+                    if v < 0 { fail(c) }
+                    else {
+                        (*c)[entry(v, 3)] := (*c)[entry(v, 3)] + weight(depth)
+                        if (*c)[2] = 0 && classOf(source, pool, c, value) != (*c)[entry(v, 7)] { fail(c) }
+                    }
+                }
+                else {
+                    if ast.read(pool, target, 0) = ast.indexKind() {
+                        scanExpression(source, pool, c, target, depth)
+                        if (*c)[2] = 0 && classOf(source, pool, c, value) != classOf(source, pool, c, target) { fail(c) }
+                    }
+                    else { fail(c) }
+                }
+            }
+            if kind = ast.branchKind() {
+                handled := 1
+                scanExpression(source, pool, c, ast.read(pool, statement, 3), depth)
+                scanBlock(source, pool, c, ast.read(pool, statement, 6), depth)
+                scanBlock(source, pool, c, ast.read(pool, statement, 4), depth)
+            }
+            if kind = ast.loopKind() {
+                handled := 1
+                scanExpression(source, pool, c, ast.read(pool, statement, 3), depth + 1)
+                scanBlock(source, pool, c, ast.read(pool, statement, 6), depth + 1)
+            }
+            if kind = ast.returnKind() {
+                handled := 1
+                (*c)[13] := 1
+                var value: int := ast.read(pool, statement, 6)
+                if value >= 0 {
+                    scanExpression(source, pool, c, value, depth)
+                    if (*c)[2] = 0 && classOf(source, pool, c, value) != (*c)[10] { fail(c) }
+                }
+                else {
+                    if (*c)[10] != 0 { fail(c) }
+                }
+            }
+            if kind = ast.expressionKind() {
+                handled := 1
+                var value: int := ast.read(pool, statement, 6)
+                if isCall(source, pool, value) = 0 { fail(c) }
+                else { scanExpression(source, pool, c, value, depth) }
+            }
+            if kind = ast.deferKind() {
+                handled := 1
+                var value: int := ast.read(pool, statement, 6)
+                if top = 0 || (*c)[13] != 0 || (*c)[6] >= 60 || isCall(source, pool, value) = 0 { fail(c) }
+                else {
+                    scanExpression(source, pool, c, value, depth)
+                    (*c)[20 + (*c)[6]] := value
+                    (*c)[6] := (*c)[6] + 1
+                }
+            }
+            if handled = 0 { fail(c) }
+            statement := ast.read(pool, statement, 5)
+            guard := guard + 1
+        }
+    end
+
+    // ----------------------------------------------------------- operands
+    fn location(c: *[65536]int, v: int): string
+    begin
+        var register: int := (*c)[entry(v, 4)]
+        if register >= 0 {
+            if (*c)[entry(v, 7)] = 2 { return "xmm" + token.number(register) }
+            return regName(register)
+        }
+        return "qword ptr [rbp-" + token.number((*c)[entry(v, 5)]) + "]"
+    end
+
+    fn inRegister(c: *[65536]int, v: int): int
+    begin
+        if (*c)[entry(v, 4)] >= 0 { return 1 }
+        return 0
+    end
+
+    fn literalValue(source: string, pool: *[12582912]int, id: int): [2]int
+    begin
+        var result: [2]int
+        result[0] := 0
+        if id < 0 { return result }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() && ast.read(pool, id, 10) = token.numberKind() {
+            var digits: string := text(source, pool, id)
+            if str.find(digits, ".") < 0 && str.length(digits) < 19 {
+                result[0] := 1
+                result[1] := memo.number(digits)
+            }
+        }
+        if kind = ast.unaryKind() && ast.read(pool, id, 10) = 45 {
+            var inner: [2]int := literalValue(source, pool, ast.read(pool, id, 3))
+            if inner[0] = 1 {
+                result[0] := 1
+                result[1] := 0 - inner[1]
+            }
+        }
+        return result
+    end
+
+    fn small(value: int): int
+    begin
+        if value >= -2147483648 && value <= 2147483647 { return 1 }
+        return 0
+    end
+
+    // An operand usable directly as the source of an integer instruction, or "".
+    fn operand(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        var constant: [2]int := literalValue(source, pool, id)
+        if constant[0] = 1 && small(constant[1]) = 1 { return token.number(constant[1]) }
+        if ast.read(pool, id, 0) = ast.nameKind() {
+            var v: int := variableOf(source, pool, c, id)
+            if v >= 0 && (*c)[entry(v, 7)] = 1 { return location(c, v) }
+        }
+        return ""
+    end
+
+    fn isImmediate(value: string): int
+    begin
+        if str.length(value) = 0 { return 0 }
+        var first: int := str.char(value, 0)
+        if first = 45 || (first >= 48 && first <= 57) { return 1 }
+        return 0
+    end
+
+    fn isMemory(value: string): int
+    begin
+        if str.find(value, "[") >= 0 { return 1 }
+        return 0
+    end
+
+    fn registerVariable(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        if id < 0 || ast.read(pool, id, 0) != ast.nameKind() { return "" }
+        var v: int := variableOf(source, pool, c, id)
+        if v >= 0 && (*c)[entry(v, 7)] = 1 && inRegister(c, v) = 1 { return regName((*c)[entry(v, 4)]) }
+        return ""
+    end
+
+    fn containsCall(pool: *[12582912]int, id: int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.callKind() { return 1 }
+        if kind = ast.unaryKind() { return containsCall(pool, ast.read(pool, id, 3)) }
+        if kind = ast.binaryKind() || kind = ast.indexKind() {
+            if containsCall(pool, ast.read(pool, id, 3)) = 1 { return 1 }
+            return containsCall(pool, ast.read(pool, id, 4))
+        }
+        return 0
+    end
+
+    fn mentions(source: string, pool: *[12582912]int, c: *[65536]int, id: int, v: int): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.nameKind() {
+            if variableOf(source, pool, c, id) = v { return 1 }
+            return 0
+        }
+        if kind = ast.callKind() {
+            var argument: int := ast.read(pool, id, 6)
+            while argument >= 0 {
+                if mentions(source, pool, c, argument, v) = 1 { return 1 }
+                argument := ast.read(pool, argument, 5)
+            }
+            return 0
+        }
+        if kind = ast.unaryKind() { return mentions(source, pool, c, ast.read(pool, id, 3), v) }
+        if kind = ast.binaryKind() || kind = ast.indexKind() {
+            if mentions(source, pool, c, ast.read(pool, id, 3), v) = 1 { return 1 }
+            return mentions(source, pool, c, ast.read(pool, id, 4), v)
+        }
+        return 0
+    end
+
+    // ------------------------------------------------------------- temps
+    fn takeTemp(c: *[65536]int): string
+    begin
+        var order: [6]int
+        order[0] := 10
+        order[1] := 9
+        order[2] := 8
+        order[3] := 7
+        order[4] := 6
+        order[5] := 5
+        var index: int := 0
+        var found: int := -1
+        if (*c)[4] != 0 {
+            while index < 5 && found < 0 {
+                if ((*c)[11] & bit(index)) = 0 && ((*c)[7] & bit(index)) = 0 { found := index }
+                index := index + 1
+            }
+            if found >= 0 { (*c)[14] := (*c)[14] | bit(found) }
+            index := 0
+        }
+        while index < 6 && found < 0 {
+            var code: int := order[index]
+            if ((*c)[11] & bit(code)) = 0 && ((*c)[7] & bit(code)) = 0 { found := code }
+            index := index + 1
+        }
+        index := 0
+        while index < 5 && found < 0 {
+            if ((*c)[11] & bit(index)) = 0 && ((*c)[7] & bit(index)) = 0 {
+                found := index
+                (*c)[14] := (*c)[14] | bit(index)
+            }
+            index := index + 1
+        }
+        if found < 0 { return exhausted(c) }
+        (*c)[7] := (*c)[7] | bit(found)
+        return regName(found)
+    end
+
+    fn freeTemps(c: *[65536]int): int
+    begin
+        var count: int := 0
+        var code: int := 0
+        while code < 11 {
+            if ((*c)[11] & bit(code)) = 0 && ((*c)[7] & bit(code)) = 0 { count := count + 1 }
+            code := code + 1
+        }
+        return count
+    end
+
+    fn hold(c: *[65536]int, name: string)
+    begin
+        var code: int := codeOf(name)
+        if code >= 5 { (*c)[17] := (*c)[17] | bit(code) }
+        if code < 0 && str.length(name) > 3 && str.slice(name, 0, 3) = "xmm" { (*c)[19] := (*c)[19] | bit(memo.number(str.slice(name, 3, str.length(name)))) }
+    end
+
+    fn release(c: *[65536]int, name: string)
+    begin
+        var code: int := codeOf(name)
+        if code >= 0 { (*c)[17] := (*c)[17] & ~bit(code) }
+        if code < 0 && str.length(name) > 3 && str.slice(name, 0, 3) = "xmm" { (*c)[19] := (*c)[19] & ~bit(memo.number(str.slice(name, 3, str.length(name)))) }
+    end
+
+    fn codeOf(name: string): int
+    begin
+        var code: int := 0
+        while code < 11 {
+            if regName(code) = name { return code }
+            code := code + 1
+        }
+        return -1
+    end
+
+    fn dropTemp(c: *[65536]int, name: string)
+    begin
+        var code: int := codeOf(name)
+        if code >= 0 { (*c)[7] := (*c)[7] & ~bit(code) }
+    end
+
+    fn takeFloat(c: *[65536]int): string
+    begin
+        var index: int := 1
+        var found: int := -1
+        while index < 16 && found < 0 {
+            if ((*c)[12] & bit(index)) = 0 && ((*c)[8] & bit(index)) = 0 { found := index }
+            index := index + 1
+        }
+        if found < 0 { return exhausted(c) }
+        (*c)[8] := (*c)[8] | bit(found)
+        return "xmm" + token.number(found)
+    end
+
+    fn dropFloat(c: *[65536]int, name: string)
+    begin
+        if str.length(name) < 4 { return }
+        var number: int := memo.number(str.slice(name, 3, str.length(name)))
+        (*c)[8] := (*c)[8] & ~bit(number)
+    end
+
+    // ------------------------------------------------------- expressions
+    fn signedCode(operation: int): string
+    begin
+        if operation = 60 { return "l" }
+        if operation = 62 { return "g" }
+        if operation = 258 { return "le" }
+        if operation = 259 { return "ge" }
+        if operation = 256 { return "e" }
+        return "ne"
+    end
+
+    fn floatCode(operation: int): string
+    begin
+        if operation = 60 { return "b" }
+        if operation = 62 { return "a" }
+        if operation = 258 { return "be" }
+        if operation = 259 { return "ae" }
+        if operation = 256 { return "e" }
+        return "ne"
+    end
+
+    fn inverse(condition: string): string
+    begin
+        if condition = "l" { return "ge" }
+        if condition = "ge" { return "l" }
+        if condition = "g" { return "le" }
+        if condition = "le" { return "g" }
+        if condition = "e" { return "ne" }
+        if condition = "ne" { return "e" }
+        if condition = "b" { return "ae" }
+        if condition = "ae" { return "b" }
+        if condition = "a" { return "be" }
+        return "a"
+    end
+
+    fn swapped(condition: string): string
+    begin
+        if condition = "l" { return "g" }
+        if condition = "g" { return "l" }
+        if condition = "le" { return "ge" }
+        if condition = "ge" { return "le" }
+        return condition
+    end
+
+    fn isComparison(operation: int): int
+    begin
+        if operation = 60 || operation = 62 || operation = 256 || operation = 257 || operation = 258 || operation = 259 { return 1 }
+        return 0
+    end
+
+    fn remainderFlag(operation: int): int
+    begin
+        if operation = 37 { return 1 }
+        return 0
+    end
+
+    fn powerShift(value: int): int
+    begin
+        if value <= 0 { return -1 }
+        var shift: int := 0
+        var remaining: int := value
+        while remaining > 1 {
+            if remaining % 2 != 0 { return -1 }
+            remaining := remaining / 2
+            shift := shift + 1
+        }
+        return shift
+    end
+
+    // Signed division or remainder of rax by a positive constant; result in rax.
+    fn constantDivide(c: *[65536]int, divisor: int, remainder: int): string
+    begin
+        if divisor = 1 {
+            if remainder = 1 { return " xor eax, eax\n" }
+            return ""
+        }
+        var shift: int := powerShift(divisor)
+        if shift > 0 {
+            var mask: string := token.number(divisor - 1)
+            var masking: string := " and rcx, " + mask + "\n"
+            if divisor - 1 > 2147483647 { masking := " mov rdx, " + mask + "\n and rcx, rdx\n" }
+            if remainder = 1 {
+                var final: string := " and rax, " + mask + "\n"
+                if divisor - 1 > 2147483647 { final := " and rax, rdx\n" }
+                return " mov rcx, rax\n sar rcx, 63\n" + masking + " add rax, rcx\n" + final + " sub rax, rcx\n"
+            }
+            return " mov rcx, rax\n sar rcx, 63\n" + masking + " add rax, rcx\n sar rax, " + token.number(shift) + "\n"
+        }
+        var maxInt: int := 9223372036854775807
+        var reciprocal: int := (maxInt / divisor) * 2 + ((maxInt % divisor) * 2 + 1) / divisor
+        var negative: string := label(c)
+        var done: string := label(c)
+        var exact: string := label(c)
+        var d: string := token.number(divisor)
+        var code: string := " test rax, rax\n js " + negative + "\n mov rcx, rax\n mov rdx, " + token.number(reciprocal) + "\n mul rdx\n mov rax, rdx\n imul rdx, rdx, " + d + "\n sub rcx, rdx\n cmp rcx, " + d + "\n jb " + exact + "\n"
+        if remainder = 1 {
+            code := code + " sub rcx, " + d + "\n" + exact + ":\n mov rax, rcx\n jmp " + done + "\n" + negative + ":\n mov rcx, " + d + "\n cqo\n idiv rcx\n mov rax, rdx\n" + done + ":\n"
+        }
+        else {
+            code := code + " inc rax\n" + exact + ":\n jmp " + done + "\n" + negative + ":\n mov rcx, " + d + "\n cqo\n idiv rcx\n" + done + ":\n"
+        }
+        return code
+    end
+
+    // Evaluates an integer expression into register target (never rax/rcx/rdx unless the expression is a leaf).
+    fn integer(source: string, pool: *[12582912]int, c: *[65536]int, id: int, target: string): string
+    begin
+        if (*c)[2] != 0 { return "" }
+        var kind: int := ast.read(pool, id, 0)
+        var constant: [2]int := literalValue(source, pool, id)
+        if constant[0] = 1 {
+            if constant[1] = 0 { return " xor " + low32(target) + ", " + low32(target) + "\n" }
+            return " mov " + target + ", " + token.number(constant[1]) + "\n"
+        }
+        if kind = ast.literalKind() {
+            fail(c)
+            return ""
+        }
+        if kind = ast.nameKind() {
+            var v: int := variableOf(source, pool, c, id)
+            var place: string := location(c, v)
+            if place = target { return "" }
+            return " mov " + target + ", " + place + "\n"
+        }
+        if target = "rax" && kind = ast.binaryKind() && containsCall(pool, ast.read(pool, id, 4)) = 1 && isComparison(ast.read(pool, id, 10)) = 0 && ast.read(pool, id, 10) != 260 && ast.read(pool, id, 10) != 261 && str.length(operand(source, pool, c, ast.read(pool, id, 4))) = 0 { return binary(source, pool, c, id, target) }
+        if target = "rax" { return viaTemp(source, pool, c, id) }
+        if kind = ast.unaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            var code: string := integer(source, pool, c, ast.read(pool, id, 3), target)
+            if operation = 45 { return code + " neg " + target + "\n" }
+            if operation = 126 { return code + " not " + target + "\n" }
+            return code + " test " + target + ", " + target + "\n sete al\n movzx " + target + ", al\n"
+        }
+        if kind = ast.indexKind() { return loadElement(source, pool, c, id, target) }
+        if kind = ast.callKind() {
+            var call: string := callCode(source, pool, c, id)
+            return call + " mov " + target + ", rax\n"
+        }
+        if kind = ast.binaryKind() { return binary(source, pool, c, id, target) }
+        fail(c)
+        return ""
+    end
+
+    fn low32(name: string): string
+    begin
+        if name = "rax" { return "eax" }
+        if name = "rbx" { return "ebx" }
+        if name = "rcx" { return "ecx" }
+        if name = "rdx" { return "edx" }
+        if name = "rsi" { return "esi" }
+        if name = "rdi" { return "edi" }
+        return name + "d"
+    end
+
+    fn viaTemp(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        var temp: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        var code: string := integer(source, pool, c, id, temp)
+        dropTemp(c, temp)
+        return code + " mov rax, " + temp + "\n"
+    end
+
+    fn binary(source: string, pool: *[12582912]int, c: *[65536]int, id: int, target: string): string
+    begin
+        var operation: int := ast.read(pool, id, 10)
+        var left: int := ast.read(pool, id, 3)
+        var right: int := ast.read(pool, id, 4)
+        if operation = 260 || operation = 261 || (isComparison(operation) = 1 && (classOf(source, pool, c, left) = 2 || classOf(source, pool, c, right) = 2)) {
+            var no: string := label(c)
+            var done: string := label(c)
+            return branchFalse(source, pool, c, id, no) + " mov " + target + ", 1\n jmp " + done + "\n" + no + ":\n xor " + low32(target) + ", " + low32(target) + "\n" + done + ":\n"
+        }
+        if isComparison(operation) = 1 {
+            var compare: string := compareIntegers(source, pool, c, left, right, signedCode(operation))
+            var condition: string := lastCondition(c)
+            return compare + " set" + condition + " al\n movzx " + target + ", al\n"
+        }
+        var constant: [2]int := literalValue(source, pool, right)
+        if (operation = 47 || operation = 37) && constant[0] = 1 && constant[1] > 0 {
+            var leftDirect: string := operand(source, pool, c, left)
+            if str.length(leftDirect) > 0 { return " mov rax, " + leftDirect + "\n" + constantDivide(c, constant[1], remainderFlag(operation)) + " mov " + target + ", rax\n" }
+            var code: string := integer(source, pool, c, left, target)
+            return code + " mov rax, " + target + "\n" + constantDivide(c, constant[1], remainderFlag(operation)) + " mov " + target + ", rax\n"
+        }
+        if (operation = 263 || operation = 264) && constant[0] = 1 {
+            var code: string := integer(source, pool, c, left, target)
+            var shiftName: string := "sar"
+            if operation = 263 { shiftName := "shl" }
+            return code + " " + shiftName + " " + target + ", " + token.number(constant[1] & 63) + "\n"
+        }
+        var leftConstant: [2]int := literalValue(source, pool, left)
+        if leftConstant[0] = 1 && small(leftConstant[1]) = 1 && (operation = 43 || operation = 42 || operation = 38 || operation = 124 || operation = 94) && constant[0] = 0 {
+            return integer(source, pool, c, right, target) + combine(operation, target, token.number(leftConstant[1]))
+        }
+        // Pick how to get the right operand.
+        var leftCode: string := ""
+        var rightValue: string := ""
+        var rightCode: string := ""
+        var temp: string := ""
+        var reversed: int := 0
+        var direct: string := operand(source, pool, c, right)
+        if str.length(direct) > 0 && (isImmediate(direct) = 0 || operation != 47 && operation != 37) {
+            leftCode := integer(source, pool, c, left, target)
+            rightValue := direct
+        }
+        else {
+            temp := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            if containsCall(pool, right) = 1 {
+                // Left goes to the temp (saved across the call), right to target.
+                leftCode := integer(source, pool, c, left, temp)
+                hold(c, temp)
+                rightCode := integer(source, pool, c, right, target)
+                release(c, temp)
+                reversed := 1
+            }
+            else {
+                leftCode := integer(source, pool, c, left, target)
+                rightCode := integer(source, pool, c, right, temp)
+                rightValue := temp
+            }
+        }
+        var code: string := leftCode + rightCode
+        if reversed = 1 {
+            // value = temp op target
+            if operation = 43 || operation = 42 || operation = 38 || operation = 124 || operation = 94 {
+                code := code + combine(operation, target, temp)
+            }
+            else {
+                if operation = 45 {
+                    code := code + " sub " + temp + ", " + target + "\n mov " + target + ", " + temp + "\n"
+                }
+                else {
+                    code := code + " xchg " + temp + ", " + target + "\n" + combine(operation, target, temp)
+                }
+            }
+            dropTemp(c, temp)
+            return code
+        }
+        code := code + combine(operation, target, rightValue)
+        if str.length(temp) > 0 { dropTemp(c, temp) }
+        return code
+    end
+
+    // target := target op value  (value: register, memory or immediate)
+    fn combine(operation: int, target: string, value: string): string
+    begin
+        if operation = 43 { return " add " + target + ", " + value + "\n" }
+        if operation = 45 { return " sub " + target + ", " + value + "\n" }
+        if operation = 38 { return " and " + target + ", " + value + "\n" }
+        if operation = 124 { return " or " + target + ", " + value + "\n" }
+        if operation = 94 { return " xor " + target + ", " + value + "\n" }
+        if operation = 42 {
+            if isImmediate(value) = 1 { return " imul " + target + ", " + target + ", " + value + "\n" }
+            return " imul " + target + ", " + value + "\n"
+        }
+        if operation = 263 || operation = 264 {
+            var shiftName: string := "sar"
+            if operation = 263 { shiftName := "shl" }
+            if isImmediate(value) = 1 { return " " + shiftName + " " + target + ", " + value + "\n" }
+            return " mov rcx, " + value + "\n " + shiftName + " " + target + ", cl\n"
+        }
+        // division and remainder; value is a register or memory operand
+        var result: string := "rax"
+        if operation = 37 { result := "rdx" }
+        return " mov rax, " + target + "\n cqo\n idiv " + value + "\n mov " + target + ", " + result + "\n"
+    end
+
+    fn lastCondition(c: *[65536]int): string
+    begin
+        return conditionName((*c)[16])
+    end
+
+    fn conditionName(code: int): string
+    begin
+        if code = 1 { return "l" }
+        if code = 2 { return "g" }
+        if code = 3 { return "le" }
+        if code = 4 { return "ge" }
+        if code = 5 { return "e" }
+        if code = 6 { return "ne" }
+        if code = 7 { return "b" }
+        if code = 8 { return "a" }
+        if code = 9 { return "be" }
+        if code = 10 { return "ae" }
+        return "ne"
+    end
+
+    fn conditionNumber(name: string): int
+    begin
+        var code: int := 1
+        while code < 11 {
+            if conditionName(code) = name { return code }
+            code := code + 1
+        }
+        return 6
+    end
+
+    // Emits a compare of two integer expressions; the condition to test is left in c[16].
+    fn compareIntegers(source: string, pool: *[12582912]int, c: *[65536]int, left: int, right: int, condition: string): string
+    begin
+        var leftDirect: string := operand(source, pool, c, left)
+        var rightDirect: string := operand(source, pool, c, right)
+        (*c)[16] := conditionNumber(condition)
+        if (condition = "e" || condition = "ne") && rightDirect = "0" && ast.read(pool, left, 0) = ast.binaryKind() && ast.read(pool, left, 10) = 37 {
+            var divisor: [2]int := literalValue(source, pool, ast.read(pool, left, 4))
+            if divisor[0] = 1 && powerShift(divisor[1]) > 0 && divisor[1] - 1 <= 2147483647 {
+                var inner: int := ast.read(pool, left, 3)
+                var register: string := registerVariable(source, pool, c, inner)
+                if str.length(register) > 0 { return " test " + register + ", " + token.number(divisor[1] - 1) + "\n" }
+                var holder: string := takeTemp(c)
+                if (*c)[2] != 0 { return "" }
+                var produce: string := integer(source, pool, c, inner, holder)
+                dropTemp(c, holder)
+                return produce + " test " + holder + ", " + token.number(divisor[1] - 1) + "\n"
+            }
+        }
+        if str.length(leftDirect) > 0 && isImmediate(leftDirect) = 0 && str.length(rightDirect) > 0 {
+            if isMemory(leftDirect) = 0 || isMemory(rightDirect) = 0 {
+                if isMemory(leftDirect) = 1 && isImmediate(rightDirect) = 1 { return " cmp " + leftDirect + ", " + rightDirect + "\n" }
+                return " cmp " + leftDirect + ", " + rightDirect + "\n"
+            }
+        }
+        if str.length(rightDirect) > 0 && isImmediate(rightDirect) = 1 && containsCall(pool, left) = 0 {
+            var temp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            var code: string := integer(source, pool, c, left, temp)
+            dropTemp(c, temp)
+            if rightDirect = "0" { return code + " test " + temp + ", " + temp + "\n" }
+            return code + " cmp " + temp + ", " + rightDirect + "\n"
+        }
+        if str.length(leftDirect) > 0 && isImmediate(leftDirect) = 1 && containsCall(pool, right) = 0 {
+            var temp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            var code: string := integer(source, pool, c, right, temp)
+            dropTemp(c, temp)
+            (*c)[16] := conditionNumber(swapped(condition))
+            return code + " cmp " + temp + ", " + leftDirect + "\n"
+        }
+        var first: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        var code: string := integer(source, pool, c, left, first)
+        if str.length(rightDirect) > 0 {
+            dropTemp(c, first)
+            return code + " cmp " + first + ", " + rightDirect + "\n"
+        }
+        var second: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        hold(c, first)
+        code := code + integer(source, pool, c, right, second)
+        release(c, first)
+        dropTemp(c, first)
+        dropTemp(c, second)
+        return code + " cmp " + first + ", " + second + "\n"
+    end
+
+    fn compareFloats(source: string, pool: *[12582912]int, c: *[65536]int, left: int, right: int, operation: int): string
+    begin
+        (*c)[16] := conditionNumber(floatCode(operation))
+        var first: string := takeFloat(c)
+        if (*c)[2] != 0 { return "" }
+        var code: string := float(source, pool, c, left, first)
+        var direct: string := floatOperand(source, pool, c, right)
+        if str.length(direct) > 0 {
+            dropFloat(c, first)
+            return code + " ucomisd " + first + ", " + direct + "\n"
+        }
+        var second: string := takeFloat(c)
+        if (*c)[2] != 0 { return "" }
+        hold(c, first)
+        code := code + float(source, pool, c, right, second)
+        release(c, first)
+        dropFloat(c, first)
+        dropFloat(c, second)
+        return code + " ucomisd " + first + ", " + second + "\n"
+    end
+
+    fn comparison(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        var operation: int := ast.read(pool, id, 10)
+        var left: int := ast.read(pool, id, 3)
+        var right: int := ast.read(pool, id, 4)
+        if classOf(source, pool, c, left) = 2 || classOf(source, pool, c, right) = 2 { return compareFloats(source, pool, c, left, right, operation) }
+        return compareIntegers(source, pool, c, left, right, signedCode(operation))
+    end
+
+    // Jumps to no when the condition is false; falls through when it is true.
+    fn branchFalse(source: string, pool: *[12582912]int, c: *[65536]int, id: int, no: string): string
+    begin
+        if (*c)[2] != 0 { return "" }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 260 { return branchFalse(source, pool, c, ast.read(pool, id, 3), no) + branchFalse(source, pool, c, ast.read(pool, id, 4), no) }
+            if operation = 261 {
+                var yes: string := label(c)
+                return branchTrue(source, pool, c, ast.read(pool, id, 3), yes) + branchFalse(source, pool, c, ast.read(pool, id, 4), no) + yes + ":\n"
+            }
+            if isComparison(operation) = 1 {
+                var code: string := comparison(source, pool, c, id)
+                return code + " j" + inverse(lastCondition(c)) + " " + no + "\n"
+            }
+        }
+        if kind = ast.unaryKind() && ast.read(pool, id, 10) = 33 { return branchTrue(source, pool, c, ast.read(pool, id, 3), no) }
+        var register: string := registerVariable(source, pool, c, id)
+        if str.length(register) > 0 { return " test " + register + ", " + register + "\n jz " + no + "\n" }
+        var temp: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        var value: string := integer(source, pool, c, id, temp)
+        dropTemp(c, temp)
+        return value + " test " + temp + ", " + temp + "\n jz " + no + "\n"
+    end
+
+    fn branchTrue(source: string, pool: *[12582912]int, c: *[65536]int, id: int, yes: string): string
+    begin
+        if (*c)[2] != 0 { return "" }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 261 { return branchTrue(source, pool, c, ast.read(pool, id, 3), yes) + branchTrue(source, pool, c, ast.read(pool, id, 4), yes) }
+            if operation = 260 {
+                var no: string := label(c)
+                return branchFalse(source, pool, c, ast.read(pool, id, 3), no) + branchTrue(source, pool, c, ast.read(pool, id, 4), yes) + no + ":\n"
+            }
+            if isComparison(operation) = 1 {
+                var code: string := comparison(source, pool, c, id)
+                return code + " j" + lastCondition(c) + " " + yes + "\n"
+            }
+        }
+        if kind = ast.unaryKind() && ast.read(pool, id, 10) = 33 { return branchFalse(source, pool, c, ast.read(pool, id, 3), yes) }
+        var register: string := registerVariable(source, pool, c, id)
+        if str.length(register) > 0 { return " test " + register + ", " + register + "\n jnz " + yes + "\n" }
+        var temp: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        var value: string := integer(source, pool, c, id, temp)
+        dropTemp(c, temp)
+        return value + " test " + temp + ", " + temp + "\n jnz " + yes + "\n"
+    end
+
+    // Computes the address parts of (*a)[i]: returns [setup code, address text] via c[17..].
+    fn elementAddress(source: string, pool: *[12582912]int, c: *[65536]int, id: int, scratch: string): string
+    begin
+        var base: int := ast.read(pool, ast.read(pool, id, 3), 3)
+        var v: int := variableOf(source, pool, c, base)
+        var index: int := ast.read(pool, id, 4)
+        var capacity: int := (*c)[entry(v, 2)]
+        var code: string := ""
+        var baseRegister: string := ""
+        if inRegister(c, v) = 1 { baseRegister := regName((*c)[entry(v, 4)]) }
+        var constant: [2]int := literalValue(source, pool, index)
+        if constant[0] = 1 && constant[1] >= 0 && constant[1] < capacity && constant[1] < 268435456 {
+            if str.length(baseRegister) = 0 {
+                code := " mov " + scratch + ", " + location(c, v) + "\n"
+                baseRegister := scratch
+            }
+            return code + "#[" + baseRegister + "+" + token.number(constant[1] * 8) + "]"
+        }
+        var indexRegister: string := registerVariable(source, pool, c, index)
+        if str.length(indexRegister) = 0 {
+            code := integer(source, pool, c, index, scratch)
+            indexRegister := scratch
+        }
+        var limit: string := token.number(capacity)
+        if capacity > 2147483647 { code := code + " mov rdx, " + limit + "\n cmp " + indexRegister + ", rdx\n" }
+        else { code := code + " cmp " + indexRegister + ", " + limit + "\n" }
+        code := code + " jae .LxeArrayIndexFail\n"
+        if str.length(baseRegister) = 0 {
+            code := code + " mov rax, " + location(c, v) + "\n"
+            baseRegister := "rax"
+        }
+        return code + "#[" + baseRegister + "+" + indexRegister + "*8]"
+    end
+
+    fn addressPart(combined: string): string
+    begin
+        var cut: int := str.length(combined) - 1
+        while cut > 0 && str.char(combined, cut) != 35 { cut := cut - 1 }
+        return str.slice(combined, cut + 1, str.length(combined))
+    end
+
+    fn codePart(combined: string): string
+    begin
+        var cut: int := str.length(combined) - 1
+        while cut > 0 && str.char(combined, cut) != 35 { cut := cut - 1 }
+        return str.slice(combined, 0, cut)
+    end
+
+    fn loadElement(source: string, pool: *[12582912]int, c: *[65536]int, id: int, target: string): string
+    begin
+        var combined: string := elementAddress(source, pool, c, id, target)
+        return codePart(combined) + " mov " + target + ", qword ptr " + addressPart(combined) + "\n"
+    end
+
+    // ------------------------------------------------------------ floats
+    fn floatOperand(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.literalKind() && str.find(text(source, pool, id), ".") >= 0 { return "qword ptr [rip+.Lflt" + token.number(ast.read(pool, id, 1)) + "]" }
+        if kind = ast.nameKind() {
+            var v: int := variableOf(source, pool, c, id)
+            if v >= 0 && (*c)[entry(v, 7)] = 2 { return location(c, v) }
+        }
+        return ""
+    end
+
+    fn float(source: string, pool: *[12582912]int, c: *[65536]int, id: int, target: string): string
+    begin
+        if (*c)[2] != 0 { return "" }
+        var kind: int := ast.read(pool, id, 0)
+        if classOf(source, pool, c, id) = 1 {
+            var temp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            var code: string := integer(source, pool, c, id, temp)
+            dropTemp(c, temp)
+            return code + " cvtsi2sd " + target + ", " + temp + "\n"
+        }
+        var direct: string := floatOperand(source, pool, c, id)
+        if str.length(direct) > 0 {
+            if direct = target { return "" }
+            if isMemory(direct) = 1 { return " movsd " + target + ", " + direct + "\n" }
+            return " movapd " + target + ", " + direct + "\n"
+        }
+        if kind = ast.unaryKind() && ast.read(pool, id, 10) = 45 {
+            var code: string := float(source, pool, c, ast.read(pool, id, 3), target)
+            return code + " movq rax, " + target + "\n btc rax, 63\n movq " + target + ", rax\n"
+        }
+        if kind = ast.indexKind() {
+            var temp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            var combined: string := elementAddress(source, pool, c, id, temp)
+            dropTemp(c, temp)
+            return codePart(combined) + " movsd " + target + ", qword ptr " + addressPart(combined) + "\n"
+        }
+        if kind = ast.callKind() {
+            var call: string := callCode(source, pool, c, id)
+            if target = "xmm0" { return call }
+            return call + " movapd " + target + ", xmm0\n"
+        }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            var name: string := "addsd"
+            if operation = 45 { name := "subsd" }
+            if operation = 42 { name := "mulsd" }
+            if operation = 47 { name := "divsd" }
+            var left: int := ast.read(pool, id, 3)
+            var right: int := ast.read(pool, id, 4)
+            var rightDirect: string := floatOperand(source, pool, c, right)
+            if str.length(rightDirect) > 0 {
+                return float(source, pool, c, left, target) + " " + name + " " + target + ", " + rightDirect + "\n"
+            }
+            var temp: string := takeFloat(c)
+            if (*c)[2] != 0 { return "" }
+            var code: string := ""
+            if containsCall(pool, right) = 1 {
+                code := float(source, pool, c, left, temp)
+                hold(c, temp)
+                code := code + float(source, pool, c, right, target)
+                release(c, temp)
+                code := code + " " + name + " " + temp + ", " + target + "\n movapd " + target + ", " + temp + "\n"
+            }
+            else {
+                code := float(source, pool, c, left, target) + float(source, pool, c, right, temp)
+                code := code + " " + name + " " + target + ", " + temp + "\n"
+            }
+            dropFloat(c, temp)
+            return code
+        }
+        fail(c)
+        return ""
+    end
+
+    // --------------------------------------------------------------- calls
+    fn simpleArgument(source: string, pool: *[12582912]int, c: *[65536]int, id: int): int
+    begin
+        if str.length(operand(source, pool, c, id)) > 0 { return 1 }
+        var constant: [2]int := literalValue(source, pool, id)
+        if constant[0] = 1 { return 1 }
+        if ast.read(pool, id, 0) = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if (operation = 43 || operation = 45) && str.length(registerVariable(source, pool, c, ast.read(pool, id, 3))) > 0 {
+                var amount: [2]int := literalValue(source, pool, ast.read(pool, id, 4))
+                if amount[0] = 1 && small(amount[1]) = 1 { return 1 }
+            }
+        }
+        return 0
+    end
+
+    fn simpleArgumentCode(source: string, pool: *[12582912]int, c: *[65536]int, id: int, target: string): string
+    begin
+        if ast.read(pool, id, 0) = ast.binaryKind() {
+            var amount: [2]int := literalValue(source, pool, ast.read(pool, id, 4))
+            var register: string := registerVariable(source, pool, c, ast.read(pool, id, 3))
+            var delta: int := amount[1]
+            if ast.read(pool, id, 10) = 45 { delta := 0 - delta }
+            if delta < 0 { return " lea " + target + ", [" + register + token.number(delta) + "]\n" }
+            return " lea " + target + ", [" + register + "+" + token.number(delta) + "]\n"
+        }
+        var constant: [2]int := literalValue(source, pool, id)
+        if constant[0] = 1 { return " mov " + target + ", " + token.number(constant[1]) + "\n" }
+        var place: string := operand(source, pool, c, id)
+        if place = target { return "" }
+        return " mov " + target + ", " + place + "\n"
+    end
+
+    // Leaves the result in rax or xmm0. Saves live caller-saved registers around the call.
+    fn callCode(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        if (*c)[2] != 0 { return "" }
+        var target: int := calleeOf(source, pool, id)
+        var name: string := "xe.alloc"
+        if target = -2 { name := "xe.free" }
+        if target >= 0 { name := codegen.functionLabel(codegen.qualifiedFunctionName(source, pool, target)) }
+        // registers to preserve
+        var saved: [16]int
+        var savedCount: int := 0
+        var code: int := 5
+        while code < 11 {
+            if (((*c)[11] | (*c)[17]) & bit(code)) != 0 {
+                saved[savedCount] := code
+                savedCount := savedCount + 1
+            }
+            code := code + 1
+        }
+        var floatMask: int := (*c)[12] | (*c)[19]
+        var floatCount: int := 0
+        var xmm: int := 1
+        while xmm < 16 {
+            if (floatMask & bit(xmm)) != 0 { floatCount := floatCount + 1 }
+            xmm := xmm + 1
+        }
+        var output: string := str.builder("")
+        var index: int := 0
+        while index < savedCount {
+            output := str.append(output, " push " + regName(saved[index]) + "\n")
+            index := index + 1
+        }
+        (*c)[9] := (*c)[9] + savedCount * 8
+        if floatCount > 0 {
+            output := str.append(output, " sub rsp, " + token.number(floatCount * 8) + "\n")
+            var slot: int := 0
+            xmm := 1
+            while xmm < 16 {
+                if (floatMask & bit(xmm)) != 0 {
+                    output := str.append(output, " movsd qword ptr [rsp+" + token.number(slot * 8) + "], xmm" + token.number(xmm) + "\n")
+                    slot := slot + 1
+                }
+                xmm := xmm + 1
+            }
+            (*c)[9] := (*c)[9] + floatCount * 8
+        }
+        var padding: int := 0
+        if (*c)[9] % 16 != 0 {
+            padding := 8
+            output := str.append(output, " sub rsp, 8\n")
+            (*c)[9] := (*c)[9] + 8
+        }
+        // Saved registers keep their values on the stack, so the argument
+        // registers and temps can be overwritten freely from here on.
+        var savedTemps: int := (*c)[7]
+        var savedFloats: int := (*c)[8]
+        var savedLive: int := (*c)[17]
+        var savedLiveFloats: int := (*c)[19]
+        (*c)[7] := (*c)[7] & 31
+        (*c)[8] := 0
+        (*c)[17] := 0
+        (*c)[19] := 0
+        var count: int := argumentCount(pool, id)
+        var allSimple: int := 1
+        var argument: int := 0
+        while argument < count {
+            var value: int := argumentAt(pool, id, argument)
+            if parameterClass(source, pool, target, argument) = 2 || simpleArgument(source, pool, c, value) = 0 { allSimple := 0 }
+            // a simple argument may read a variable that lives in an argument register
+            argument := argument + 1
+        }
+        if allSimple = 1 {
+            // Only direct when no argument register is read after it was written.
+            var reads: int := 0
+            argument := 0
+            while argument < count {
+                var value: int := argumentAt(pool, id, argument)
+                var later: int := argument + 1
+                while later < count {
+                    var laterValue: int := argumentAt(pool, id, later)
+                    var register: string := operand(source, pool, c, laterValue)
+                    if ast.read(pool, laterValue, 0) = ast.binaryKind() { register := registerVariable(source, pool, c, ast.read(pool, laterValue, 3)) }
+                    if register = argName(argument) { reads := 1 }
+                    later := later + 1
+                }
+                argument := argument + 1
+            }
+            if reads = 1 { allSimple := 0 }
+        }
+        if allSimple = 1 {
+            argument := 0
+            while argument < count {
+                output := str.append(output, simpleArgumentCode(source, pool, c, argumentAt(pool, id, argument), argName(argument)))
+                argument := argument + 1
+            }
+        }
+        else {
+            argument := 0
+            while argument < count {
+                var value: int := argumentAt(pool, id, argument)
+                if parameterClass(source, pool, target, argument) = 2 {
+                    var floating: string := takeFloat(c)
+                    output := str.append(output, float(source, pool, c, value, floating) + " sub rsp, 8\n movsd qword ptr [rsp], " + floating + "\n")
+                    dropFloat(c, floating)
+                }
+                else {
+                    var temp: string := takeTemp(c)
+                    output := str.append(output, integer(source, pool, c, value, temp) + " push " + temp + "\n")
+                    dropTemp(c, temp)
+                }
+                (*c)[9] := (*c)[9] + 8
+                argument := argument + 1
+            }
+            var integers: int := 0
+            var floats: int := 0
+            argument := 0
+            while argument < count {
+                if parameterClass(source, pool, target, argument) = 2 { floats := floats + 1 } else { integers := integers + 1 }
+                argument := argument + 1
+            }
+            argument := count - 1
+            while argument >= 0 {
+                if parameterClass(source, pool, target, argument) = 2 {
+                    floats := floats - 1
+                    output := str.append(output, " movsd xmm" + token.number(floats) + ", qword ptr [rsp]\n add rsp, 8\n")
+                }
+                else {
+                    integers := integers - 1
+                    output := str.append(output, " pop " + argName(integers) + "\n")
+                }
+                (*c)[9] := (*c)[9] - 8
+                argument := argument - 1
+            }
+            // stack alignment was established before the argument pushes
+        }
+        (*c)[7] := savedTemps
+        (*c)[8] := savedFloats
+        (*c)[17] := savedLive
+        (*c)[19] := savedLiveFloats
+        output := str.append(output, " call " + name + "\n")
+        if padding > 0 {
+            output := str.append(output, " add rsp, 8\n")
+            (*c)[9] := (*c)[9] - 8
+        }
+        if floatCount > 0 {
+            var slot: int := 0
+            xmm := 1
+            while xmm < 16 {
+                if (floatMask & bit(xmm)) != 0 {
+                    output := str.append(output, " movsd xmm" + token.number(xmm) + ", qword ptr [rsp+" + token.number(slot * 8) + "]\n")
+                    slot := slot + 1
+                }
+                xmm := xmm + 1
+            }
+            output := str.append(output, " add rsp, " + token.number(floatCount * 8) + "\n")
+            (*c)[9] := (*c)[9] - floatCount * 8
+        }
+        index := savedCount - 1
+        while index >= 0 {
+            output := str.append(output, " pop " + regName(saved[index]) + "\n")
+            index := index - 1
+        }
+        (*c)[9] := (*c)[9] - savedCount * 8
+        return output
+    end
+
+    // ---------------------------------------------------------- statements
+    fn assignVariable(source: string, pool: *[12582912]int, c: *[65536]int, v: int, value: int): string
+    begin
+        var place: string := location(c, v)
+        if (*c)[entry(v, 7)] = 2 {
+            if inRegister(c, v) = 1 && mentions(source, pool, c, value, v) = 0 { return float(source, pool, c, value, place) }
+            var temp: string := takeFloat(c)
+            if (*c)[2] != 0 { return "" }
+            var code: string := float(source, pool, c, value, temp)
+            dropFloat(c, temp)
+            if inRegister(c, v) = 1 { return code + " movapd " + place + ", " + temp + "\n" }
+            return code + " movsd " + place + ", " + temp + "\n"
+        }
+        var constant: [2]int := literalValue(source, pool, value)
+        if inRegister(c, v) = 0 && constant[0] = 1 && small(constant[1]) = 1 { return " mov " + place + ", " + token.number(constant[1]) + "\n" }
+        if inRegister(c, v) = 1 {
+            var direct: int := 0
+            if mentions(source, pool, c, value, v) = 0 { direct := 1 }
+            if ast.read(pool, value, 0) = ast.binaryKind() {
+                var left: int := ast.read(pool, value, 3)
+                var operation: int := ast.read(pool, value, 10)
+                if ast.read(pool, left, 0) = ast.nameKind() && variableOf(source, pool, c, left) = v && mentions(source, pool, c, ast.read(pool, value, 4), v) = 0 && isComparison(operation) = 0 && operation != 260 && operation != 261 { direct := 1 }
+            }
+            if containsCall(pool, value) = 1 && (*c)[entry(v, 4)] >= 5 { direct := 0 }
+            if direct = 1 {
+                // x := x + 1 and friends
+                if ast.read(pool, value, 0) = ast.binaryKind() {
+                    var amount: [2]int := literalValue(source, pool, ast.read(pool, value, 4))
+                    var left: int := ast.read(pool, value, 3)
+                    if amount[0] = 1 && amount[1] = 1 && variableOf(source, pool, c, left) = v {
+                        if ast.read(pool, value, 10) = 43 { return " inc " + place + "\n" }
+                        if ast.read(pool, value, 10) = 45 { return " dec " + place + "\n" }
+                    }
+                }
+                return integer(source, pool, c, value, place)
+            }
+        }
+        var temp: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        var code: string := integer(source, pool, c, value, temp)
+        dropTemp(c, temp)
+        return code + " mov " + place + ", " + temp + "\n"
+    end
+
+    fn assignElement(source: string, pool: *[12582912]int, c: *[65536]int, target: int, value: int): string
+    begin
+        var base: int := ast.read(pool, ast.read(pool, target, 3), 3)
+        var v: int := variableOf(source, pool, c, base)
+        if (*c)[entry(v, 1)] = 4 {
+            var floating: string := takeFloat(c)
+            var indexTemp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            var code: string := float(source, pool, c, value, floating)
+            var combined: string := elementAddress(source, pool, c, target, indexTemp)
+            dropTemp(c, indexTemp)
+            dropFloat(c, floating)
+            return code + codePart(combined) + " movsd qword ptr " + addressPart(combined) + ", " + floating + "\n"
+        }
+        var direct: string := operand(source, pool, c, value)
+        if str.length(direct) > 0 && isMemory(direct) = 0 {
+            var indexTemp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            var combined: string := elementAddress(source, pool, c, target, indexTemp)
+            dropTemp(c, indexTemp)
+            return codePart(combined) + " mov qword ptr " + addressPart(combined) + ", " + direct + "\n"
+        }
+        var valueTemp: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        var code: string := integer(source, pool, c, value, valueTemp)
+        var indexTemp: string := takeTemp(c)
+        if (*c)[2] != 0 { return "" }
+        if containsCall(pool, ast.read(pool, target, 4)) = 1 { return fail(c) }
+        var combined: string := elementAddress(source, pool, c, target, indexTemp)
+        dropTemp(c, indexTemp)
+        dropTemp(c, valueTemp)
+        return code + codePart(combined) + " mov qword ptr " + addressPart(combined) + ", " + valueTemp + "\n"
+    end
+
+    fn runDefers(source: string, pool: *[12582912]int, c: *[65536]int): string
+    begin
+        var output: string := str.builder("")
+        var index: int := (*c)[6] - 1
+        while index >= 0 {
+            output := str.append(output, callCode(source, pool, c, (*c)[20 + index]))
+            index := index - 1
+        }
+        return output
+    end
+
+    // return X + self(args) becomes: accumulator += X; parameters := args; restart.
+    fn selfCallSide(source: string, pool: *[12582912]int, c: *[65536]int, value: int): int
+    begin
+        if value < 0 || ast.read(pool, value, 0) != ast.binaryKind() || ast.read(pool, value, 10) != 43 { return -1 }
+        var right: int := ast.read(pool, value, 4)
+        if ast.read(pool, right, 0) = ast.callKind() && calleeOf(source, pool, right) = (*c)[3] { return 1 }
+        var left: int := ast.read(pool, value, 3)
+        if ast.read(pool, left, 0) = ast.callKind() && calleeOf(source, pool, left) = (*c)[3] { return 0 }
+        return -1
+    end
+
+    fn hasSelfTail(source: string, pool: *[12582912]int, c: *[65536]int, first: int): int
+    begin
+        var statement: int := first
+        while statement >= 0 {
+            var kind: int := ast.read(pool, statement, 0)
+            if kind = ast.returnKind() && selfCallSide(source, pool, c, ast.read(pool, statement, 6)) >= 0 { return 1 }
+            if kind = ast.branchKind() {
+                if hasSelfTail(source, pool, c, ast.read(pool, ast.read(pool, statement, 6), 6)) = 1 { return 1 }
+                var other: int := ast.read(pool, statement, 4)
+                if other >= 0 && hasSelfTail(source, pool, c, ast.read(pool, other, 6)) = 1 { return 1 }
+            }
+            statement := ast.read(pool, statement, 5)
+        }
+        return 0
+    end
+
+    fn tailReturn(source: string, pool: *[12582912]int, c: *[65536]int, value: int, side: int): string
+    begin
+        var accumulator: int := findVariable(c, -999)
+        var call: int := ast.read(pool, value, 4)
+        var other: int := ast.read(pool, value, 3)
+        if side = 0 {
+            call := ast.read(pool, value, 3)
+            other := ast.read(pool, value, 4)
+        }
+        var output: string := str.builder("")
+        // accumulator := accumulator + other
+        if ast.read(pool, other, 0) = ast.callKind() {
+            output := str.append(output, callCode(source, pool, c, other))
+            output := str.append(output, " add " + location(c, accumulator) + ", rax\n")
+        }
+        else {
+            var temp: string := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            output := str.append(output, integer(source, pool, c, other, temp))
+            output := str.append(output, " add " + location(c, accumulator) + ", " + temp + "\n")
+            dropTemp(c, temp)
+        }
+        // new parameter values, all computed before any is stored
+        var count: int := argumentCount(pool, call)
+        if count = 1 {
+            output := str.append(output, assignVariable(source, pool, c, findVariable(c, -2), argumentAt(pool, call, 0)))
+            return output + " jmp .Lq" + token.number((*c)[3]) + "_top\n"
+        }
+        var temps: [6]string
+        var index: int := 0
+        while index < count {
+            temps[index] := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            output := str.append(output, integer(source, pool, c, argumentAt(pool, call, index), temps[index]))
+            hold(c, temps[index])
+            index := index + 1
+        }
+        index := 0
+        while index < count {
+            var v: int := findVariable(c, -2 - index)
+            output := str.append(output, " mov " + location(c, v) + ", " + temps[index] + "\n")
+            release(c, temps[index])
+            dropTemp(c, temps[index])
+            index := index + 1
+        }
+        return output + " jmp .Lq" + token.number((*c)[3]) + "_top\n"
+    end
+
+    fn returnCode(source: string, pool: *[12582912]int, c: *[65536]int, statement: int): string
+    begin
+        var value: int := ast.read(pool, statement, 6)
+        var output: string := str.builder("")
+        if (*c)[18] = 1 {
+            var side: int := selfCallSide(source, pool, c, value)
+            if side >= 0 { return tailReturn(source, pool, c, value, side) }
+            var accumulator: int := findVariable(c, -999)
+            output := str.append(output, integer(source, pool, c, value, "rax"))
+            output := str.append(output, " add rax, " + location(c, accumulator) + "\n")
+            return output + " jmp .Lq" + token.number((*c)[3]) + "_ret\n"
+        }
+        if value >= 0 {
+            if (*c)[10] = 2 { output := str.append(output, float(source, pool, c, value, "xmm0")) }
+            else {
+                var register: string := registerVariable(source, pool, c, value)
+                if str.length(register) > 0 { output := str.append(output, " mov rax, " + register + "\n") }
+                else {
+                    if ast.read(pool, value, 0) = ast.callKind() { output := str.append(output, callCode(source, pool, c, value)) }
+                    else { output := str.append(output, integer(source, pool, c, value, "rax")) }
+                }
+            }
+        }
+        if (*c)[6] > 0 {
+            output := str.append(output, " push rax\n sub rsp, 8\n movsd qword ptr [rsp], xmm0\n")
+            (*c)[9] := (*c)[9] + 16
+            output := str.append(output, runDefers(source, pool, c))
+            output := str.append(output, " movsd xmm0, qword ptr [rsp]\n add rsp, 8\n pop rax\n")
+            (*c)[9] := (*c)[9] - 16
+        }
+        output := str.append(output, " jmp .Lq" + token.number((*c)[3]) + "_ret\n")
+        return output
+    end
+
+    // ------------------------------------------------- branch-free if
+    fn safeValue(source: string, pool: *[12582912]int, c: *[65536]int, id: int, condition: string): int
+    begin
+        if id < 0 { return 0 }
+        var kind: int := ast.read(pool, id, 0)
+        var constant: [2]int := literalValue(source, pool, id)
+        if constant[0] = 1 { return 1 }
+        if kind = ast.nameKind() {
+            var v: int := variableOf(source, pool, c, id)
+            if v >= 0 && (*c)[entry(v, 7)] = 1 { return 1 }
+            return 0
+        }
+        if kind = ast.unaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 45 || operation = 126 { return safeValue(source, pool, c, ast.read(pool, id, 3), condition) }
+            return 0
+        }
+        if kind = ast.binaryKind() {
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 47 || operation = 37 {
+                var divisor: [2]int := literalValue(source, pool, ast.read(pool, id, 4))
+                if divisor[0] = 0 || divisor[1] <= 0 { return 0 }
+            }
+            else {
+                if operation != 43 && operation != 45 && operation != 42 && operation != 38 && operation != 124 && operation != 94 && operation != 263 && operation != 264 { return 0 }
+            }
+            if safeValue(source, pool, c, ast.read(pool, id, 3), condition) = 0 { return 0 }
+            return safeValue(source, pool, c, ast.read(pool, id, 4), condition)
+        }
+        if kind = ast.indexKind() {
+            // a load is safe when the condition already performs it
+            if classOf(source, pool, c, id) != 1 { return 0 }
+            if str.find(condition, text(source, pool, id)) < 0 { return 0 }
+            return safeValue(source, pool, c, ast.read(pool, id, 4), condition)
+        }
+        return 0
+    end
+
+    // Fills list with the assignment statements of a block; returns their count or -1.
+    fn armAssignments(source: string, pool: *[12582912]int, c: *[65536]int, blockId: int, list: *[4]int): int
+    begin
+        if blockId < 0 { return 0 }
+        var count: int := 0
+        var statement: int := ast.read(pool, blockId, 6)
+        while statement >= 0 {
+            if count >= 2 || ast.read(pool, statement, 0) != ast.assignKind() { return -1 }
+            var target: int := ast.read(pool, statement, 3)
+            if ast.read(pool, target, 0) != ast.nameKind() { return -1 }
+            var v: int := variableOf(source, pool, c, target)
+            if v < 0 || (*c)[entry(v, 7)] != 1 || inRegister(c, v) = 0 { return -1 }
+            (*list)[count] := statement
+            count := count + 1
+            statement := ast.read(pool, statement, 5)
+        }
+        return count
+    end
+
+    fn assignedVariable(source: string, pool: *[12582912]int, c: *[65536]int, statement: int): int
+    begin
+        return variableOf(source, pool, c, ast.read(pool, statement, 3))
+    end
+
+    fn convertBranch(source: string, pool: *[12582912]int, c: *[65536]int, statement: int): string
+    begin
+        var condition: int := ast.read(pool, statement, 3)
+        if ast.read(pool, condition, 0) != ast.binaryKind() || isComparison(ast.read(pool, condition, 10)) = 0 { return "" }
+        if containsCall(pool, condition) = 1 { return "" }
+        var yes: [4]int
+        var no: [4]int
+        var yesCount: int := armAssignments(source, pool, c, ast.read(pool, statement, 6), &yes)
+        var noCount: int := armAssignments(source, pool, c, ast.read(pool, statement, 4), &no)
+        if yesCount < 0 || noCount < 0 || yesCount + noCount = 0 { return "" }
+        if freeTemps(c) < yesCount + noCount + 1 { return "" }
+        var conditionText: string := text(source, pool, condition)
+        var all: [4]int
+        var side: [4]int
+        var total: int := 0
+        var index: int := 0
+        while index < yesCount {
+            all[total] := yes[index]
+            side[total] := 1
+            total := total + 1
+            index := index + 1
+        }
+        index := 0
+        while index < noCount {
+            all[total] := no[index]
+            side[total] := 0
+            total := total + 1
+            index := index + 1
+        }
+        index := 0
+        while index < total {
+            var value: int := ast.read(pool, all[index], 4)
+            if safeValue(source, pool, c, value, conditionText) = 0 { return "" }
+            // a value must not read a variable assigned earlier in its own arm
+            var earlier: int := 0
+            while earlier < index {
+                if side[earlier] = side[index] {
+                    if mentions(source, pool, c, value, assignedVariable(source, pool, c, all[earlier])) = 1 { return "" }
+                    if assignedVariable(source, pool, c, all[earlier]) = assignedVariable(source, pool, c, all[index]) { return "" }
+                }
+                earlier := earlier + 1
+            }
+            index := index + 1
+        }
+        var output: string := str.builder("")
+        var temps: [4]string
+        index := 0
+        while index < total {
+            temps[index] := takeTemp(c)
+            if (*c)[2] != 0 { return "" }
+            output := str.append(output, integer(source, pool, c, ast.read(pool, all[index], 4), temps[index]))
+            index := index + 1
+        }
+        output := str.append(output, comparison(source, pool, c, condition))
+        var taken: string := lastCondition(c)
+        index := 0
+        while index < total {
+            var place: string := location(c, assignedVariable(source, pool, c, all[index]))
+            if side[index] = 1 { output := str.append(output, " cmov" + taken + " " + place + ", " + temps[index] + "\n") }
+            else { output := str.append(output, " cmov" + inverse(taken) + " " + place + ", " + temps[index] + "\n") }
+            dropTemp(c, temps[index])
+            index := index + 1
+        }
+        return output
+    end
+
+    fn block(source: string, pool: *[12582912]int, c: *[65536]int, id: int): string
+    begin
+        if id < 0 { return "" }
+        return statements(source, pool, c, ast.read(pool, id, 6))
+    end
+
+    fn statements(source: string, pool: *[12582912]int, c: *[65536]int, first: int): string
+    begin
+        var output: string := str.builder("")
+        var statement: int := first
+        while statement >= 0 && (*c)[2] = 0 {
+            var kind: int := ast.read(pool, statement, 0)
+            if kind = ast.variableKind() {
+                var v: int := findVariable(c, statement)
+                var value: int := ast.read(pool, statement, 6)
+                if value >= 0 { output := str.append(output, assignVariable(source, pool, c, v, value)) }
+                else {
+                    if (*c)[entry(v, 7)] = 2 {
+                        if inRegister(c, v) = 1 { output := str.append(output, " xorpd " + location(c, v) + ", " + location(c, v) + "\n") }
+                        else { output := str.append(output, " mov " + location(c, v) + ", 0\n") }
+                    }
+                    else {
+                        if inRegister(c, v) = 1 { output := str.append(output, " xor " + low32(location(c, v)) + ", " + low32(location(c, v)) + "\n") }
+                        else { output := str.append(output, " mov " + location(c, v) + ", 0\n") }
+                    }
+                }
+            }
+            if kind = ast.assignKind() {
+                var target: int := ast.read(pool, statement, 3)
+                var value: int := ast.read(pool, statement, 4)
+                if ast.read(pool, target, 0) = ast.nameKind() { output := str.append(output, assignVariable(source, pool, c, variableOf(source, pool, c, target), value)) }
+                else { output := str.append(output, assignElement(source, pool, c, target, value)) }
+            }
+            var converted: string := ""
+            if kind = ast.branchKind() { converted := convertBranch(source, pool, c, statement) }
+            if str.length(converted) > 0 { output := str.append(output, converted) }
+            if kind = ast.branchKind() && str.length(converted) = 0 {
+                var no: string := label(c)
+                output := str.append(output, branchFalse(source, pool, c, ast.read(pool, statement, 3), no))
+                output := str.append(output, block(source, pool, c, ast.read(pool, statement, 6)))
+                var other: int := ast.read(pool, statement, 4)
+                if other >= 0 {
+                    var done: string := label(c)
+                    output := str.append(output, " jmp " + done + "\n" + no + ":\n")
+                    output := str.append(output, block(source, pool, c, other))
+                    output := str.append(output, done + ":\n")
+                }
+                else { output := str.append(output, no + ":\n") }
+            }
+            if kind = ast.loopKind() {
+                var top: string := label(c)
+                var test: string := label(c)
+                output := str.append(output, " jmp " + test + "\n .p2align 4\n" + top + ":\n")
+                output := str.append(output, block(source, pool, c, ast.read(pool, statement, 6)))
+                output := str.append(output, test + ":\n")
+                output := str.append(output, branchTrue(source, pool, c, ast.read(pool, statement, 3), top))
+            }
+            if kind = ast.returnKind() { output := str.append(output, returnCode(source, pool, c, statement)) }
+            if kind = ast.expressionKind() { output := str.append(output, callCode(source, pool, c, ast.read(pool, statement, 6))) }
+            statement := ast.read(pool, statement, 5)
+        }
+        return output
+    end
+
+    // ---------------------------------------------------------- functions
+    fn allocate(c: *[65536]int, integerLimit: int, floatLimit: int)
+    begin
+        var count: int := (*c)[0]
+        var taken: [2000]int
+        var index: int := 0
+        while index < count {
+            taken[index] := 0
+            index := index + 1
+        }
+        var integerOrder: [10]int
+        var leaf: int := 1
+        if (*c)[4] != 0 { leaf := 0 }
+        if leaf = 1 {
+            integerOrder[0] := 5
+            integerOrder[1] := 6
+            integerOrder[2] := 7
+            integerOrder[3] := 8
+            integerOrder[4] := 9
+            integerOrder[5] := 0
+            integerOrder[6] := 1
+            integerOrder[7] := 2
+            integerOrder[8] := 3
+            integerOrder[9] := 4
+        }
+        else {
+            integerOrder[0] := 0
+            integerOrder[1] := 1
+            integerOrder[2] := 2
+            integerOrder[3] := 3
+            integerOrder[4] := 4
+            integerOrder[5] := 5
+            integerOrder[6] := 6
+            integerOrder[7] := 7
+            integerOrder[8] := 8
+            integerOrder[9] := 9
+        }
+        var integerNext: int := 0
+        var floatNext: int := 8
+        var picked: int := 0
+        while picked < count {
+            var best: int := -1
+            index := 0
+            while index < count {
+                if taken[index] = 0 {
+                    if best < 0 || (*c)[entry(index, 3)] > (*c)[entry(best, 3)] { best := index }
+                }
+                index := index + 1
+            }
+            taken[best] := 1
+            if (*c)[entry(best, 7)] = 2 {
+                if floatNext < 8 + floatLimit && (*c)[entry(best, 3)] > 0 {
+                    (*c)[entry(best, 4)] := floatNext
+                    (*c)[12] := (*c)[12] | bit(floatNext)
+                    floatNext := floatNext + 1
+                }
+            }
+            else {
+                if integerNext < integerLimit && (*c)[entry(best, 3)] > 0 {
+                    var code: int := integerOrder[integerNext]
+                    (*c)[entry(best, 4)] := code
+                    (*c)[11] := (*c)[11] | bit(code)
+                    integerNext := integerNext + 1
+                }
+            }
+            picked := picked + 1
+        }
+    end
+
+    fn compile(source: string, pool: *[12582912]int, functionId: int): string
+    begin
+        var c: *[65536]int := alloc(524288)
+        var clear: int := 0
+        while clear < 100 {
+            (*c)[clear] := 0
+            clear := clear + 1
+        }
+        (*c)[3] := functionId
+        var result: int := resultClass(source, pool, functionId)
+        if result < 0 {
+            free(c)
+            return ""
+        }
+        (*c)[10] := result
+        var parameters: int := codegen.parameterCount(source, pool, functionId)
+        var integers: int := 0
+        var floats: int := 0
+        var index: int := 0
+        while index < parameters {
+            var raw: string := codegen.functionParameterTypeAt(source, pool, functionId, index)
+            var type: int := typeCode(raw)
+            if type = 0 { fail(c) }
+            addVariable(c, -2 - index, type, typeCapacity(raw), index)
+            if type = 2 { floats := floats + 1 } else { integers := integers + 1 }
+            index := index + 1
+        }
+        if integers > 6 || floats > 8 { fail(c) }
+        if (*c)[2] = 0 { scanStatements(source, pool, c, ast.read(pool, functionId, 6), 0, 1) }
+        if (*c)[2] != 0 {
+            free(c)
+            return ""
+        }
+        // accumulator transformation: int result, int parameters, no defers
+        if (*c)[10] = 1 && (*c)[6] = 0 && floats = 0 && parameters > 0 && parameters <= 4 && hasSelfTail(source, pool, c, ast.read(pool, functionId, 6)) = 1 {
+            var accumulator: int := addVariable(c, -999, 1, 0, -1)
+            (*c)[entry(accumulator, 3)] := 1000000
+            (*c)[18] := 1
+        }
+        var integerLimit: int := 10
+        var floatLimit: int := 8
+        var body: string := ""
+        var trying: int := 1
+        while trying = 1 {
+            resetAllocation(c)
+            allocate(c, integerLimit, floatLimit)
+            var slot: int := 0
+            var spills: int := 0
+            while slot < (*c)[0] {
+                if (*c)[entry(slot, 4)] < 0 {
+                    spills := spills + 1
+                    (*c)[entry(slot, 5)] := 40 + spills * 8
+                }
+                slot := slot + 1
+            }
+            (*c)[15] := spills
+            body := statements(source, pool, c, ast.read(pool, functionId, 6))
+            body := str.append(body, runDefers(source, pool, c))
+            if (*c)[2] = 2 && integerLimit > 2 {
+                (*c)[2] := 0
+                integerLimit := integerLimit - 2
+                if floatLimit > 3 { floatLimit := floatLimit - 2 }
+            }
+            else { trying := 0 }
+        }
+        // frame: callee-saved registers, then spilled variables
+        var frame: int := 0
+        var code: int := 0
+        var saves: string := str.builder("")
+        var restores: string := str.builder("")
+        while code < 5 {
+            if (((*c)[11] | (*c)[14]) & bit(code)) != 0 {
+                frame := (code + 1) * 8
+                saves := str.append(saves, " mov qword ptr [rbp-" + token.number((code + 1) * 8) + "], " + regName(code) + "\n")
+                restores := str.append(restores, " mov " + regName(code) + ", qword ptr [rbp-" + token.number((code + 1) * 8) + "]\n")
+            }
+            code := code + 1
+        }
+        if (*c)[15] > 0 { frame := 40 + (*c)[15] * 8 }
+        index := 0
+        if frame % 16 != 0 { frame := frame + 8 }
+        var entryLabel: string := codegen.functionLabel(codegen.qualifiedFunctionName(source, pool, functionId))
+        var output: string := str.builder(".global " + entryLabel + "\n.type " + entryLabel + ", @function\n.p2align 4\n" + entryLabel + ":\n push rbp\n mov rbp, rsp\n")
+        if frame > 0 { output := str.append(output, " sub rsp, " + token.number(frame) + "\n") }
+        output := str.append(output, saves)
+        // parameters: integer ones through the stack when registers overlap
+        var integerIndex: int := 0
+        var floatIndex: int := 0
+        var conflict: int := 0
+        index := 0
+        while index < parameters {
+            var v: int := findVariable(c, -2 - index)
+            if (*c)[entry(v, 7)] = 1 {
+                var destination: int := (*c)[entry(v, 4)]
+                var other: int := 0
+                var otherInteger: int := 0
+                while other < parameters {
+                    var w: int := findVariable(c, -2 - other)
+                    if (*c)[entry(w, 7)] = 1 {
+                        if other > index && destination >= 0 && destination = argCode(otherInteger) { conflict := 1 }
+                        otherInteger := otherInteger + 1
+                    }
+                    other := other + 1
+                }
+            }
+            index := index + 1
+        }
+        index := 0
+        var pushes: string := str.builder("")
+        var pops: string := str.builder("")
+        while index < parameters {
+            var v: int := findVariable(c, -2 - index)
+            if (*c)[entry(v, 7)] = 2 {
+                var incoming: string := "xmm" + token.number(floatIndex)
+                if inRegister(c, v) = 1 { output := str.append(output, " movapd " + location(c, v) + ", " + incoming + "\n") }
+                else { output := str.append(output, " movsd " + location(c, v) + ", " + incoming + "\n") }
+                floatIndex := floatIndex + 1
+            }
+            else {
+                var incoming: string := argName(integerIndex)
+                if conflict = 1 {
+                    pushes := str.append(pushes, " push " + incoming + "\n")
+                    pops := str.append(" pop " + location(c, v) + "\n", pops)
+                }
+                else {
+                    if location(c, v) != incoming { output := str.append(output, " mov " + location(c, v) + ", " + incoming + "\n") }
+                }
+                integerIndex := integerIndex + 1
+            }
+            index := index + 1
+        }
+        output := str.append(output, pushes)
+        output := str.append(output, pops)
+        if (*c)[18] = 1 {
+            var accumulator: int := findVariable(c, -999)
+            output := str.append(output, " xor " + low32(location(c, accumulator)) + ", " + low32(location(c, accumulator)) + "\n.Lq" + token.number(functionId) + "_top:\n")
+        }
+        output := str.append(output, body)
+        if (*c)[10] = 2 { output := str.append(output, " xorpd xmm0, xmm0\n") }
+        else {
+            if (*c)[18] = 1 { output := str.append(output, " mov rax, " + location(c, findVariable(c, -999)) + "\n") }
+            else { output := str.append(output, " xor eax, eax\n") }
+        }
+        output := str.append(output, ".Lq" + token.number(functionId) + "_ret:\n")
+        output := str.append(output, restores)
+        output := str.append(output, " leave\n ret\n")
+        var failed: int := (*c)[2]
+        free(c)
+        if failed != 0 { return "" }
+        return output
+    end
+end
