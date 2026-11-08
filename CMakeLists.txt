@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(xelang VERSION 1.7.0 LANGUAGES CXX)
+project(xelang VERSION 2.0.0 LANGUAGES CXX)
 find_package(Threads REQUIRED)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

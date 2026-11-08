@@ -41,7 +41,7 @@ install -m 0644 "$project_dir"/libraries/*.xel "$lib_dir/libraries/"
 # Remove files left behind by the old C++ bootstrap installer.
 rm -rf -- "$lib_dir/runtime" "$lib_dir/compiler/selfhosted-xe"
 
-printf 'Installed %s\n' "$("$bin_dir/xe" --version)"
+printf 'Installed %s\n' "$("$bin_dir/xe" --version | tail -1)"
 printf '  compiler:  %s\n  libraries: %s\n' "$bin_dir/xe" "$lib_dir/libraries"
 case ":$PATH:" in
     *":$bin_dir:"*) ;;

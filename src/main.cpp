@@ -150,8 +150,8 @@ int main(int argc, char** argv) {
             help(std::cout);
             return 0;
         }
-        if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-V")) {
-            std::cout << "Xe 1.7.0\n";
+        if (argc == 2 && (std::string(argv[1]) == "--version" || std::string(argv[1]) == "-V" || std::string(argv[1]) == "-v")) {
+            std::cout << "Xe 2.0.0  (Linux x86-64)\n";
             return 0;
         }
         if (argc < 3) { usage(); return 2; }
