@@ -1,0 +1,872 @@
+// SentryAI image sorter - a port of sorter.py to Xe (2D GUI app, no external libraries).
+//
+//   Class Sorter      pick a source folder, look at the images one by one and copy each into a
+//                     numbered file in one of your destination folders (1.jpg, 2.jpg, ...).
+//   Advanced Object   draw bounding boxes with the mouse, then copy the image into a class folder and
+//                     write a YOLO .txt label file (class x_center y_center width height, normalised).
+//
+// Build and run:   xe apps/sorter/sorter.xe -o sorter && ./sorter
+// Keys: Left/Right = previous/next image, 1..9 = sort into destination/class 1..9 (class sorter),
+//       Esc = back to the menu (quit from the menu). Previews: PNG, baseline JPEG, BMP, PPM.
+//       Other formats (WebP, GIF, TIFF, progressive JPEG) cannot be previewed but can still be sorted.
+uses gui
+uses image
+uses dir
+uses path
+uses strlist
+uses strings
+uses strconv
+uses stat
+uses os
+uses fs
+
+type App: record
+begin
+    win: *window.Window
+    ui: *gui.Gui
+    screen: int
+    status: string
+    status_bad: int
+    status_age: int
+    browse_target: int
+    browse_return: int
+    browse_path: *gui.TextBuf
+    browse_listing: string
+    browse_entries: *strlist.List
+    browse_scroll: int
+    browse_hidden: int
+    cs_src: *gui.TextBuf
+    cs_imgs: *strlist.List
+    cs_i: int
+    cs_dsts: *strlist.List
+    cs_preview: *canvas.Canvas
+    cs_scroll: int
+    ad_src: *gui.TextBuf
+    ad_root: *gui.TextBuf
+    ad_labels: *gui.TextBuf
+    ad_imgs: *strlist.List
+    ad_i: int
+    ad_names: *strlist.List
+    ad_paths: *strlist.List
+    ad_active: int
+    ad_preview: *canvas.Canvas
+    ad_scroll: int
+    boxes: *[4096]int
+    box_count: int
+    orig_w: int
+    orig_h: int
+    disp_w: int
+    disp_h: int
+    off_x: int
+    off_y: int
+    drawing: int
+    start_x: int
+    start_y: int
+end
+
+fn preview_x(): int
+begin
+    return 170
+end
+
+fn class_color(index: int): int
+begin
+    var slot: int := index % 9
+    if slot = 0 { return canvas.rgb(255, 51, 51) }
+    if slot = 1 { return canvas.rgb(51, 204, 51) }
+    if slot = 2 { return canvas.rgb(51, 102, 255) }
+    if slot = 3 { return canvas.rgb(255, 204, 0) }
+    if slot = 4 { return canvas.rgb(255, 51, 204) }
+    if slot = 5 { return canvas.rgb(0, 255, 255) }
+    if slot = 6 { return canvas.rgb(255, 102, 0) }
+    if slot = 7 { return canvas.rgb(153, 51, 255) }
+    return canvas.rgb(51, 153, 102)
+end
+
+fn is_image_name(name: string): int
+begin
+    var ext: string := strings.to_lower(path.extension(name))
+    if ext = ".png" || ext = ".jpg" || ext = ".jpeg" || ext = ".bmp" || ext = ".gif" || ext = ".webp" || ext = ".tiff" || ext = ".tif" { return 1 }
+    return 0
+end
+
+// Highest purely numeric image file name in a folder, plus one.
+fn next_number(folder: string): int
+begin
+    var highest: int := 0
+    if stat.exists(folder) = 0 { return 1 }
+    var names: *strlist.List := dir.list(folder)
+    var i: int := 0
+    while i < strlist.len(names) {
+        var name: string := strlist.get(names, i)
+        if is_image_name(name) = 1 {
+            var stem: string := path.stem(name)
+            var digits: int := 1
+            var k: int := 0
+            while k < str.length(stem) {
+                if str.char(stem, k) < 48 || str.char(stem, k) > 57 { digits := 0 }
+                k := k + 1
+            }
+            if digits = 1 && str.length(stem) > 0 {
+                var value: int := strconv.parse_int(stem)
+                if value > highest { highest := value }
+            }
+        }
+        i := i + 1
+    }
+    strlist.release(names)
+    return highest + 1
+end
+
+// Full paths of all images in a folder, sorted by name.
+fn list_images(folder: string): *strlist.List
+begin
+    var found: *strlist.List := strlist.new()
+    var names: *strlist.List := dir.list(folder)
+    var i: int := 0
+    while i < strlist.len(names) {
+        var name: string := strlist.get(names, i)
+        var full: string := path.join(folder, name)
+        if is_image_name(name) = 1 && stat.is_file(full) = 1 { strlist.push(found, full) }
+        i := i + 1
+    }
+    strlist.release(names)
+    strlist.sort(found)
+    return found
+end
+
+fn say(app: *App, message: string)
+begin
+    app.status := message
+    app.status_bad := 0
+    app.status_age := 0
+end
+
+fn complain(app: *App, message: string)
+begin
+    app.status := message
+    app.status_bad := 1
+    app.status_age := 0
+end
+
+fn text_of(buf: *gui.TextBuf): string
+begin
+    return gui.text_get(buf)
+end
+
+// ---------------------------------------------------------------- folder browser
+fn open_browser(app: *App, target: int, start: string)
+begin
+    app.browse_return := app.screen
+    app.browse_target := target
+    var where: string := start
+    if str.length(where) = 0 || stat.is_dir(where) = 0 { where := os.home() }
+    if str.length(where) = 0 || stat.is_dir(where) = 0 { where := "/" }
+    gui.text_set(app.browse_path, where)
+    app.browse_listing := ""
+    app.browse_scroll := 0
+    app.screen := 9
+end
+
+fn refresh_listing(app: *App)
+begin
+    var current: string := text_of(app.browse_path)
+    if current = app.browse_listing { return }
+    app.browse_listing := current
+    strlist.clear(app.browse_entries)
+    var names: *strlist.List := dir.list(current)
+    var i: int := 0
+    while i < strlist.len(names) {
+        var name: string := strlist.get(names, i)
+        var hidden: int := 0
+        if str.length(name) > 0 && str.char(name, 0) = 46 { hidden := 1 }
+        if stat.is_dir(path.join(current, name)) = 1 && (hidden = 0 || app.browse_hidden = 1) { strlist.push(app.browse_entries, name) }
+        i := i + 1
+    }
+    strlist.release(names)
+    strlist.sort(app.browse_entries)
+    app.browse_scroll := 0
+end
+
+fn go_to(app: *App, target: string)
+begin
+    gui.text_set(app.browse_path, target)
+end
+
+fn go_up(app: *App)
+begin
+    var parent: string := path.dirname(text_of(app.browse_path))
+    if str.length(parent) = 0 { parent := "/" }
+    go_to(app, parent)
+end
+
+fn apply_browser_choice(app: *App, chosen: string)
+begin
+    var target: int := app.browse_target
+    app.screen := app.browse_return
+    if target = 1 {
+        gui.text_set(app.cs_src, chosen)
+        load_class_images(app, chosen)
+    }
+    if target = 2 {
+        if strlist.contains(app.cs_dsts, chosen) = 1 { say(app, chosen + " already exists in the list.") }
+        else {
+            dir.make_all(chosen)
+            strlist.push(app.cs_dsts, chosen)
+            say(app, "Added destination " + path.basename(chosen))
+        }
+    }
+    if target = 3 {
+        gui.text_set(app.ad_src, chosen)
+        load_advanced_images(app, chosen)
+    }
+    if target = 4 {
+        gui.text_set(app.ad_root, chosen)
+        scan_classes(app, chosen)
+    }
+    if target = 5 {
+        gui.text_set(app.ad_labels, chosen)
+        dir.make_all(chosen)
+        say(app, "Labels will be written to " + chosen)
+    }
+end
+
+fn draw_browser(app: *App)
+begin
+    var ui: *gui.Gui := app.ui
+    refresh_listing(app)
+    gui.panel(ui, 10, 10, 880, 780, "Choose a folder")
+    if gui.textbox(ui, 24, 44, 700, app.browse_path) = 1 {
+        if stat.is_dir(text_of(app.browse_path)) = 0 { complain(app, "Not a folder: " + text_of(app.browse_path)) }
+    }
+    if gui.button(ui, 736, 44, 60, 24, "Up") = 1 { go_up(app) }
+    if gui.checkbox(ui, 24, 78, "Show hidden folders", &app.browse_hidden) = 1 { app.browse_listing := "" }
+    gui.separator(ui, 24, 106, 852)
+    var rows: int := strlist.len(app.browse_entries)
+    var visible: int := 22
+    if window.mouse_down(app.win, 1) = 0 || gui.inside(ui, 24, 116, 852, 560) = 1 { app.browse_scroll := app.browse_scroll - app.win.wheel * 3 }
+    if app.browse_scroll > rows - visible + 1 { app.browse_scroll := rows - visible + 1 }
+    if app.browse_scroll < 0 { app.browse_scroll := 0 }
+    var shown: int := 0
+    var index: int := 0 - 1
+    while shown < visible && index < rows {
+        var position: int := index
+        if position + 1 >= app.browse_scroll {
+            var label: string := ".."
+            if index >= 0 { label := strlist.get(app.browse_entries, index) + "/" }
+            if gui.button(ui, 24, 118 + shown * 25, 852, 23, label) = 1 {
+                if index < 0 { go_up(app) }
+                else { go_to(app, path.join(text_of(app.browse_path), strlist.get(app.browse_entries, index))) }
+            }
+            shown := shown + 1
+        }
+        index := index + 1
+    }
+    if rows = 0 { gui.dim_label(ui, 30, 148, "(no sub-folders here)") }
+    gui.separator(ui, 24, 690, 852)
+    if gui.button(ui, 24, 706, 220, 30, "Select this folder") = 1 {
+        var chosen: string := text_of(app.browse_path)
+        if stat.is_dir(chosen) = 1 { apply_browser_choice(app, chosen) }
+        else { complain(app, "Not a folder: " + chosen) }
+    }
+    if gui.button(ui, 256, 706, 120, 30, "Cancel") = 1 { app.screen := app.browse_return }
+    gui.dim_label(ui, 24, 750, "Click a folder to open it, Enter in the path box to jump there, mouse wheel scrolls.")
+    if app.status_bad = 1 { gui.label(ui, 24, 766, app.status) }
+end
+
+// ---------------------------------------------------------------- class sorter
+fn load_class_images(app: *App, folder: string)
+begin
+    var found: *strlist.List := list_images(folder)
+    if strlist.len(found) = 0 {
+        complain(app, "No image files found in: " + folder)
+        strlist.release(found)
+        return
+    }
+    strlist.release(app.cs_imgs)
+    app.cs_imgs := found
+    app.cs_i := 0
+    show_class_image(app)
+    say(app, "Loaded " + str.number(strlist.len(found)) + " images.")
+end
+
+fn show_class_image(app: *App)
+begin
+    if strlist.len(app.cs_imgs) = 0 { return }
+    if @app.cs_preview != 0 {
+        canvas.release(app.cs_preview)
+        var none: *canvas.Canvas
+        app.cs_preview := none
+    }
+    var info: [2]int
+    app.cs_preview := image.load_fit(strlist.get(app.cs_imgs, app.cs_i), 560, 420, &info)
+end
+
+fn class_step(app: *App, delta: int)
+begin
+    var count: int := strlist.len(app.cs_imgs)
+    if count = 0 { return }
+    app.cs_i := (app.cs_i + delta + count) % count
+    show_class_image(app)
+end
+
+fn class_sort_into(app: *App, destination: int)
+begin
+    if strlist.len(app.cs_imgs) = 0 || destination >= strlist.len(app.cs_dsts) { return }
+    var folder: string := strlist.get(app.cs_dsts, destination)
+    var source: string := strlist.get(app.cs_imgs, app.cs_i)
+    var number: int := next_number(folder)
+    var target: string := path.join(folder, str.number(number) + path.extension(source))
+    if dir.copy_file(source, target) = 1 {
+        say(app, "Saved -> " + path.basename(target))
+        class_step(app, 1)
+    }
+    else { complain(app, "Could not copy to " + target) }
+end
+
+fn draw_preview_frame(app: *App, top: int)
+begin
+    var cv: *canvas.Canvas := app.win.canvas
+    canvas.fill_rect(cv, preview_x() - 1, top - 1, 562, 422, canvas.rgb(90, 96, 120))
+    canvas.fill_rect(cv, preview_x(), top, 560, 420, canvas.rgb(30, 30, 30))
+end
+
+fn draw_class_sorter(app: *App)
+begin
+    var ui: *gui.Gui := app.ui
+    var cv: *canvas.Canvas := app.win.canvas
+    gui.label(ui, 14, 17, "Source folder:")
+    if gui.textbox(ui, 130, 12, 560, app.cs_src) = 1 { load_class_images(app, text_of(app.cs_src)) }
+    if gui.button(ui, 702, 12, 100, 24, "Browse...") = 1 { open_browser(app, 1, text_of(app.cs_src)) }
+    if gui.button(ui, 812, 12, 76, 24, "Menu") = 1 { app.screen := 0 }
+    draw_preview_frame(app, 50)
+    if @app.cs_preview != 0 {
+        canvas.blit(cv, app.cs_preview, preview_x() + (560 - app.cs_preview.width) / 2, 50 + (420 - app.cs_preview.height) / 2)
+    }
+    else {
+        if strlist.len(app.cs_imgs) > 0 { canvas.text(cv, preview_x() + 150, 250, "cannot preview this format", canvas.rgb(160, 160, 170)) }
+        else { canvas.text(cv, preview_x() + 150, 250, "pick a source folder to begin", canvas.rgb(160, 160, 170)) }
+    }
+    var count: int := strlist.len(app.cs_imgs)
+    if count > 0 { gui.label(ui, 14, 488, path.basename(strlist.get(app.cs_imgs, app.cs_i)) + "    (" + str.number(app.cs_i + 1) + " / " + str.number(count) + ")") }
+    if gui.button(ui, 560, 482, 90, 26, "< Prev") = 1 { class_step(app, -1) }
+    if gui.button(ui, 660, 482, 90, 26, "Next >") = 1 { class_step(app, 1) }
+    if gui.button(ui, 760, 482, 90, 26, "Skip") = 1 { class_step(app, 1) }
+    gui.panel(ui, 10, 520, 880, 270, "Destination folders")
+    if gui.button(ui, 24, 550, 220, 26, "+ Add destination folder") = 1 { open_browser(app, 2, text_of(app.cs_src)) }
+    var rows: int := strlist.len(app.cs_dsts)
+    var visible: int := 6
+    if gui.inside(ui, 24, 584, 852, 190) = 1 { app.cs_scroll := app.cs_scroll - app.win.wheel }
+    if app.cs_scroll > rows - visible { app.cs_scroll := rows - visible }
+    if app.cs_scroll < 0 { app.cs_scroll := 0 }
+    var removing: int := -1
+    var row: int := 0
+    while row < visible && app.cs_scroll + row < rows {
+        var index: int := app.cs_scroll + row
+        var y: int := 586 + row * 32
+        gui.label(ui, 28, y + 6, str.number(index + 1) + "  " + path.basename(strlist.get(app.cs_dsts, index)))
+        if gui.button(ui, 330, y, 200, 26, "Sort here  [" + str.number(index + 1) + "]") = 1 { class_sort_into(app, index) }
+        if gui.button(ui, 840, y, 36, 26, "x") = 1 { removing := index }
+        row := row + 1
+    }
+    if removing >= 0 { strlist.remove(app.cs_dsts, removing) }
+    if rows = 0 { gui.dim_label(ui, 28, 596, "No destination folders yet.") }
+    if str.length(app.status) > 0 {
+        if app.status_bad = 1 { canvas.text(cv, 260, 556, app.status, canvas.rgb(255, 120, 110)) }
+        else { canvas.text(cv, 260, 556, app.status, canvas.rgb(150, 156, 175)) }
+    }
+    if app.ui.focus = 0 {
+        if window.key_pressed(app.win, window.key_left()) = 1 { class_step(app, -1) }
+        if window.key_pressed(app.win, window.key_right()) = 1 { class_step(app, 1) }
+        var digit: int := 0
+        while digit < 9 {
+            if window.key_pressed(app.win, 49 + digit) = 1 { class_sort_into(app, digit) }
+            digit := digit + 1
+        }
+    }
+end
+
+// ---------------------------------------------------------------- advanced object sorter
+fn load_advanced_images(app: *App, folder: string)
+begin
+    var found: *strlist.List := list_images(folder)
+    strlist.release(app.ad_imgs)
+    app.ad_imgs := found
+    app.ad_i := 0
+    show_advanced_image(app)
+    say(app, "Loaded " + str.number(strlist.len(found)) + " images.")
+end
+
+fn show_advanced_image(app: *App)
+begin
+    app.box_count := 0
+    app.drawing := 0
+    if @app.ad_preview != 0 {
+        canvas.release(app.ad_preview)
+        var none: *canvas.Canvas
+        app.ad_preview := none
+    }
+    app.orig_w := 0
+    app.orig_h := 0
+    if strlist.len(app.ad_imgs) = 0 { return }
+    var info: [2]int
+    app.ad_preview := image.load_fit(strlist.get(app.ad_imgs, app.ad_i), 560, 420, &info)
+    app.orig_w := info[0]
+    app.orig_h := info[1]
+    if @app.ad_preview != 0 {
+        app.disp_w := app.ad_preview.width
+        app.disp_h := app.ad_preview.height
+        app.off_x := (560 - app.disp_w) / 2
+        app.off_y := (420 - app.disp_h) / 2
+    }
+end
+
+fn advanced_step(app: *App, delta: int)
+begin
+    var count: int := strlist.len(app.ad_imgs)
+    if count = 0 { return }
+    app.ad_i := (app.ad_i + delta + count) % count
+    show_advanced_image(app)
+end
+
+fn scan_classes(app: *App, root: string)
+begin
+    strlist.clear(app.ad_names)
+    strlist.clear(app.ad_paths)
+    if stat.is_dir(root) = 1 {
+        var names: *strlist.List := dir.list(root)
+        strlist.sort(names)
+        var i: int := 0
+        while i < strlist.len(names) {
+            var full: string := path.join(root, strlist.get(names, i))
+            if stat.is_dir(full) = 1 {
+                strlist.push(app.ad_names, strlist.get(names, i))
+                strlist.push(app.ad_paths, full)
+            }
+            i := i + 1
+        }
+        strlist.release(names)
+    }
+    app.ad_active := 0
+    app.ad_scroll := 0
+    say(app, "Found " + str.number(strlist.len(app.ad_names)) + " class folders.")
+end
+
+fn add_class_folder(app: *App)
+begin
+    var root: string := text_of(app.ad_root)
+    if str.length(root) = 0 {
+        complain(app, "Please select a Class Root Folder first.")
+        return
+    }
+    var number: int := 0
+    while strlist.contains(app.ad_names, str.number(number)) = 1 { number := number + 1 }
+    var name: string := str.number(number)
+    var full: string := path.join(root, name)
+    dir.make_all(full)
+    strlist.push(app.ad_names, name)
+    strlist.push(app.ad_paths, full)
+    say(app, "Created class folder " + name)
+end
+
+fn canvas_to_orig_x(app: *App, cx: int): int
+begin
+    var inner: int := cx - preview_x() - app.off_x
+    if inner < 0 { inner := 0 }
+    if inner > app.disp_w { inner := app.disp_w }
+    return inner * app.orig_w / app.disp_w
+end
+
+fn canvas_to_orig_y(app: *App, cy: int): int
+begin
+    var inner: int := cy - 116 - app.off_y
+    if inner < 0 { inner := 0 }
+    if inner > app.disp_h { inner := app.disp_h }
+    return inner * app.orig_h / app.disp_h
+end
+
+fn orig_to_canvas_x(app: *App, ox: int): int
+begin
+    return preview_x() + app.off_x + ox * app.disp_w / app.orig_w
+end
+
+fn orig_to_canvas_y(app: *App, oy: int): int
+begin
+    return 116 + app.off_y + oy * app.disp_h / app.orig_h
+end
+
+fn dashed_rect(cv: *canvas.Canvas, x0: int, y0: int, x1: int, y1: int, color: int)
+begin
+    var left: int := x0
+    var right: int := x1
+    var top: int := y0
+    var bottom: int := y1
+    if left > right {
+        left := x1
+        right := x0
+    }
+    if top > bottom {
+        top := y1
+        bottom := y0
+    }
+    var step: int := left
+    while step < right {
+        canvas.hline(cv, step, step + 3, top, color)
+        canvas.hline(cv, step, step + 3, bottom, color)
+        step := step + 8
+    }
+    step := top
+    while step < bottom {
+        canvas.vline(cv, left, step, step + 3, color)
+        canvas.vline(cv, right, step, step + 3, color)
+        step := step + 8
+    }
+end
+
+fn thick_rect(cv: *canvas.Canvas, x0: int, y0: int, x1: int, y1: int, color: int)
+begin
+    var left: int := x0
+    var top: int := y0
+    var w: int := x1 - x0
+    var h: int := y1 - y0
+    if w < 0 {
+        left := x1
+        w := 0 - w
+    }
+    if h < 0 {
+        top := y1
+        h := 0 - h
+    }
+    canvas.rect(cv, left, top, w + 1, h + 1, color)
+    canvas.rect(cv, left + 1, top + 1, w - 1, h - 1, color)
+end
+
+fn undo_box(app: *App)
+begin
+    if app.box_count > 0 { app.box_count := app.box_count - 1 }
+end
+
+// YOLO label line: "<class> <x_center> <y_center> <width> <height>", all normalised to the original image size.
+fn yolo_line(app: *App, index: int): string
+begin
+    var class_index: int := (*app.boxes)[index * 5]
+    var x1: int := (*app.boxes)[index * 5 + 1]
+    var y1: int := (*app.boxes)[index * 5 + 2]
+    var x2: int := (*app.boxes)[index * 5 + 3]
+    var y2: int := (*app.boxes)[index * 5 + 4]
+    var class_id: int := class_index
+    var name: string := strlist.get(app.ad_names, class_index)
+    if strconv.is_int(name) = 1 { class_id := strconv.parse_int(name) }
+    var width: flt := (x2 - x1) * 1.0
+    var height: flt := (y2 - y1) * 1.0
+    var xc: flt := (x1 + width / 2.0) / app.orig_w
+    var yc: flt := (y1 + height / 2.0) / app.orig_h
+    return str.number(class_id) + " " + strconv.format_flt(xc, 6) + " " + strconv.format_flt(yc, 6) + " " + strconv.format_flt(width / app.orig_w, 6) + " " + strconv.format_flt(height / app.orig_h, 6) + "\n"
+end
+
+fn save_and_sort(app: *App, class_index: int)
+begin
+    if strlist.len(app.ad_imgs) = 0 { return }
+    if str.length(text_of(app.ad_root)) = 0 {
+        complain(app, "Class Root folder not set.")
+        return
+    }
+    var folder: string := strlist.get(app.ad_paths, class_index)
+    dir.make_all(folder)
+    var source: string := strlist.get(app.ad_imgs, app.ad_i)
+    var number: int := next_number(folder)
+    var saved: string := path.join(folder, str.number(number) + path.extension(source))
+    if dir.copy_file(source, saved) = 0 {
+        complain(app, "Could not copy to " + saved)
+        return
+    }
+    var labels: string := text_of(app.ad_labels)
+    if str.length(labels) > 0 {
+        dir.make_all(labels)
+        var content: string := str.builder("")
+        var i: int := 0
+        while i < app.box_count {
+            content := str.append(content, yolo_line(app, i))
+            i := i + 1
+        }
+        fs.write_file(path.join(labels, path.stem(saved) + ".txt"), content)
+    }
+    say(app, "Successfully sorted -> " + saved)
+    advanced_step(app, 1)
+end
+
+fn draw_advanced(app: *App)
+begin
+    var ui: *gui.Gui := app.ui
+    var cv: *canvas.Canvas := app.win.canvas
+    gui.panel(ui, 10, 8, 880, 100, "")
+    gui.label(ui, 22, 20, "Source Images:")
+    if gui.textbox(ui, 168, 14, 560, app.ad_src) = 1 { load_advanced_images(app, text_of(app.ad_src)) }
+    if gui.button(ui, 738, 14, 100, 24, "Browse...") = 1 { open_browser(app, 3, text_of(app.ad_src)) }
+    gui.label(ui, 22, 52, "Class Root Folder:")
+    if gui.textbox(ui, 168, 46, 560, app.ad_root) = 1 { scan_classes(app, text_of(app.ad_root)) }
+    if gui.button(ui, 738, 46, 100, 24, "Browse...") = 1 { open_browser(app, 4, text_of(app.ad_root)) }
+    gui.label(ui, 22, 84, "Labels Folder:")
+    if gui.textbox(ui, 168, 78, 560, app.ad_labels) = 1 {
+        if str.length(text_of(app.ad_labels)) > 0 { dir.make_all(text_of(app.ad_labels)) }
+    }
+    if gui.button(ui, 738, 78, 100, 24, "Browse...") = 1 { open_browser(app, 5, text_of(app.ad_labels)) }
+    if gui.button(ui, 846, 14, 38, 24, "Menu") = 1 { app.screen := 0 }
+    draw_preview_frame(app, 116)
+    var mouse_x: int := app.win.mouse_x
+    var mouse_y: int := app.win.mouse_y
+    if @app.ad_preview != 0 {
+        canvas.blit(cv, app.ad_preview, preview_x() + app.off_x, 116 + app.off_y)
+    }
+    else {
+        if strlist.len(app.ad_imgs) > 0 { canvas.text(cv, preview_x() + 150, 310, "cannot preview this format", canvas.rgb(160, 160, 170)) }
+        else { canvas.text(cv, preview_x() + 150, 310, "pick a source folder to begin", canvas.rgb(160, 160, 170)) }
+    }
+    // mouse: drag a box inside the image area
+    var can_draw: int := 0
+    if @app.ad_preview != 0 && app.orig_w > 0 && app.orig_h > 0 { can_draw := 1 }
+    if can_draw = 1 {
+        if window.mouse_pressed(app.win, 1) = 1 && gui.inside(ui, preview_x(), 116, 560, 420) = 1 && app.ui.active = 0 {
+            app.drawing := 1
+            app.start_x := mouse_x
+            app.start_y := mouse_y
+        }
+        if app.drawing = 1 && window.mouse_released(app.win, 1) = 1 {
+            app.drawing := 0
+            if strlist.len(app.ad_names) = 0 { complain(app, "Please add and select a class folder first.") }
+            else {
+                var x1: int := canvas_to_orig_x(app, app.start_x)
+                var y1: int := canvas_to_orig_y(app, app.start_y)
+                var x2: int := canvas_to_orig_x(app, mouse_x)
+                var y2: int := canvas_to_orig_y(app, mouse_y)
+                var dx: int := x2 - x1
+                var dy: int := y2 - y1
+                if dx < 0 { dx := 0 - dx }
+                if dy < 0 { dy := 0 - dy }
+                if dx > 5 && dy > 5 && app.box_count < 800 {
+                    var lo_x: int := x1
+                    var hi_x: int := x2
+                    var lo_y: int := y1
+                    var hi_y: int := y2
+                    if x2 < x1 {
+                        lo_x := x2
+                        hi_x := x1
+                    }
+                    if y2 < y1 {
+                        lo_y := y2
+                        hi_y := y1
+                    }
+                    var at: int := app.box_count * 5
+                    (*app.boxes)[at] := app.ad_active
+                    (*app.boxes)[at + 1] := lo_x
+                    (*app.boxes)[at + 2] := lo_y
+                    (*app.boxes)[at + 3] := hi_x
+                    (*app.boxes)[at + 4] := hi_y
+                    app.box_count := app.box_count + 1
+                }
+            }
+        }
+        var i: int := 0
+        while i < app.box_count {
+            var color: int := class_color((*app.boxes)[i * 5])
+            var cx1: int := orig_to_canvas_x(app, (*app.boxes)[i * 5 + 1])
+            var cy1: int := orig_to_canvas_y(app, (*app.boxes)[i * 5 + 2])
+            var cx2: int := orig_to_canvas_x(app, (*app.boxes)[i * 5 + 3])
+            var cy2: int := orig_to_canvas_y(app, (*app.boxes)[i * 5 + 4])
+            thick_rect(cv, cx1, cy1, cx2, cy2, color)
+            canvas.text(cv, cx1 + 4, cy1 + 4, strlist.get(app.ad_names, (*app.boxes)[i * 5]), color)
+            i := i + 1
+        }
+        if app.drawing = 1 {
+            var color: int := canvas.rgb(255, 255, 255)
+            if strlist.len(app.ad_names) > 0 { color := class_color(app.ad_active) }
+            dashed_rect(cv, app.start_x, app.start_y, mouse_x, mouse_y, color)
+        }
+    }
+    var count: int := strlist.len(app.ad_imgs)
+    if count > 0 { gui.label(ui, 14, 548, path.basename(strlist.get(app.ad_imgs, app.ad_i)) + "  (" + str.number(app.ad_i + 1) + " / " + str.number(count) + ")") }
+    else { gui.label(ui, 14, 548, "No images loaded") }
+    if gui.button(ui, 400, 542, 80, 26, "< Prev") = 1 { advanced_step(app, -1) }
+    if gui.button(ui, 488, 542, 80, 26, "Next >") = 1 { advanced_step(app, 1) }
+    if gui.button(ui, 590, 542, 100, 26, "Undo Box") = 1 { undo_box(app) }
+    if gui.button(ui, 698, 542, 150, 26, "Clear All Boxes") = 1 { app.box_count := 0 }
+    gui.panel(ui, 10, 580, 880, 210, "Classes & Destination Folders")
+    if gui.button(ui, 24, 608, 230, 26, "+ Add New Class Folder") = 1 { add_class_folder(app) }
+    if str.length(app.status) > 0 {
+        if app.status_bad = 1 { canvas.text(cv, 270, 614, app.status, canvas.rgb(255, 120, 110)) }
+        else { canvas.text(cv, 270, 614, app.status, canvas.rgb(150, 156, 175)) }
+    }
+    var rows: int := strlist.len(app.ad_names)
+    var visible: int := 4
+    if gui.inside(ui, 24, 644, 852, 140) = 1 { app.ad_scroll := app.ad_scroll - app.win.wheel }
+    if app.ad_scroll > rows - visible { app.ad_scroll := rows - visible }
+    if app.ad_scroll < 0 { app.ad_scroll := 0 }
+    var row: int := 0
+    while row < visible && app.ad_scroll + row < rows {
+        var index: int := app.ad_scroll + row
+        var y: int := 646 + row * 34
+        canvas.fill_rect(cv, 28, y + 2, 20, 22, class_color(index))
+        gui.label(ui, 58, y + 6, "Class [" + strlist.get(app.ad_names, index) + "]: " + path.basename(strlist.get(app.ad_paths, index)))
+        var caption: string := "Set Active"
+        if index = app.ad_active { caption := "Active *" }
+        if gui.button(ui, 380, y, 130, 26, caption) = 1 { app.ad_active := index }
+        if gui.button(ui, 522, y, 260, 26, "Sort & Save -> [" + strlist.get(app.ad_names, index) + "]") = 1 { save_and_sort(app, index) }
+        row := row + 1
+    }
+    if rows = 0 { gui.dim_label(ui, 28, 660, "No classes added yet. Click '+ Add New Class Folder'.") }
+    if app.ui.focus = 0 {
+        if window.key_pressed(app.win, window.key_left()) = 1 { advanced_step(app, -1) }
+        if window.key_pressed(app.win, window.key_right()) = 1 { advanced_step(app, 1) }
+        var digit: int := 0
+        while digit < 9 && digit < rows {
+            if window.key_pressed(app.win, 49 + digit) = 1 { app.ad_active := digit }
+            digit := digit + 1
+        }
+    }
+end
+
+// ---------------------------------------------------------------- menu
+fn draw_menu(app: *App)
+begin
+    var ui: *gui.Gui := app.ui
+    gui.panel(ui, 250, 220, 400, 280, "SentryAI - Image Sorter Tools")
+    canvas.text_scaled(app.win.canvas, 292, 262, "Select Sorter Mode", canvas.rgb(235, 238, 245), 2)
+    if gui.button(ui, 300, 320, 300, 40, "1. Class Sorter (Standard)") = 1 { app.screen := 1 }
+    if gui.button(ui, 300, 380, 300, 40, "2. Advanced Object") = 1 { app.screen := 2 }
+    gui.dim_label(ui, 300, 450, "Esc quits.  Left/Right = prev/next image")
+end
+
+fn new_app(win: *window.Window): *App
+begin
+    var app: *App := alloc(512)
+    app.win := win
+    app.ui := gui.new(win)
+    app.screen := 0
+    app.status := ""
+    app.status_bad := 0
+    app.status_age := 0
+    app.browse_target := 0
+    app.browse_return := 0
+    app.browse_path := gui.text_buffer(1024)
+    app.browse_listing := ""
+    app.browse_entries := strlist.new()
+    app.browse_scroll := 0
+    app.browse_hidden := 0
+    app.cs_src := gui.text_buffer(1024)
+    app.cs_imgs := strlist.new()
+    app.cs_i := 0
+    app.cs_dsts := strlist.new()
+    app.cs_scroll := 0
+    app.ad_src := gui.text_buffer(1024)
+    app.ad_root := gui.text_buffer(1024)
+    app.ad_labels := gui.text_buffer(1024)
+    app.ad_imgs := strlist.new()
+    app.ad_i := 0
+    app.ad_names := strlist.new()
+    app.ad_paths := strlist.new()
+    app.ad_active := 0
+    app.ad_scroll := 0
+    app.boxes := alloc(4096 * 8)
+    app.box_count := 0
+    app.orig_w := 0
+    app.orig_h := 0
+    app.disp_w := 1
+    app.disp_h := 1
+    app.off_x := 0
+    app.off_y := 0
+    app.drawing := 0
+    return app
+end
+
+// Writes a screenshot of the window canvas (used for documentation and tests).
+fn screenshot(app: *App, target: string)
+begin
+    image.save(app.win.canvas, target)
+end
+
+// XE_SORTER_SELFTEST=1: loads the preset folders, draws one box on the first image, sorts it into class 0
+// and exits (checks the copy + YOLO label path without a human).
+fn self_test(app: *App): int
+begin
+    app.screen := 2
+    if strlist.len(app.ad_imgs) = 0 || strlist.len(app.ad_names) = 0 {
+        writeln("selftest: needs source, class root with at least one class folder, and a labels folder")
+        return 1
+    }
+    show_advanced_image(app)
+    if app.orig_w = 0 {
+        writeln("selftest: first image cannot be decoded")
+        return 1
+    }
+    (*app.boxes)[0] := 0
+    (*app.boxes)[1] := app.orig_w / 10
+    (*app.boxes)[2] := app.orig_h / 5
+    (*app.boxes)[3] := app.orig_w / 2
+    (*app.boxes)[4] := app.orig_h * 4 / 5
+    app.box_count := 1
+    save_and_sort(app, 0)
+    writeln("selftest: ", app.status)
+    return 0
+end
+
+// Usage: sorter [source_folder [class_root [labels_folder]]]
+// Environment (optional): XE_SORTER_SCREEN=1|2 start screen, XE_SORTER_FRAMES=n quit after n frames,
+// XE_SORTER_SHOT=file.png screenshot at the end, XE_SORTER_SELFTEST=1 non-interactive self-test.
+fn main(): int
+begin
+    var win: *window.Window := window.open_fixed("SentryAI - Image Sorter Tools", 900, 800)
+    if @win = 0 {
+        writeln("no display found (set DISPLAY)")
+        return 1
+    }
+    var limit: int := -1
+    if str.length(env.get("XE_SORTER_FRAMES")) > 0 { limit := strconv.parse_int(env.get("XE_SORTER_FRAMES")) }
+    var app: *App := new_app(win)
+    var start: int := 0
+    if str.length(env.get("XE_SORTER_SCREEN")) > 0 { start := strconv.parse_int(env.get("XE_SORTER_SCREEN")) }
+    if arg.count() > 0 {
+        gui.text_set(app.cs_src, arg.get(0))
+        gui.text_set(app.ad_src, arg.get(0))
+        load_class_images(app, arg.get(0))
+        load_advanced_images(app, arg.get(0))
+    }
+    if arg.count() > 1 {
+        gui.text_set(app.ad_root, arg.get(1))
+        scan_classes(app, arg.get(1))
+        var k: int := 0
+        var names: *strlist.List := dir.list(arg.get(1))
+        strlist.sort(names)
+        while k < strlist.len(names) {
+            if stat.is_dir(path.join(arg.get(1), strlist.get(names, k))) = 1 { strlist.push(app.cs_dsts, path.join(arg.get(1), strlist.get(names, k))) }
+            k := k + 1
+        }
+    }
+    if arg.count() > 2 { gui.text_set(app.ad_labels, arg.get(2)) }
+    app.screen := start
+    if start = 9 {
+        app.screen := 1
+        open_browser(app, 1, "/")
+    }
+    if str.length(env.get("XE_SORTER_SELFTEST")) > 0 { return self_test(app) }
+    var frames: int := 0
+    while window.is_open(win) && (limit < 0 || frames < limit) {
+        window.poll(win)
+        if window.key_pressed(win, window.key_escape()) = 1 {
+            if app.screen = 0 { window.close(win) }
+            else {
+                if app.screen = 9 { app.screen := app.browse_return }
+                else { app.screen := 0 }
+            }
+        }
+        gui.start(app.ui)
+        if app.screen = 0 { draw_menu(app) }
+        if app.screen = 1 { draw_class_sorter(app) }
+        if app.screen = 2 { draw_advanced(app) }
+        if app.screen = 9 { draw_browser(app) }
+        gui.finish(app.ui)
+        window.limit_fps(win, 60)
+        frames := frames + 1
+    }
+    if str.length(env.get("XE_SORTER_SHOT")) > 0 { screenshot(app, env.get("XE_SORTER_SHOT")) }
+    return 0
+end

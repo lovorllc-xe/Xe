@@ -1,0 +1,567 @@
+// jpeg: decode baseline (sequential Huffman) JPEG files - grayscale or YCbCr with any chroma subsampling.
+// `decode_scaled` can decode at 1/2, 1/4 or 1/8 size (much faster, ideal for previews and thumbnails).
+// Progressive JPEG, arithmetic coding and CMYK are not supported (the decoders return a null pointer).
+uses bytes
+uses canvas
+uses mathx
+
+module jpeg
+begin
+    type Reader: record
+    begin
+        data: *void
+        position: int
+        limit: int
+        bit_buffer: int
+        bit_count: int
+        marker: int
+    end
+
+    fn is_jpeg(buffer: *bytes.Buffer): int
+    begin
+        if bytes.len(buffer) > 3 && bytes.get(buffer, 0) = 255 && bytes.get(buffer, 1) = 216 { return 1 }
+        return 0
+    end
+
+    fn load_zigzag(zz: *[64]int)
+    begin
+        (*zz)[0] := 0
+        (*zz)[1] := 1
+        (*zz)[2] := 8
+        (*zz)[3] := 16
+        (*zz)[4] := 9
+        (*zz)[5] := 2
+        (*zz)[6] := 3
+        (*zz)[7] := 10
+        (*zz)[8] := 17
+        (*zz)[9] := 24
+        (*zz)[10] := 32
+        (*zz)[11] := 25
+        (*zz)[12] := 18
+        (*zz)[13] := 11
+        (*zz)[14] := 4
+        (*zz)[15] := 5
+        (*zz)[16] := 12
+        (*zz)[17] := 19
+        (*zz)[18] := 26
+        (*zz)[19] := 33
+        (*zz)[20] := 40
+        (*zz)[21] := 48
+        (*zz)[22] := 41
+        (*zz)[23] := 34
+        (*zz)[24] := 27
+        (*zz)[25] := 20
+        (*zz)[26] := 13
+        (*zz)[27] := 6
+        (*zz)[28] := 7
+        (*zz)[29] := 14
+        (*zz)[30] := 21
+        (*zz)[31] := 28
+        (*zz)[32] := 35
+        (*zz)[33] := 42
+        (*zz)[34] := 49
+        (*zz)[35] := 56
+        (*zz)[36] := 57
+        (*zz)[37] := 50
+        (*zz)[38] := 43
+        (*zz)[39] := 36
+        (*zz)[40] := 29
+        (*zz)[41] := 22
+        (*zz)[42] := 15
+        (*zz)[43] := 23
+        (*zz)[44] := 30
+        (*zz)[45] := 37
+        (*zz)[46] := 44
+        (*zz)[47] := 51
+        (*zz)[48] := 58
+        (*zz)[49] := 59
+        (*zz)[50] := 52
+        (*zz)[51] := 45
+        (*zz)[52] := 38
+        (*zz)[53] := 31
+        (*zz)[54] := 39
+        (*zz)[55] := 46
+        (*zz)[56] := 53
+        (*zz)[57] := 60
+        (*zz)[58] := 61
+        (*zz)[59] := 54
+        (*zz)[60] := 47
+        (*zz)[61] := 55
+        (*zz)[62] := 62
+        (*zz)[63] := 63
+    end
+
+    fn u16(b: *bytes.Buffer, at: int): int
+    begin
+        return (bytes.get(b, at) << 8) | bytes.get(b, at + 1)
+    end
+
+    // [width, height] from the frame header (0, 0 when the file is not a readable JPEG).
+    fn size(buffer: *bytes.Buffer): [2]int
+    begin
+        var result: [2]int
+        result[0] := 0
+        result[1] := 0
+        if is_jpeg(buffer) = 0 { return result }
+        var p: int := 2
+        var n: int := bytes.len(buffer)
+        while p + 4 < n {
+            if bytes.get(buffer, p) != 255 { p := p + 1 }
+            else {
+                var marker: int := bytes.get(buffer, p + 1)
+                if marker = 255 { p := p + 1 }
+                else {
+                    if marker >= 192 && marker <= 207 && marker != 196 && marker != 200 && marker != 204 {
+                        result[1] := u16(buffer, p + 5)
+                        result[0] := u16(buffer, p + 7)
+                        return result
+                    }
+                    if marker = 216 || (marker >= 208 && marker <= 215) || marker = 1 { p := p + 2 }
+                    else { p := p + 2 + u16(buffer, p + 2) }
+                }
+            }
+        }
+        return result
+    end
+
+    // ---- bit reader ----------------------------------------------------------
+    fn fill(r: *jpeg.Reader)
+    begin
+        while r.bit_count <= 24 {
+            var byte: int := 0
+            if r.marker = 0 && r.position < r.limit {
+                byte := runtime.hw.read8(r.data + r.position)
+                r.position := r.position + 1
+                if byte = 255 {
+                    var next: int := 0
+                    if r.position < r.limit { next := runtime.hw.read8(r.data + r.position) }
+                    if next = 0 { r.position := r.position + 1 }
+                    else {
+                        r.marker := next
+                        r.position := r.position - 1
+                        byte := 0
+                    }
+                }
+            }
+            r.bit_buffer := (r.bit_buffer << 8) | byte
+            r.bit_count := r.bit_count + 8
+        }
+    end
+
+    fn get_bits(r: *jpeg.Reader, n: int): int
+    begin
+        if n = 0 { return 0 }
+        if r.bit_count < n { fill(r) }
+        r.bit_count := r.bit_count - n
+        return (r.bit_buffer >> r.bit_count) & ((1 << n) - 1)
+    end
+
+    fn extend(v: int, t: int): int
+    begin
+        if t = 0 { return 0 }
+        if v < (1 << (t - 1)) { return v - (1 << t) + 1 }
+        return v
+    end
+
+    // Huffman tables: 4 tables (DC0, DC1, AC0, AC1), each 400 ints: mincode[0..16], maxcode[20..36], valptr[40..56], values[60..315].
+    fn build_table(tables: *[1600]int, id: int, counts: *[17]int, values: *[256]int, total: int)
+    begin
+        var base: int := id * 400
+        var code: int := 0
+        var k: int := 0
+        var l: int := 1
+        while l <= 16 {
+            (*tables)[base + 40 + l] := k
+            if (*counts)[l] = 0 {
+                (*tables)[base + 20 + l] := -1
+                (*tables)[base + l] := 0
+            }
+            else {
+                (*tables)[base + l] := code
+                code := code + (*counts)[l]
+                k := k + (*counts)[l]
+                (*tables)[base + 20 + l] := code - 1
+            }
+            code := code * 2
+            l := l + 1
+        }
+        var i: int := 0
+        while i < total {
+            (*tables)[base + 60 + i] := (*values)[i]
+            i := i + 1
+        }
+    end
+
+    fn decode_symbol(r: *jpeg.Reader, tables: *[1600]int, id: int): int
+    begin
+        var base: int := id * 400
+        var code: int := 0
+        var l: int := 1
+        while l <= 16 {
+            code := (code << 1) | get_bits(r, 1)
+            if (*tables)[base + 20 + l] >= 0 && code <= (*tables)[base + 20 + l] {
+                return (*tables)[base + 60 + (*tables)[base + 40 + l] + code - (*tables)[base + l]]
+            }
+            l := l + 1
+        }
+        return 0
+    end
+
+    // Scaled N-point inverse DCT basis: t[x * 8 + u] = alpha(u) * cos((2x + 1) u pi / (2N)).
+    fn basis(t: *[64]flt, n: int)
+    begin
+        var x: int := 0
+        while x < n {
+            var u: int := 0
+            while u < n {
+                var scale: flt := mathx.sqrt(2.0 / n)
+                if u = 0 { scale := mathx.sqrt(1.0 / n) }
+                (*t)[x * 8 + u] := scale * mathx.cos((2 * x + 1) * u * mathx.pi() / (2.0 * n))
+                u := u + 1
+            }
+            x := x + 1
+        }
+    end
+
+    fn clamp255(v: int): int
+    begin
+        if v < 0 { return 0 }
+        if v > 255 { return 255 }
+        return v
+    end
+
+    // Decodes at 1/reduce size (reduce = 1, 2, 4 or 8). The result is ceil(width / reduce) x ceil(height / reduce).
+    fn decode_scaled(buffer: *bytes.Buffer, reduce: int): *canvas.Canvas
+    begin
+        var none: *canvas.Canvas
+        if is_jpeg(buffer) = 0 { return none }
+        var n: int := 8 / reduce
+        var tables: *[1600]int := alloc(1600 * 8)
+        var have_table: *[4]int := alloc(32)
+        var quant: *[256]int := alloc(256 * 8)
+        var zz: *[64]int := alloc(64 * 8)
+        load_zigzag(zz)
+        var comp_id: *[4]int := alloc(32)
+        var comp_h: *[4]int := alloc(32)
+        var comp_v: *[4]int := alloc(32)
+        var comp_q: *[4]int := alloc(32)
+        var comp_dc: *[4]int := alloc(32)
+        var comp_ac: *[4]int := alloc(32)
+        var pred: *[4]int := alloc(32)
+        var plane_width: *[4]int := alloc(32)
+        var planes: *[4]*void := alloc(32)
+        var width: int := 0
+        var height: int := 0
+        var components: int := 0
+        var restart: int := 0
+        var failed: int := 0
+        var finished: int := 0
+        var result: *canvas.Canvas
+        var i: int := 0
+        while i < 4 {
+            (*have_table)[i] := 0
+            i := i + 1
+        }
+        i := 0
+        while i < 256 {
+            (*quant)[i] := 1
+            i := i + 1
+        }
+        var counts: *[17]int := alloc(17 * 8)
+        var values: *[256]int := alloc(256 * 8)
+        var p: int := 2
+        var total: int := bytes.len(buffer)
+        while p + 4 <= total && failed = 0 && finished = 0 {
+            if bytes.get(buffer, p) != 255 { p := p + 1 }
+            else {
+                var marker: int := bytes.get(buffer, p + 1)
+                if marker = 255 { p := p + 1 }
+                else {
+                    if marker = 216 || marker = 1 || (marker >= 208 && marker <= 215) { p := p + 2 }
+                    else {
+                        var length: int := u16(buffer, p + 2)
+                        var body: int := p + 4
+                        if marker = 219 {
+                            var q: int := body
+                            while q < p + 2 + length {
+                                var precision: int := bytes.get(buffer, q) >> 4
+                                var id: int := bytes.get(buffer, q) & 15
+                                q := q + 1
+                                i := 0
+                                while i < 64 {
+                                    if precision = 0 { (*quant)[id * 64 + i] := bytes.get(buffer, q + i) }
+                                    else { (*quant)[id * 64 + i] := u16(buffer, q + i * 2) }
+                                    i := i + 1
+                                }
+                                q := q + 64
+                                if precision != 0 { q := q + 64 }
+                            }
+                        }
+                        if marker = 192 || marker = 193 {
+                            height := u16(buffer, body + 1)
+                            width := u16(buffer, body + 3)
+                            components := bytes.get(buffer, body + 5)
+                            if bytes.get(buffer, body) != 8 || (components != 1 && components != 3) { failed := 1 }
+                            i := 0
+                            while i < components && failed = 0 {
+                                (*comp_id)[i] := bytes.get(buffer, body + 6 + i * 3)
+                                (*comp_h)[i] := bytes.get(buffer, body + 7 + i * 3) >> 4
+                                (*comp_v)[i] := bytes.get(buffer, body + 7 + i * 3) & 15
+                                (*comp_q)[i] := bytes.get(buffer, body + 8 + i * 3)
+                                if (*comp_h)[i] < 1 || (*comp_h)[i] > 4 || (*comp_v)[i] < 1 || (*comp_v)[i] > 4 { failed := 1 }
+                                i := i + 1
+                            }
+                        }
+                        if marker = 194 || marker = 195 || (marker >= 197 && marker <= 207 && marker != 196 && marker != 200 && marker != 204) { failed := 1 }
+                        if marker = 196 {
+                            var q: int := body
+                            while q < p + 2 + length {
+                                var kind: int := bytes.get(buffer, q) >> 4
+                                var id: int := bytes.get(buffer, q) & 15
+                                q := q + 1
+                                var sum: int := 0
+                                i := 1
+                                while i <= 16 {
+                                    (*counts)[i] := bytes.get(buffer, q + i - 1)
+                                    sum := sum + (*counts)[i]
+                                    i := i + 1
+                                }
+                                q := q + 16
+                                i := 0
+                                while i < sum && i < 256 {
+                                    (*values)[i] := bytes.get(buffer, q + i)
+                                    i := i + 1
+                                }
+                                q := q + sum
+                                if id < 2 && kind < 2 {
+                                    build_table(tables, kind * 2 + id, counts, values, sum)
+                                    (*have_table)[kind * 2 + id] := 1
+                                }
+                            }
+                        }
+                        if marker = 221 { restart := u16(buffer, body) }
+                        if marker = 218 && failed = 0 {
+                            var scan_components: int := bytes.get(buffer, body)
+                            if width = 0 || height = 0 || components = 0 || scan_components != components { failed := 1 }
+                            if failed = 0 {
+                                i := 0
+                                while i < scan_components {
+                                    var cid: int := bytes.get(buffer, body + 1 + i * 2)
+                                    var tables_byte: int := bytes.get(buffer, body + 2 + i * 2)
+                                    var j: int := 0
+                                    while j < components {
+                                        if (*comp_id)[j] = cid {
+                                            (*comp_dc)[j] := tables_byte >> 4
+                                            (*comp_ac)[j] := tables_byte & 15
+                                        }
+                                        j := j + 1
+                                    }
+                                    i := i + 1
+                                }
+                                result := scan(buffer, p + 2 + length, tables, quant, zz, width, height, components, comp_h, comp_v, comp_q, comp_dc, comp_ac, pred, plane_width, planes, restart, reduce, n)
+                                finished := 1
+                            }
+                        }
+                        p := p + 2 + length
+                    }
+                }
+            }
+        }
+        free(tables)
+        free(have_table)
+        free(quant)
+        free(zz)
+        free(comp_id)
+        free(comp_h)
+        free(comp_v)
+        free(comp_q)
+        free(comp_dc)
+        free(comp_ac)
+        free(pred)
+        free(plane_width)
+        free(planes)
+        free(counts)
+        free(values)
+        if failed = 1 || finished = 0 { return none }
+        return result
+    end
+
+    fn decode(buffer: *bytes.Buffer): *canvas.Canvas
+    begin
+        return decode_scaled(buffer, 1)
+    end
+
+    // Entropy-coded data starting at `start`; fills component planes, then converts to RGB.
+    fn scan(buffer: *bytes.Buffer, start: int, tables: *[1600]int, quant: *[256]int, zz: *[64]int, width: int, height: int, components: int, comp_h: *[4]int, comp_v: *[4]int, comp_q: *[4]int, comp_dc: *[4]int, comp_ac: *[4]int, pred: *[4]int, plane_width: *[4]int, planes: *[4]*void, restart: int, reduce: int, n: int): *canvas.Canvas
+    begin
+        var max_h: int := 1
+        var max_v: int := 1
+        var c: int := 0
+        while c < components {
+            if (*comp_h)[c] > max_h { max_h := (*comp_h)[c] }
+            if (*comp_v)[c] > max_v { max_v := (*comp_v)[c] }
+            c := c + 1
+        }
+        var mcus_x: int := (width + 8 * max_h - 1) / (8 * max_h)
+        var mcus_y: int := (height + 8 * max_v - 1) / (8 * max_v)
+        var plane_height: *[4]int := alloc(32)
+        c := 0
+        while c < components {
+            (*plane_width)[c] := mcus_x * (*comp_h)[c] * n
+            (*plane_height)[c] := mcus_y * (*comp_v)[c] * n
+            (*planes)[c] := alloc((*plane_width)[c] * (*plane_height)[c] + 64)
+            (*pred)[c] := 0
+            c := c + 1
+        }
+        var r: *jpeg.Reader := alloc(64)
+        r.data := buffer.data
+        r.position := start
+        r.limit := bytes.len(buffer)
+        r.bit_buffer := 0
+        r.bit_count := 0
+        r.marker := 0
+        var t: *[64]flt := alloc(64 * 8)
+        basis(t, n)
+        var coef: *[64]int := alloc(64 * 8)
+        var tmp: *[64]flt := alloc(64 * 8)
+        var scale: flt := n / 8.0
+        var mcu: int := 0
+        var total_mcus: int := mcus_x * mcus_y
+        while mcu < total_mcus {
+            if restart > 0 && mcu > 0 && mcu % restart = 0 {
+                // find the RSTn marker and restart the bit reader behind it
+                r.bit_count := 0
+                r.bit_buffer := 0
+                var scanning: int := 1
+                while scanning = 1 && r.position + 1 < r.limit {
+                    if runtime.hw.read8(r.data + r.position) = 255 && runtime.hw.read8(r.data + r.position + 1) >= 208 && runtime.hw.read8(r.data + r.position + 1) <= 215 {
+                        r.position := r.position + 2
+                        scanning := 0
+                    }
+                    else { r.position := r.position + 1 }
+                }
+                r.marker := 0
+                c := 0
+                while c < components {
+                    (*pred)[c] := 0
+                    c := c + 1
+                }
+            }
+            var mx: int := mcu % mcus_x
+            var my: int := mcu / mcus_x
+            c := 0
+            while c < components {
+                var by: int := 0
+                while by < (*comp_v)[c] {
+                    var bx: int := 0
+                    while bx < (*comp_h)[c] {
+                        var k: int := 0
+                        while k < 64 {
+                            (*coef)[k] := 0
+                            k := k + 1
+                        }
+                        var q: int := (*comp_q)[c] * 64
+                        var symbol: int := decode_symbol(r, tables, (*comp_dc)[c])
+                        var diff: int := extend(get_bits(r, symbol), symbol)
+                        (*pred)[c] := (*pred)[c] + diff
+                        (*coef)[0] := (*pred)[c] * (*quant)[q]
+                        k := 1
+                        while k < 64 {
+                            var rs: int := decode_symbol(r, tables, 2 + (*comp_ac)[c])
+                            var s: int := rs & 15
+                            var run: int := rs >> 4
+                            if s = 0 {
+                                if run = 15 { k := k + 16 }
+                                else { k := 64 }
+                            }
+                            else {
+                                k := k + run
+                                if k < 64 {
+                                    (*coef)[(*zz)[k]] := extend(get_bits(r, s), s) * (*quant)[q + k]
+                                    k := k + 1
+                                }
+                            }
+                        }
+                        // scaled inverse DCT of the top-left n x n coefficients
+                        var plane: *void := (*planes)[c]
+                        var pw: int := (*plane_width)[c]
+                        var ox: int := (mx * (*comp_h)[c] + bx) * n
+                        var oy: int := (my * (*comp_v)[c] + by) * n
+                        if n = 1 {
+                            runtime.hw.write8(plane + oy * pw + ox, clamp255(flt.toint((*coef)[0] / 8.0 + 128.5)) )
+                        }
+                        else {
+                            var v: int := 0
+                            while v < n {
+                                var x: int := 0
+                                while x < n {
+                                    var sum: flt := 0.0
+                                    var u: int := 0
+                                    while u < n {
+                                        sum := sum + (*t)[x * 8 + u] * (*coef)[v * 8 + u]
+                                        u := u + 1
+                                    }
+                                    (*tmp)[v * 8 + x] := sum
+                                    x := x + 1
+                                }
+                                v := v + 1
+                            }
+                            var y: int := 0
+                            while y < n {
+                                var x: int := 0
+                                while x < n {
+                                    var sum: flt := 0.0
+                                    v := 0
+                                    while v < n {
+                                        sum := sum + (*t)[y * 8 + v] * (*tmp)[v * 8 + x]
+                                        v := v + 1
+                                    }
+                                    var value: int := flt.toint(sum * scale + 128.5)
+                                    runtime.hw.write8(plane + (oy + y) * pw + ox + x, clamp255(value))
+                                    x := x + 1
+                                }
+                                y := y + 1
+                            }
+                        }
+                        bx := bx + 1
+                    }
+                    by := by + 1
+                }
+                c := c + 1
+            }
+            mcu := mcu + 1
+        }
+        var out_w: int := (width + reduce - 1) / reduce
+        var out_h: int := (height + reduce - 1) / reduce
+        var cv: *canvas.Canvas := canvas.new(out_w, out_h)
+        var y: int := 0
+        while y < out_h {
+            var x: int := 0
+            while x < out_w {
+                var luma: int := runtime.hw.read8((*planes)[0] + (y * (*comp_v)[0] / max_v) * (*plane_width)[0] + x * (*comp_h)[0] / max_h)
+                if components = 1 { (*cv.pixels)[y * out_w + x] := (luma << 16) | (luma << 8) | luma }
+                else {
+                    var cb: int := runtime.hw.read8((*planes)[1] + (y * (*comp_v)[1] / max_v) * (*plane_width)[1] + x * (*comp_h)[1] / max_h) - 128
+                    var cr: int := runtime.hw.read8((*planes)[2] + (y * (*comp_v)[2] / max_v) * (*plane_width)[2] + x * (*comp_h)[2] / max_h) - 128
+                    var red: int := clamp255(luma + ((91881 * cr) >> 16))
+                    var green: int := clamp255(luma - ((22554 * cb + 46802 * cr) >> 16))
+                    var blue: int := clamp255(luma + ((116130 * cb) >> 16))
+                    (*cv.pixels)[y * out_w + x] := (red << 16) | (green << 8) | blue
+                }
+                x := x + 1
+            }
+            y := y + 1
+        }
+        c := 0
+        while c < components {
+            free((*planes)[c])
+            c := c + 1
+        }
+        free(plane_height)
+        free(r)
+        free(t)
+        free(coef)
+        free(tmp)
+        return cv
+    end
+end

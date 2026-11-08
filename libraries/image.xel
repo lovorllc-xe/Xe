@@ -2,6 +2,8 @@
 uses syscall
 uses bytes
 uses canvas
+uses png
+uses jpeg
 
 module image
 begin
@@ -33,11 +35,9 @@ begin
             var got: int := syscall.io.read(fd, chunk, 65536)
             if got <= 0 { reading := 0 }
             else {
-                var i: int := 0
-                while i < got {
-                    bytes.push(buffer, runtime.hw.read8(chunk + i))
-                    i := i + 1
-                }
+                bytes.reserve(buffer, buffer.size + got)
+                runtime.mem.copy(buffer.data + buffer.size, chunk, got)
+                buffer.size := buffer.size + got
             }
         }
         free(chunk)
@@ -322,15 +322,89 @@ begin
         return c
     end
 
+    // Decodes any supported file (PNG, baseline JPEG, BMP, PPM) held in memory. Null when unsupported.
+    fn decode(buffer: *bytes.Buffer, path: string): *canvas.Canvas
+    begin
+        var none: *canvas.Canvas
+        if png.is_png(buffer) = 1 { return png.decode(buffer) }
+        if jpeg.is_jpeg(buffer) = 1 { return jpeg.decode(buffer) }
+        if bytes.len(buffer) > 1 && bytes.get(buffer, 0) = 66 && bytes.get(buffer, 1) = 77 { return load_bmp(path) }
+        if bytes.len(buffer) > 1 && bytes.get(buffer, 0) = 80 && bytes.get(buffer, 1) = 54 { return load_ppm(path) }
+        return none
+    end
+
+    // Loads PNG, JPEG (baseline), BMP or PPM files. Returns a null pointer (@c = 0) for anything else.
     fn load(path: string): *canvas.Canvas
     begin
         var buffer: *bytes.Buffer := load_file(path)
         var none: *canvas.Canvas
         if @buffer = 0 { return none }
-        var first: int := bytes.get(buffer, 0)
+        var c: *canvas.Canvas := decode(buffer, path)
         bytes.release(buffer)
-        if first = 66 { return load_bmp(path) }
-        return load_ppm(path)
+        return c
+    end
+
+    // [width, height] of an image file without decoding it ([0, 0] when unknown). Works for PNG, JPEG, BMP, PPM.
+    fn size(path: string): [2]int
+    begin
+        var result: [2]int
+        result[0] := 0
+        result[1] := 0
+        var buffer: *bytes.Buffer := load_file(path)
+        if @buffer = 0 { return result }
+        if png.is_png(buffer) = 1 { result := png.size(buffer) }
+        if jpeg.is_jpeg(buffer) = 1 { result := jpeg.size(buffer) }
+        if bytes.len(buffer) > 26 && bytes.get(buffer, 0) = 66 && bytes.get(buffer, 1) = 77 {
+            result[0] := bytes.read_le_at(buffer, 18, 4)
+            result[1] := bytes.read_le_at(buffer, 22, 4)
+            if result[1] >= 2147483648 { result[1] := 4294967296 - result[1] }
+        }
+        bytes.release(buffer)
+        return result
+    end
+
+    // Loads an image already shrunk to fit inside max_w x max_h (never enlarged) and reports the original
+    // size in original[0] (width) and original[1] (height). JPEGs are decoded at reduced size, so previews of
+    // large photos are fast. Returns a null pointer for unsupported files (original is still filled if known).
+    fn load_fit(path: string, max_w: int, max_h: int, original: *[2]int): *canvas.Canvas
+    begin
+        var none: *canvas.Canvas
+        (*original)[0] := 0
+        (*original)[1] := 0
+        var buffer: *bytes.Buffer := load_file(path)
+        if @buffer = 0 { return none }
+        var c: *canvas.Canvas := none
+        if jpeg.is_jpeg(buffer) = 1 {
+            var dims: [2]int := jpeg.size(buffer)
+            (*original)[0] := dims[0]
+            (*original)[1] := dims[1]
+            var reduce: int := 1
+            while reduce < 8 && dims[0] / (reduce * 2) >= max_w && dims[1] / (reduce * 2) >= max_h { reduce := reduce * 2 }
+            c := jpeg.decode_scaled(buffer, reduce)
+        }
+        else {
+            c := decode(buffer, path)
+            if @c != 0 {
+                (*original)[0] := c.width
+                (*original)[1] := c.height
+            }
+        }
+        bytes.release(buffer)
+        if @c = 0 { return none }
+        if c.width > max_w || c.height > max_h {
+            var w: int := max_w
+            var h: int := c.height * max_w / c.width
+            if h > max_h {
+                h := max_h
+                w := c.width * max_h / c.height
+            }
+            if w < 1 { w := 1 }
+            if h < 1 { h := 1 }
+            var small: *canvas.Canvas := canvas.shrink(c, w, h)
+            canvas.release(c)
+            return small
+        }
+        return c
     end
 
     fn save(c: *canvas.Canvas, path: string): int

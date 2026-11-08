@@ -1,0 +1,228 @@
+// png: decode PNG files (all color types, bit depths 1-16, non-interlaced) into a canvas.
+// Transparency is composited over white. Returns a null pointer for interlaced or damaged files.
+uses bytes
+uses inflate
+uses canvas
+
+module png
+begin
+    fn paeth(a: int, b: int, c: int): int
+    begin
+        var p: int := a + b - c
+        var pa: int := p - a
+        var pb: int := p - b
+        var pc: int := p - c
+        if pa < 0 { pa := 0 - pa }
+        if pb < 0 { pb := 0 - pb }
+        if pc < 0 { pc := 0 - pc }
+        if pa <= pb && pa <= pc { return a }
+        if pb <= pc { return b }
+        return c
+    end
+
+    fn is_png(buffer: *bytes.Buffer): int
+    begin
+        if bytes.len(buffer) < 8 { return 0 }
+        if bytes.get(buffer, 0) = 137 && bytes.get(buffer, 1) = 80 && bytes.get(buffer, 2) = 78 && bytes.get(buffer, 3) = 71 { return 1 }
+        return 0
+    end
+
+    // Width and height from the header, or [0, 0].
+    fn size(buffer: *bytes.Buffer): [2]int
+    begin
+        var result: [2]int
+        result[0] := 0
+        result[1] := 0
+        if is_png(buffer) = 1 && bytes.len(buffer) >= 24 {
+            result[0] := bytes.read_be_at(buffer, 16, 4)
+            result[1] := bytes.read_be_at(buffer, 20, 4)
+        }
+        return result
+    end
+
+    fn chunk_is(buffer: *bytes.Buffer, at: int, a: int, b: int, c: int, d: int): int
+    begin
+        if bytes.get(buffer, at) = a && bytes.get(buffer, at + 1) = b && bytes.get(buffer, at + 2) = c && bytes.get(buffer, at + 3) = d { return 1 }
+        return 0
+    end
+
+    fn decode(buffer: *bytes.Buffer): *canvas.Canvas
+    begin
+        var none: *canvas.Canvas
+        if is_png(buffer) = 0 { return none }
+        var width: int := 0
+        var height: int := 0
+        var depth: int := 0
+        var color: int := 0
+        var interlace: int := 0
+        var palette: *void := alloc(1024)
+        var alpha: *void := alloc(512)
+        runtime.mem.set(palette, 0, 768)
+        var i: int := 0
+        while i < 256 {
+            runtime.hw.write8(alpha + i, 255)
+            i := i + 1
+        }
+        var idat: *bytes.Buffer := bytes.new()
+        var position: int := 8
+        var running: int := 1
+        while running = 1 && position + 12 <= bytes.len(buffer) {
+            var length: int := bytes.read_be_at(buffer, position, 4)
+            var data: int := position + 8
+            if data + length > bytes.len(buffer) { running := 0 }
+            else {
+                if chunk_is(buffer, position + 4, 73, 72, 68, 82) = 1 {
+                    width := bytes.read_be_at(buffer, data, 4)
+                    height := bytes.read_be_at(buffer, data + 4, 4)
+                    depth := bytes.get(buffer, data + 8)
+                    color := bytes.get(buffer, data + 9)
+                    interlace := bytes.get(buffer, data + 12)
+                }
+                if chunk_is(buffer, position + 4, 80, 76, 84, 69) = 1 {
+                    i := 0
+                    while i < length && i < 768 {
+                        runtime.hw.write8(palette + i, bytes.get(buffer, data + i))
+                        i := i + 1
+                    }
+                }
+                if chunk_is(buffer, position + 4, 116, 82, 78, 83) = 1 && color = 3 {
+                    i := 0
+                    while i < length && i < 256 {
+                        runtime.hw.write8(alpha + i, bytes.get(buffer, data + i))
+                        i := i + 1
+                    }
+                }
+                if chunk_is(buffer, position + 4, 73, 68, 65, 84) = 1 {
+                    i := 0
+                    while i < length {
+                        bytes.push(idat, bytes.get(buffer, data + i))
+                        i := i + 1
+                    }
+                }
+                if chunk_is(buffer, position + 4, 73, 69, 78, 68) = 1 { running := 0 }
+                position := data + length + 4
+            }
+        }
+        var channels: int := 1
+        if color = 2 { channels := 3 }
+        if color = 4 { channels := 2 }
+        if color = 6 { channels := 4 }
+        var supported: int := 1
+        if width <= 0 || height <= 0 || interlace != 0 || bytes.len(idat) < 3 { supported := 0 }
+        if depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16 { supported := 0 }
+        if color != 0 && color != 2 && color != 3 && color != 4 && color != 6 { supported := 0 }
+        if supported = 0 {
+            free(palette)
+            free(alpha)
+            bytes.release(idat)
+            return none
+        }
+        var raw: *bytes.Buffer := inflate.zlib(idat)
+        bytes.release(idat)
+        var bits_per_pixel: int := channels * depth
+        var row_bytes: int := (width * bits_per_pixel + 7) / 8
+        var step: int := (bits_per_pixel + 7) / 8
+        if @raw = 0 || bytes.len(raw) < (row_bytes + 1) * height {
+            free(palette)
+            free(alpha)
+            return none
+        }
+        var base: *void := raw.data
+        var stride: int := row_bytes + 1
+        // undo the per-row filters in place
+        var y: int := 0
+        while y < height {
+            var filter: int := runtime.hw.read8(base + y * stride)
+            var row: int := y * stride + 1
+            var above: int := row - stride
+            var x: int := 0
+            while x < row_bytes {
+                var a: int := 0
+                var b: int := 0
+                var c: int := 0
+                if x >= step { a := runtime.hw.read8(base + row + x - step) }
+                if y > 0 {
+                    b := runtime.hw.read8(base + above + x)
+                    if x >= step { c := runtime.hw.read8(base + above + x - step) }
+                }
+                var value: int := runtime.hw.read8(base + row + x)
+                if filter = 1 { value := value + a }
+                if filter = 2 { value := value + b }
+                if filter = 3 { value := value + (a + b) / 2 }
+                if filter = 4 { value := value + paeth(a, b, c) }
+                runtime.hw.write8(base + row + x, value & 255)
+                x := x + 1
+            }
+            y := y + 1
+        }
+        var cv: *canvas.Canvas := canvas.new(width, height)
+        var max_value: int := (1 << depth) - 1
+        y := 0
+        while y < height {
+            var row: int := y * stride + 1
+            var x: int := 0
+            while x < width {
+                var r: int := 0
+                var g: int := 0
+                var b: int := 0
+                var a: int := 255
+                if depth = 8 || depth = 16 {
+                    var unit: int := depth / 8
+                    var at: int := row + x * channels * unit
+                    if color = 0 {
+                        r := runtime.hw.read8(base + at)
+                        g := r
+                        b := r
+                    }
+                    if color = 4 {
+                        r := runtime.hw.read8(base + at)
+                        g := r
+                        b := r
+                        a := runtime.hw.read8(base + at + unit)
+                    }
+                    if color = 2 || color = 6 {
+                        r := runtime.hw.read8(base + at)
+                        g := runtime.hw.read8(base + at + unit)
+                        b := runtime.hw.read8(base + at + unit * 2)
+                        if color = 6 { a := runtime.hw.read8(base + at + unit * 3) }
+                    }
+                    if color = 3 {
+                        var index: int := runtime.hw.read8(base + at)
+                        r := runtime.hw.read8(palette + index * 3)
+                        g := runtime.hw.read8(palette + index * 3 + 1)
+                        b := runtime.hw.read8(palette + index * 3 + 2)
+                        a := runtime.hw.read8(alpha + index)
+                    }
+                }
+                else {
+                    var bit: int := x * depth
+                    var byte: int := runtime.hw.read8(base + row + bit / 8)
+                    var sample: int := (byte >> (8 - depth - bit % 8)) & max_value
+                    if color = 3 {
+                        r := runtime.hw.read8(palette + sample * 3)
+                        g := runtime.hw.read8(palette + sample * 3 + 1)
+                        b := runtime.hw.read8(palette + sample * 3 + 2)
+                        a := runtime.hw.read8(alpha + sample)
+                    }
+                    else {
+                        r := sample * 255 / max_value
+                        g := r
+                        b := r
+                    }
+                }
+                if a < 255 {
+                    r := (r * a + 255 * (255 - a)) / 255
+                    g := (g * a + 255 * (255 - a)) / 255
+                    b := (b * a + 255 * (255 - a)) / 255
+                }
+                (*cv.pixels)[y * width + x] := (r << 16) | (g << 8) | b
+                x := x + 1
+            }
+            y := y + 1
+        }
+        free(palette)
+        free(alpha)
+        bytes.release(raw)
+        return cv
+    end
+end

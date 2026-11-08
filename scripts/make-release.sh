@@ -14,7 +14,7 @@ mkdir -p "$stage/bin" "$stage/lib/xelang" "$stage/share/xe"
 install -m 0755 "$work/build/xe" "$stage/bin/xe"
 cp -r "$root/std" "$root/compiler" "$root/libraries" "$stage/lib/xelang/"
 rm -rf "$stage/lib/xelang/compiler/selfhosted-xe"
-cp -r "$root/logo" "$root/docs" "$root/examples" "$stage/share/xe/" 2>/dev/null || true
+cp -r "$root/logo" "$root/docs" "$root/examples" "$root/apps" "$stage/share/xe/" 2>/dev/null || true
 mkdir -p "$stage/share/xe/examples/shaders" && cp "$root"/tests/shaders/* "$stage/share/xe/examples/shaders/" 2>/dev/null || true
 cp "$root/README.md" "$root/README-INSTALL-LINUX.txt" "$stage/"
 cat > "$stage/install.sh" <<'SH'

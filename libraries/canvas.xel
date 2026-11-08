@@ -539,6 +539,46 @@ begin
         return result
     end
 
+    // Smooth (area-averaging) downscale into a new canvas of w x h; also fine for slight enlargements.
+    fn shrink(src: *canvas.Canvas, w: int, h: int): *canvas.Canvas
+    begin
+        var result: *canvas.Canvas := canvas.new(w, h)
+        var y: int := 0
+        while y < h {
+            var y0: int := y * src.height / h
+            var y1: int := (y + 1) * src.height / h
+            if y1 <= y0 { y1 := y0 + 1 }
+            var x: int := 0
+            while x < w {
+                var x0: int := x * src.width / w
+                var x1: int := (x + 1) * src.width / w
+                if x1 <= x0 { x1 := x0 + 1 }
+                var r: int := 0
+                var g: int := 0
+                var b: int := 0
+                var count: int := 0
+                var sy: int := y0
+                while sy < y1 {
+                    var row: int := sy * src.width
+                    var sx: int := x0
+                    while sx < x1 {
+                        var pixel: int := (*src.pixels)[row + sx]
+                        r := r + ((pixel >> 16) & 255)
+                        g := g + ((pixel >> 8) & 255)
+                        b := b + (pixel & 255)
+                        count := count + 1
+                        sx := sx + 1
+                    }
+                    sy := sy + 1
+                }
+                (*result.pixels)[y * w + x] := ((r / count) << 16) | ((g / count) << 8) | (b / count)
+                x := x + 1
+            }
+            y := y + 1
+        }
+        return result
+    end
+
     // Nearest-neighbour resize into a new canvas.
     fn scaled(src: *canvas.Canvas, w: int, h: int): *canvas.Canvas
     begin

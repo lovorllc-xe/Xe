@@ -1,6 +1,6 @@
 # Xe library index
 
-165 importable libraries. Add one with `uses name` at the top of a source file.
+167 importable libraries. Add one with `uses name` at the top of a source file.
 
 ## Containers
 
@@ -164,6 +164,8 @@
 |---|---|
 | `canvas` | a software pixel surface with 2D drawing - lines, rectangles, circles, triangles, |
 | `image` | load and save canvas pixels as PPM, BMP and PNG files (PNG is written uncompressed). |
+| `png` | decode PNG files (all color types, bit depths 1-16, non-interlaced) into a canvas. |
+| `jpeg` | decode baseline (sequential Huffman) JPEG files - grayscale or YCbCr with any chroma subsampling. |
 | `window` | open a window on Linux (X11 / XWayland), draw into its canvas, read the keyboard and mouse. |
 | `x11` | a pure-Xe X11 client. It speaks the X protocol over the display's Unix socket (no libX11/xcb): |
 | `gui` | an immediate-mode GUI toolkit. Widgets are plain function calls made every frame; |

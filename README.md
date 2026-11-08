@@ -42,12 +42,12 @@ end
 - **More intuitive pointers.** Record fields auto-dereference through pointers
   (`node.next`, not `(*node).next`); pointer locals live in registers;
   `*p`, `&x`, `@p` (address as an int, e.g. `@p = 0` for a null check).
-- **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG/BMP/PPM), `window` + `x11`
+- **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG, baseline JPEG, BMP, PPM), `window` + `x11`
   (windows, keyboard, mouse over the X11 protocol, no libX11), `gui` (immediate-mode widgets), `gfx3d` (software 3D:
   meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
   `vulkan` (instance/device/buffers/compute/graphics pipelines/depth/render targets), `vkscene` (GPU-lit 3D
   scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **165 libraries** covering containers, math, text, encodings, hashing and
+- **167 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -140,7 +140,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-165 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+167 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -223,6 +223,7 @@ XE=build/xe tests/run_tests.sh       # 15 programs, all must print "ok" / exit 0
 - `bootstrap/xe-seed.s.gz` — assembly seed; refresh with `scripts/update-seed.sh`.
 - `std/`, `libraries/` — the automatic `io`/`mem` modules and 155 `.xel` libraries.
 - `tests/` — integration programs and the runner.
+- `apps/` — real applications written in Xe (`apps/sorter`: the SentryAI image sorter GUI).
 - `benchmarks/` — kernels, generator, runner and GUI.
 - `logo/` — `png/` source logo and `ascii/xe.ans` colored ASCII art.
 - `install/`, `scripts/` — installers, bootstrap, seed and release tooling.

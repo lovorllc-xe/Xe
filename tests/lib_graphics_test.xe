@@ -40,6 +40,28 @@ begin
     var ppm: *canvas.Canvas := image.load("/tmp/xe_graphics_test.ppm")
     failed := failed + expect("bmp round trip", canvas.get(bmp, 8, 8) = canvas.rgb(200, 0, 0) && canvas.get(bmp, 40, 24) = canvas.rgb(0, 200, 0) && bmp.width = 64 && bmp.height = 48)
     failed := failed + expect("ppm round trip", canvas.get(ppm, 12, 38) = canvas.rgb(0, 0, 200) && ppm.width = 64)
+    // ---- decoders (PNG and baseline JPEG fixtures, found relative to the repository or the tests folder) ----
+    var png_image: *canvas.Canvas := image.load("tests/fixtures/gradient.png")
+    if @png_image = 0 { png_image := image.load("fixtures/gradient.png") }
+    var jpg_image: *canvas.Canvas := image.load("tests/fixtures/gradient.jpg")
+    if @jpg_image = 0 { jpg_image := image.load("fixtures/gradient.jpg") }
+    if @png_image != 0 {
+        failed := failed + expect("png size", png_image.width = 64 && png_image.height = 48)
+        failed := failed + expect("png pixel", canvas.get(png_image, 10, 20) = canvas.rgb(40, 100, 128))
+        failed := failed + expect("png own round trip", canvas.get(image.load("/tmp/xe_graphics_test.png"), 8, 8) = canvas.rgb(200, 0, 0))
+    }
+    if @jpg_image != 0 {
+        failed := failed + expect("jpeg size", jpg_image.width = 64 && jpg_image.height = 48)
+        var jpg_pixel: int := canvas.get(jpg_image, 10, 20)
+        var dr: int := canvas.red(jpg_pixel) - 40
+        var dg: int := canvas.green(jpg_pixel) - 100
+        var db: int := canvas.blue(jpg_pixel) - 128
+        failed := failed + expect("jpeg pixel close", dr >= -6 && dr <= 6 && dg >= -6 && dg <= 6 && db >= -6 && db <= 6)
+        var info: [2]int
+        var preview: *canvas.Canvas := image.load_fit("tests/fixtures/gradient.jpg", 32, 24, &info)
+        if @preview = 0 { preview := image.load_fit("fixtures/gradient.jpg", 32, 24, &info) }
+        failed := failed + expect("load_fit", @preview != 0 && info[0] = 64 && info[1] = 48 && preview.width <= 32 && preview.height <= 24)
+    }
     // ---- 3D ----
     var view: *canvas.Canvas := canvas.new(160, 120)
     var r: *gfx3d.Renderer := gfx3d.new(view)

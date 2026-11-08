@@ -1,4 +1,5 @@
 // dir: list, walk, create and remove directories.
+uses syscall
 uses strlist
 uses path
 uses stat
@@ -121,5 +122,38 @@ begin
             index := index + 1
         }
         return out
+    end
+
+    // Copies a file (contents only). Returns 1 on success, 0 on failure. An existing destination is overwritten.
+    fn copy_file(source: string, destination: string): int
+    begin
+        var input: int := syscall.io.open(source, 0, 0)
+        if input < 0 { return 0 }
+        var output: int := syscall.io.open(destination, 577, 420)
+        if output < 0 {
+            syscall.io.close(input)
+            return 0
+        }
+        var chunk: *void := alloc(262144)
+        var ok: int := 1
+        var reading: int := 1
+        while reading = 1 {
+            var got: int := syscall.io.read(input, chunk, 262144)
+            if got < 0 { ok := 0 }
+            if got <= 0 { reading := 0 }
+            else {
+                var done: int := 0
+                while done < got && ok = 1 {
+                    var wrote: int := syscall.io.write(output, chunk + done, got - done)
+                    if wrote <= 0 { ok := 0 }
+                    else { done := done + wrote }
+                }
+                if ok = 0 { reading := 0 }
+            }
+        }
+        free(chunk)
+        syscall.io.close(input)
+        syscall.io.close(output)
+        return ok
     end
 end
