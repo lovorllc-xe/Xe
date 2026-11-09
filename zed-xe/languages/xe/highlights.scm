@@ -27,12 +27,17 @@
   "return"
   "defer"
   "gc"
+  "global"
+  "enum"
+  "break"
+  "continue"
 ] @keyword.xe
 
 ; Types ------------------------------------------------------------------
 (primitive_type) @type.xe
 "record" @type.xe
 (type_identifier) @type.xe
+(enum_identifier) @constant.xe
 (array_type
   "[" @type.xe
   length: (array_length) @type.xe

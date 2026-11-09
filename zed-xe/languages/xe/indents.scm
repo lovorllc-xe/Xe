@@ -8,3 +8,4 @@
 (default_clause) @indent
 (parameter_list ")" @end) @indent
 (argument_list ")" @end) @indent
+(enum_declaration "end" @end) @indent

@@ -1,7 +1,8 @@
 /**
  * Tree-sitter grammar for the Xe programming language.
  *
- * Mirrors the lexer/parser in src/lexer.cpp and src/parser.cpp:
+ * Mirrors the lexer/parser in compiler/lexer.xe and compiler/parser.xe, plus the features lowered before parsing
+ * (compiler/desugar.xe: global/enum, compiler/generics.xe: generics):
  *  - newlines terminate statements (they are real tokens, not whitespace)
  *  - `;` is a line-continuation marker that swallows the following newline
  *  - function, module, record and switch bodies use `begin ... end`
@@ -37,6 +38,8 @@ module.exports = grammar({
   conflicts: ($) => [
     [$.if_statement],
     [$._statements],
+    [$.call_expression, $.binary_expression],
+    [$._expression, $.call_expression],
   ],
 
   rules: {
@@ -49,6 +52,8 @@ module.exports = grammar({
         $.function_declaration,
         $.record_declaration,
         $.type_alias,
+        $.global_declaration,
+        $.enum_declaration,
       ),
 
     // A newline token. Blank lines collapse into one token.
@@ -76,12 +81,50 @@ module.exports = grammar({
         'end',
       ),
 
-    _module_item: ($) => choice($.function_declaration, $.record_declaration, $.type_alias),
+    _module_item: ($) =>
+      choice(
+        $.function_declaration,
+        $.record_declaration,
+        $.type_alias,
+        $.global_declaration,
+        $.enum_declaration,
+      ),
+
+    // global counter: int := 0      global const LIMIT: int := 100
+    global_declaration: ($) =>
+      seq(
+        'global',
+        optional('const'),
+        field('name', $.identifier),
+        ':',
+        field('type', $._type),
+        optional(seq(':=', field('value', $._expression))),
+      ),
+
+    // enum Color begin red  green := 5  blue end
+    enum_declaration: ($) =>
+      seq(
+        'enum',
+        field('name', alias($.identifier, $.type_identifier)),
+        repeat($._nl),
+        'begin',
+        repeat(choice($._nl, $.enum_member)),
+        'end',
+      ),
+
+    enum_member: ($) =>
+      seq(field('name', alias($.identifier, $.enum_identifier)), optional(seq(':=', field('value', $.number)))),
+
+    // <T, U> after the name of a generic function or type
+    type_parameters: ($) => seq('<', commaSep1(alias($.identifier, $.type_identifier)), '>'),
+
+    type_arguments: ($) => seq('<', commaSep1($._type), '>'),
 
     function_declaration: ($) =>
       seq(
         'fn',
         field('name', $._declaration_name),
+        optional($.type_parameters),
         field('parameters', $.parameter_list),
         optional(seq(':', field('return_type', $._type))),
         repeat($._nl),
@@ -98,12 +141,19 @@ module.exports = grammar({
     function_body: ($) => seq('begin', optional($._statements), 'end'),
 
     type_alias: ($) =>
-      seq('type', field('name', $._type_declaration_name), ':', field('type', $._type)),
+      seq(
+        'type',
+        field('name', $._type_declaration_name),
+        optional($.type_parameters),
+        ':',
+        field('type', $._type),
+      ),
 
     record_declaration: ($) =>
       seq(
         'type',
         field('name', $._type_declaration_name),
+        optional($.type_parameters),
         ':',
         'record',
         repeat($._nl),
@@ -136,9 +186,12 @@ module.exports = grammar({
     array_length: (_) => /[0-9]+/,
 
     type_name: ($) =>
-      choice(
-        alias($.identifier, $.type_identifier),
-        seq(repeat1(seq($.identifier, '.')), alias($.identifier, $.type_identifier)),
+      seq(
+        choice(
+          alias($.identifier, $.type_identifier),
+          seq(repeat1(seq($.identifier, '.')), alias($.identifier, $.type_identifier)),
+        ),
+        optional($.type_arguments),
       ),
 
     // ---------------------------------------------------------------
@@ -162,6 +215,8 @@ module.exports = grammar({
       choice(
         $.var_declaration,
         $.return_statement,
+        $.break_statement,
+        $.continue_statement,
         $.defer_statement,
         $.if_statement,
         $.while_statement,
@@ -186,6 +241,10 @@ module.exports = grammar({
 
     return_statement: ($) => prec.right(seq('return', optional($._expression))),
 
+    break_statement: (_) => 'break',
+
+    continue_statement: (_) => 'continue',
+
     defer_statement: ($) => seq('defer', $._expression),
 
     if_statement: ($) =>
@@ -194,7 +253,14 @@ module.exports = grammar({
         field('condition', $._expression),
         repeat($._nl),
         field('consequence', $.block),
-        optional(seq(repeat($._nl), 'else', repeat($._nl), field('alternative', $.block))),
+        optional(
+          seq(
+            repeat($._nl),
+            'else',
+            repeat($._nl),
+            field('alternative', choice($.block, $.if_statement)),
+          ),
+        ),
       ),
 
     while_statement: ($) =>
@@ -266,6 +332,7 @@ module.exports = grammar({
         PREC.postfix,
         seq(
           field('function', choice($.identifier, $.member_expression)),
+          optional(field('type_arguments', $.type_arguments)),
           field('arguments', $.argument_list),
         ),
       ),
