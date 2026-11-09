@@ -524,6 +524,17 @@ begin
         return -1
     end
 
+    // kind 2 = a Win32 window (handle = HWND)
+    fn window_kind(n: *native.Window): int
+    begin
+        return 2
+    end
+
+    fn window_handle(n: *native.Window): int
+    begin
+        return n.hwnd
+    end
+
     fn close(n: *native.Window)
     begin
         (*n.args)[0] := n.hwnd

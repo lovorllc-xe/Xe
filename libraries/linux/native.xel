@@ -93,6 +93,20 @@ begin
         return -1
     end
 
+    // What a graphics API needs to draw into the window: kind 1 = an X11 window (handle = its window id), 0 = none
+    // (Wayland windows made by this library cannot be given to Vulkan; use X11/XWayland for those).
+    fn window_kind(n: *native.Window): int
+    begin
+        if n.backend = 2 { return 1 }
+        return 0
+    end
+
+    fn window_handle(n: *native.Window): int
+    begin
+        if n.backend = 2 { return n.x.window }
+        return 0
+    end
+
     fn close(n: *native.Window)
     begin
         if n.backend = 1 { wayland.close_display(n.w) }

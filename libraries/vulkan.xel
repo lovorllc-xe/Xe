@@ -1,24 +1,35 @@
-// vulkan: Vulkan bindings written in Xe. The program links dynamically against the system Vulkan loader
-// (the compiler does this automatically because of the xe-link line below) and calls it through `ffi`.
+// vulkan: Vulkan for Xe, on every platform and GPU. The Vulkan loader is opened at run time (libvulkan.so.1 on
+// Linux, vulkan-1.dll on Windows, libvulkan.1.dylib / MoltenVK on macOS; see vkloader), so programs build without
+// any Vulkan SDK and still run (vulkan.open returns null) on machines without Vulkan.
 //
-// This module covers the core of Vulkan: instance, physical-device queries, logical device and queue,
-// command pools/buffers, memory and buffers, shader modules, descriptor sets, compute pipelines and
-// queue submission. `vulkan.compute_*` runs a SPIR-V compute shader on the GPU:
+// Nothing is assumed about the GPU: the device, queue family, memory types, depth format, swapchain format and
+// present mode are all chosen from what the driver reports, so the same program runs on NVIDIA, AMD, Intel,
+// Apple (MoltenVK), mobile and software (lavapipe, SwiftShader) implementations.
 //
-//     var vk: *vulkan.Vulkan := vulkan.open("my app")
+//     var vk: *vulkan.Vulkan := vulkan.open("my app")     // null when there is no Vulkan
 //     writeln(vulkan.device_name(vk))
+//
+// Compute:
 //     var out: *vulkan.Buffer := vulkan.buffer_new(vk, 4 * 64 * 64)
 //     var job: *vulkan.Compute := vulkan.compute_new(vk, "shader.spv", 1, 8)
 //     vulkan.compute_bind(vk, job, 0, out)
 //     vulkan.compute_run(vk, job, 8, 8, 1, push_constants)     // then read out.data
 //
-// Compile shaders with `glslc shader.comp -o shader.spv`. Window-surface presentation (swapchains) is not
-// included: draw into a `canvas` / copy GPU results back and show them with `window`.
-// Direct calls to any other Vulkan entry point are possible with vulkan.call(...) / vulkan.proc(...).
+// Graphics: render into a Target, which is either an offscreen image (target_new, read back with read_pixels)
+// or a window swapchain (vkwindow.target, which uses target_swapchain on platforms with a Vulkan surface):
+//     vulkan.frame_begin(vk, target, 0.1, 0.1, 0.15)
+//     vulkan.frame_draw(vk, pipe, vertices, 3, push)
+//     vulkan.frame_end(vk, target)
+// Pipelines can use push constants, uniform buffers and textures (pipeline_desc / pipeline_create, bindings_new).
+//
+// Compile shaders with `glslc shader.vert -o shader.vert.spv`. Any other Vulkan function can be called with
+// vulkan.call / vulkan.call8 / vulkan.call10 (cached function lookup) or vulkan.proc.
+//
+// Environment: XE_VK_DEVICE=<index or part of the name> picks the GPU, XE_VK_VALIDATION=1 enables the Khronos
+// validation layer when it is installed, XE_VULKAN_LIBRARY=<path> uses a specific loader.
 uses ffi
 uses syscall
-
-// xe-link: libvulkan.so.1
+uses vkloader
 
 module vulkan
 begin
@@ -37,6 +48,21 @@ begin
         discrete: int
         memory: *void
         last_error: int
+        single: int
+        fence: int
+        device_type: int
+        vendor_id: int
+        depth_format: int
+        swapchain_ext: int
+        instance_extensions: string
+        validation: int
+        cache_names: *[512]string
+        cache_values: *[512]int
+        device_list: string
+        rgba_features: int
+        graphics: int
+        library: int
+        portability: int
     end
 
     type Buffer: record
@@ -47,7 +73,7 @@ begin
         data: *void
     end
 
-    // An offscreen color (+ depth) render target and what is needed to draw into it.
+    // A render target: an offscreen color (+ depth) image (kind 0) or a window swapchain (kind 1).
     type Target: record
     begin
         width: int
@@ -62,6 +88,27 @@ begin
         framebuffer: int
         readback: *vulkan.Buffer
         has_depth: int
+        kind: int
+        color_format: int
+        depth_format: int
+        surface: int
+        swapchain: int
+        image_count: int
+        images: *[16]int
+        views: *[16]int
+        framebuffers: *[16]int
+        rendered: *[16]int
+        acquired: int
+        frame_fence: int
+        frame_command: int
+        image_index: int
+        recording: int
+        stale: int
+        vsync: int
+        present_mode: int
+        color_space: int
+        wanted_width: int
+        wanted_height: int
     end
 
     type Pipeline: record
@@ -71,6 +118,48 @@ begin
         vertex_shader: int
         fragment_shader: int
         push_bytes: int
+        set_layout: int
+        pool: int
+        uniforms: int
+        textures: int
+    end
+
+    // How to build a graphics pipeline (see pipeline_desc for the defaults).
+    type PipelineDesc: record
+    begin
+        vertex_code: *void
+        vertex_size: int
+        fragment_code: *void
+        fragment_size: int
+        attributes: int
+        floats: *[8]int
+        push_bytes: int
+        cull: int
+        topology: int
+        uniforms: int
+        textures: int
+        blend: int
+        depth_test: int
+        depth_write: int
+    end
+
+    // The uniform buffers and textures one draw uses (a descriptor set of a pipeline).
+    type Bindings: record
+    begin
+        set: int
+        pipeline: *vulkan.Pipeline
+    end
+
+    type Texture: record
+    begin
+        width: int
+        height: int
+        image: int
+        memory: int
+        view: int
+        sampler: int
+        levels: int
+        layout: int
     end
 
     type Compute: record
@@ -85,38 +174,152 @@ begin
         push_bytes: int
     end
 
-    fn loader_address(): int
+    // ======================================================================== loading and calling
+
+    fn loader_set(address: int)
     begin
         asm {
-            mov rax, qword ptr [rip+vkGetInstanceProcAddr@GOTPCREL]
+            mov qword ptr [rip+.LxeVulkanLoader], rdi
+            leave
+            ret
+            .data
+            .balign 8
+        .LxeVulkanLoader:
+            .quad 0
+            .text
+        }
+    end
+
+    fn loader_get(): int
+    begin
+        asm {
+            mov rax, qword ptr [rip+.LxeVulkanLoader]
             leave
             ret
         }
         return 0
     end
 
-    // Address of a Vulkan function (instance may be 0 for the few global ones).
+    // Opens the Vulkan loader library and finds vkGetInstanceProcAddr; returns its address or 0.
+    fn load_loader(): int
+    begin
+        var known: int := loader_get()
+        if known != 0 { return known }
+        var names: string := vkloader.library_names()
+        var chosen: string := env.get("XE_VULKAN_LIBRARY")
+        if str.length(chosen) > 0 { names := chosen + ";" + names }
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(names) {
+            if i = str.length(names) || str.char(names, i) = 59 {
+                if i > start {
+                    var library: int := ffi.library(str.slice(names, start, i))
+                    if library != 0 {
+                        var entry_point: int := ffi.symbol(library, "vkGetInstanceProcAddr")
+                        if entry_point != 0 {
+                            loader_set(entry_point)
+                            return entry_point
+                        }
+                    }
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return 0
+    end
+
+    // 1 when a Vulkan loader can be found on this machine.
+    fn available(): int
+    begin
+        if load_loader() != 0 { return 1 }
+        return 0
+    end
+
+    // Address of a Vulkan function (instance may be 0 for the few global ones), or 0.
     fn proc(instance: int, name: string): int
     begin
-        return ffi.call2(loader_address(), instance, ffi.cstr(name))
+        var loader: int := load_loader()
+        if loader = 0 { return 0 }
+        return ffi.call2(loader, instance, ffi.cstr(name))
+    end
+
+    // Address of a Vulkan function for this instance, looked up once and then cached.
+    fn address(vk: *vulkan.Vulkan, name: string): int
+    begin
+        var hash: int := 0
+        var i: int := 0
+        while i < str.length(name) {
+            hash := (hash * 31 + str.char(name, i)) & 1048575
+            i := i + 1
+        }
+        var slot: int := hash & 511
+        var probes: int := 0
+        while probes < 512 {
+            var value: int := (*vk.cache_values)[slot]
+            if value = 0 {
+                var found: int := proc(vk.instance, name)
+                if found != 0 {
+                    (*vk.cache_names)[slot] := name
+                    (*vk.cache_values)[slot] := found
+                }
+                return found
+            }
+            if (*vk.cache_names)[slot] = name { return value }
+            slot := (slot + 1) & 511
+            probes := probes + 1
+        }
+        return proc(vk.instance, name)
+    end
+
+    fn forget_addresses(vk: *vulkan.Vulkan)
+    begin
+        var i: int := 0
+        while i < 512 {
+            (*vk.cache_values)[i] := 0
+            i := i + 1
+        }
     end
 
     // Call the Vulkan function `name` with up to six arguments; returns its (32-bit signed) result.
     fn call(vk: *vulkan.Vulkan, name: string, a: int, b: int, c: int, d: int, e: int, f: int): int
     begin
-        var address: int := proc(vk.instance, name)
-        if address = 0 {
+        var target: int := address(vk, name)
+        if target = 0 {
             vk.last_error := -100
             return -100
         }
-        var result: int := ffi.int32(ffi.call6(address, a, b, c, d, e, f))
+        var result: int := ffi.int32(ffi.call6(target, a, b, c, d, e, f))
         vk.last_error := result
         return result
+    end
+
+    fn call8(vk: *vulkan.Vulkan, name: string, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int): int
+    begin
+        var target: int := address(vk, name)
+        if target = 0 {
+            vk.last_error := -100
+            return -100
+        }
+        return ffi.int32(ffi.call8(target, a, b, c, d, e, f, g, h))
+    end
+
+    fn call10(vk: *vulkan.Vulkan, name: string, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int, j: int): int
+    begin
+        var target: int := address(vk, name)
+        if target = 0 {
+            vk.last_error := -100
+            return -100
+        }
+        return ffi.int32(ffi.call10(target, a, b, c, d, e, f, g, h, i, j))
     end
 
     fn describe(result: int): string
     begin
         if result = 0 { return "VK_SUCCESS" }
+        if result = 1 { return "VK_NOT_READY" }
+        if result = 2 { return "VK_TIMEOUT" }
+        if result = 5 { return "VK_INCOMPLETE" }
         if result = -1 { return "VK_ERROR_OUT_OF_HOST_MEMORY" }
         if result = -2 { return "VK_ERROR_OUT_OF_DEVICE_MEMORY" }
         if result = -3 { return "VK_ERROR_INITIALIZATION_FAILED" }
@@ -124,28 +327,176 @@ begin
         if result = -5 { return "VK_ERROR_MEMORY_MAP_FAILED" }
         if result = -6 { return "VK_ERROR_LAYER_NOT_PRESENT" }
         if result = -7 { return "VK_ERROR_EXTENSION_NOT_PRESENT" }
+        if result = -8 { return "VK_ERROR_FEATURE_NOT_PRESENT" }
         if result = -9 { return "VK_ERROR_INCOMPATIBLE_DRIVER" }
+        if result = -10 { return "VK_ERROR_TOO_MANY_OBJECTS" }
+        if result = -11 { return "VK_ERROR_FORMAT_NOT_SUPPORTED" }
+        if result = -12 { return "VK_ERROR_FRAGMENTED_POOL" }
+        if result = -1000069000 { return "VK_ERROR_OUT_OF_POOL_MEMORY" }
+        if result = -1000000000 { return "VK_ERROR_SURFACE_LOST_KHR" }
+        if result = -1000000001 { return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR" }
+        if result = 1000001003 { return "VK_SUBOPTIMAL_KHR" }
+        if result = -1000001004 { return "VK_ERROR_OUT_OF_DATE_KHR" }
         if result = -100 { return "function not found" }
         return "Vulkan error " + str.number(result)
     end
 
-    // Creates an instance, picks a GPU (a discrete one when there is one) and a queue family that supports
-    // compute, and creates a logical device. Returns a null pointer (@vk = 0) when Vulkan is not usable.
+    // ======================================================================== instance and device
+
+    fn has_name(list: string, name: string): int
+    begin
+        if str.find(list, ";" + name + ";") >= 0 { return 1 }
+        return 0
+    end
+
+    // ";name;name;..." of the extensions (or layers) a Vulkan enumeration call reports. entry_size is the size
+    // of one record, which starts with the 256-byte name.
+    fn names_of(data: *void, count: int, entry_size: int): string
+    begin
+        var list: string := str.builder(";")
+        var i: int := 0
+        while i < count {
+            list := str.append(list, ffi.string_at(data, i * entry_size, 256) + ";")
+            i := i + 1
+        }
+        return list
+    end
+
+    // A C array of pointers to the given names (kept alive by `keep`).
+    fn name_array(names: *[32]string, count: int): *void
+    begin
+        var array: *void := ffi.block(count * 8 + 8)
+        var i: int := 0
+        while i < count {
+            ffi.put64(array, i * 8, ffi.cstr((*names)[i]))
+            i := i + 1
+        }
+        return array
+    end
+
+    fn lower_text(text: string): string
+    begin
+        var result: string := str.builder("")
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c >= 65 && c <= 90 { c := c + 32 }
+            result := str.append(result, str.fromchar(c))
+            i := i + 1
+        }
+        return result
+    end
+
+    fn number_or(text: string, fallback: int): int
+    begin
+        if str.length(text) = 0 { return fallback }
+        var value: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c < 48 || c > 57 { return fallback }
+            value := value * 10 + c - 48
+            i := i + 1
+        }
+        return value
+    end
+
+    fn type_name(kind_id: int): string
+    begin
+        if kind_id = 1 { return "integrated GPU" }
+        if kind_id = 2 { return "discrete GPU" }
+        if kind_id = 3 { return "virtual GPU" }
+        if kind_id = 4 { return "CPU (software)" }
+        return "other"
+    end
+
+    fn vendor_name(id: int): string
+    begin
+        if id = 4098 { return "AMD" }
+        if id = 4318 { return "NVIDIA" }
+        if id = 32902 { return "Intel" }
+        if id = 5045 { return "ARM" }
+        if id = 20803 { return "Qualcomm" }
+        if id = 4203 { return "Apple" }
+        if id = 5348 { return "Imagination" }
+        if id = 65541 { return "Mesa (software)" }
+        if id = 6880 { return "Google (SwiftShader)" }
+        if id = 4139 { return "Microsoft" }
+        return "vendor " + str.number(id)
+    end
+
+    // Creates an instance, picks a GPU and a queue family, and creates a logical device. Returns a null pointer
+    // (@vk = 0) when Vulkan is not usable on this machine. GPU choice: XE_VK_DEVICE if set, otherwise a discrete
+    // GPU, then an integrated one, then virtual, then a software renderer.
     fn open(app_name: string): *vulkan.Vulkan
     begin
         var none: *vulkan.Vulkan
-        var vk: *vulkan.Vulkan := alloc(128)
-        vk.instance := 0
-        vk.physical := 0
-        vk.device := 0
-        vk.queue := 0
-        vk.family := 0
-        vk.pool := 0
-        vk.command := 0
+        if load_loader() = 0 { return none }
+        var vk: *vulkan.Vulkan := alloc(512)
+        runtime.mem.set(vk, 0, 512)
         vk.name := ""
-        vk.discrete := 0
-        vk.last_error := 0
-        // instance
+        vk.instance_extensions := ";"
+        vk.device_list := ""
+        vk.get_proc := loader_get()
+        vk.cache_names := alloc(512 * 8)
+        vk.cache_values := alloc(512 * 8)
+        var c: int := 0
+        while c < 512 {
+            (*vk.cache_names)[c] := ""
+            (*vk.cache_values)[c] := 0
+            c := c + 1
+        }
+        var counts: *void := ffi.block(16)
+        // ---- instance extensions: every window-system surface the loader offers, plus portability (MoltenVK)
+        var enumerate_extensions: int := proc(0, "vkEnumerateInstanceExtensionProperties")
+        var available_extensions: string := ";"
+        if enumerate_extensions != 0 {
+            ffi.call3(enumerate_extensions, 0, @counts, 0)
+            var extension_count: int := ffi.get32(counts, 0)
+            var extension_data: *void := ffi.block(extension_count * 260 + 260)
+            ffi.call3(enumerate_extensions, 0, @counts, @extension_data)
+            available_extensions := names_of(extension_data, ffi.get32(counts, 0), 260)
+            free(extension_data)
+        }
+        var wanted: *[32]string := alloc(32 * 8)
+        var wanted_count: int := 0
+        var candidates: *[32]string := alloc(32 * 8)
+        (*candidates)[0] := "VK_KHR_surface"
+        (*candidates)[1] := "VK_KHR_xcb_surface"
+        (*candidates)[2] := "VK_KHR_xlib_surface"
+        (*candidates)[3] := "VK_KHR_wayland_surface"
+        (*candidates)[4] := "VK_KHR_win32_surface"
+        (*candidates)[5] := "VK_EXT_metal_surface"
+        (*candidates)[6] := "VK_KHR_portability_enumeration"
+        (*candidates)[7] := "VK_KHR_get_physical_device_properties2"
+        var k: int := 0
+        while k < 8 {
+            if has_name(available_extensions, (*candidates)[k]) = 1 {
+                (*wanted)[wanted_count] := (*candidates)[k]
+                wanted_count := wanted_count + 1
+                vk.instance_extensions := vk.instance_extensions + (*candidates)[k] + ";"
+            }
+            k := k + 1
+        }
+        // ---- validation layer, on request
+        var layers: *[32]string := alloc(32 * 8)
+        var layer_count: int := 0
+        if env.get("XE_VK_VALIDATION") = "1" {
+            var enumerate_layers: int := proc(0, "vkEnumerateInstanceLayerProperties")
+            if enumerate_layers != 0 {
+                ffi.call2(enumerate_layers, @counts, 0)
+                var available_layer_count: int := ffi.get32(counts, 0)
+                var layer_data: *void := ffi.block(available_layer_count * 520 + 520)
+                ffi.call2(enumerate_layers, @counts, @layer_data)
+                if has_name(names_of(layer_data, ffi.get32(counts, 0), 520), "VK_LAYER_KHRONOS_validation") = 1 {
+                    (*layers)[0] := "VK_LAYER_KHRONOS_validation"
+                    layer_count := 1
+                    vk.validation := 1
+                }
+                free(layer_data)
+            }
+        }
+        // ---- instance
         var app: *void := ffi.block(48)
         ffi.put32(app, 0, 0)
         ffi.put64(app, 16, ffi.cstr(app_name))
@@ -153,9 +504,19 @@ begin
         ffi.put64(app, 32, ffi.cstr("xe"))
         ffi.put32(app, 40, 1)
         ffi.put32(app, 44, 4194304)
+        var extension_names: *void := name_array(wanted, wanted_count)
+        var layer_names: *void := name_array(layers, layer_count)
         var info: *void := ffi.block(64)
         ffi.put32(info, 0, 1)
+        if has_name(vk.instance_extensions, "VK_KHR_portability_enumeration") = 1 {
+            ffi.put32(info, 16, 1)
+            vk.portability := 1
+        }
         ffi.put64(info, 24, @app)
+        ffi.put32(info, 32, layer_count)
+        ffi.put64(info, 40, @layer_names)
+        ffi.put32(info, 48, wanted_count)
+        ffi.put64(info, 56, @extension_names)
         var out: *void := ffi.block(64)
         var create: int := proc(0, "vkCreateInstance")
         if create = 0 {
@@ -168,55 +529,108 @@ begin
             return none
         }
         vk.instance := ffi.get64(out, 0)
-        // physical devices
-        var counts: *void := ffi.block(16)
+        // ---- physical devices
+        ffi.put32(counts, 0, 0)
         call(vk, "vkEnumeratePhysicalDevices", vk.instance, @counts, 0, 0, 0, 0)
         var count: int := ffi.get32(counts, 0)
         if count = 0 {
+            call(vk, "vkDestroyInstance", vk.instance, 0, 0, 0, 0, 0)
             free(vk)
             return none
         }
-        if count > 8 { count := 8 }
+        if count > 16 { count := 16 }
         ffi.put32(counts, 0, count)
-        var devices: *void := ffi.block(8 * 8)
-        call(vk, "vkEnumeratePhysicalDevices", vk.instance, @counts, @devices, 0, 0, 0)
+        var device_handles: *void := ffi.block(16 * 8)
+        call(vk, "vkEnumeratePhysicalDevices", vk.instance, @counts, @device_handles, 0, 0, 0)
+        count := ffi.get32(counts, 0)
         var properties: *void := ffi.block(1024)
+        var families: *void := ffi.block(32 * 24)
+        var chosen: string := env.get("XE_VK_DEVICE")
+        var chosen_index: int := number_or(chosen, -1)
         var best: int := -1
+        var best_score: int := -1
         var i: int := 0
         while i < count {
-            var handle: int := ffi.get64(devices, i * 8)
-            ffi.call2(proc(vk.instance, "vkGetPhysicalDeviceProperties"), handle, @properties)
-            if best < 0 || ffi.get32(properties, 16) = 2 {
-                if best < 0 || vk.discrete = 0 {
-                    best := i
-                    vk.physical := handle
-                    vk.api_version := ffi.get32(properties, 0)
-                    vk.name := ffi.string_at(properties, 20, 256)
-                    vk.discrete := 0
-                    if ffi.get32(properties, 16) = 2 { vk.discrete := 1 }
+            var handle: int := ffi.get64(device_handles, i * 8)
+            ffi.call2(address(vk, "vkGetPhysicalDeviceProperties"), handle, @properties)
+            var dtype: int := ffi.get32(properties, 16)
+            var name: string := ffi.string_at(properties, 20, 256)
+            vk.device_list := vk.device_list + str.number(i) + ": " + name + " (" + type_name(dtype) + ")\n"
+            ffi.put32(counts, 0, 32)
+            ffi.call3(address(vk, "vkGetPhysicalDeviceQueueFamilyProperties"), handle, @counts, @families)
+            var family_count: int := ffi.get32(counts, 0)
+            var graphics_family: int := -1
+            var compute_family: int := -1
+            var f: int := 0
+            while f < family_count {
+                var flags: int := ffi.get32(families, f * 24)
+                if graphics_family < 0 && (flags & 3) = 3 { graphics_family := f }
+                if compute_family < 0 && (flags & 2) = 2 { compute_family := f }
+                f := f + 1
+            }
+            var score: int := -1
+            if compute_family >= 0 {
+                score := 500
+                if dtype = 2 { score := 4000 }
+                if dtype = 1 { score := 3000 }
+                if dtype = 3 { score := 2000 }
+                if dtype = 4 { score := 1000 }
+                if graphics_family >= 0 { score := score + 100 }
+            }
+            if score >= 0 && str.length(chosen) > 0 {
+                if chosen_index = i { score := 100000 }
+                if chosen_index < 0 && str.find(lower_text(name), lower_text(chosen)) >= 0 { score := 100000 }
+            }
+            if score > best_score {
+                best_score := score
+                best := i
+                vk.physical := handle
+                vk.api_version := ffi.get32(properties, 0)
+                vk.vendor_id := ffi.get32(properties, 8)
+                vk.device_type := dtype
+                vk.name := name
+                vk.discrete := 0
+                if dtype = 2 { vk.discrete := 1 }
+                vk.family := compute_family
+                vk.graphics := 0
+                if graphics_family >= 0 {
+                    vk.family := graphics_family
+                    vk.graphics := 1
                 }
             }
             i := i + 1
         }
-        // queue family with compute
-        ffi.put32(counts, 0, 16)
-        var families: *void := ffi.block(16 * 24)
-        ffi.call3(proc(vk.instance, "vkGetPhysicalDeviceQueueFamilyProperties"), vk.physical, @counts, @families)
-        var family_count: int := ffi.get32(counts, 0)
-        vk.family := -1
-        i := 0
-        while i < family_count {
-            if vk.family < 0 && (ffi.get32(families, i * 24) & 2) != 0 { vk.family := i }
-            i := i + 1
-        }
-        if vk.family < 0 {
+        if best < 0 {
+            call(vk, "vkDestroyInstance", vk.instance, 0, 0, 0, 0, 0)
             free(vk)
             return none
         }
-        // memory properties
+        // ---- memory and format properties
         vk.memory := ffi.block(600)
-        ffi.call2(proc(vk.instance, "vkGetPhysicalDeviceMemoryProperties"), vk.physical, @vk.memory)
-        // logical device
+        ffi.call2(address(vk, "vkGetPhysicalDeviceMemoryProperties"), vk.physical, @vk.memory)
+        vk.depth_format := choose_depth_format(vk)
+        vk.rgba_features := format_features(vk, 37)
+        // ---- device extensions: swapchain when present; portability_subset must be enabled when offered
+        var device_extensions: string := ";"
+        ffi.put32(counts, 0, 0)
+        call(vk, "vkEnumerateDeviceExtensionProperties", vk.physical, 0, @counts, 0, 0, 0)
+        var device_extension_count: int := ffi.get32(counts, 0)
+        var device_extension_data: *void := ffi.block(device_extension_count * 260 + 260)
+        call(vk, "vkEnumerateDeviceExtensionProperties", vk.physical, 0, @counts, @device_extension_data, 0, 0)
+        device_extensions := names_of(device_extension_data, ffi.get32(counts, 0), 260)
+        var enabled: *[32]string := alloc(32 * 8)
+        var enabled_count: int := 0
+        if has_name(device_extensions, "VK_KHR_swapchain") = 1 && has_name(vk.instance_extensions, "VK_KHR_surface") = 1 {
+            (*enabled)[enabled_count] := "VK_KHR_swapchain"
+            enabled_count := enabled_count + 1
+            vk.swapchain_ext := 1
+        }
+        if has_name(device_extensions, "VK_KHR_portability_subset") = 1 {
+            (*enabled)[enabled_count] := "VK_KHR_portability_subset"
+            enabled_count := enabled_count + 1
+        }
+        var enabled_names: *void := name_array(enabled, enabled_count)
+        // ---- logical device with one queue
         var priority: *void := ffi.block(8)
         runtime.hw.write32(priority, 1065353216)
         var queue_info: *void := ffi.block(40)
@@ -228,9 +642,14 @@ begin
         ffi.put32(device_info, 0, 3)
         ffi.put32(device_info, 20, 1)
         ffi.put64(device_info, 24, @queue_info)
+        ffi.put32(device_info, 32, layer_count)
+        ffi.put64(device_info, 40, @layer_names)
+        ffi.put32(device_info, 48, enabled_count)
+        ffi.put64(device_info, 56, @enabled_names)
         var device_out: *void := ffi.block(16)
         result := call(vk, "vkCreateDevice", vk.physical, @device_info, 0, @device_out, 0, 0)
         if result != 0 {
+            call(vk, "vkDestroyInstance", vk.instance, 0, 0, 0, 0, 0)
             free(vk)
             return none
         }
@@ -238,7 +657,7 @@ begin
         var queue_out: *void := ffi.block(16)
         call(vk, "vkGetDeviceQueue", vk.device, vk.family, 0, @queue_out, 0, 0)
         vk.queue := ffi.get64(queue_out, 0)
-        // command pool + one reusable command buffer
+        // ---- command pool, a one-shot command buffer and its fence
         var pool_info: *void := ffi.block(24)
         ffi.put32(pool_info, 0, 39)
         ffi.put32(pool_info, 16, 2)
@@ -246,19 +665,14 @@ begin
         var pool_out: *void := ffi.block(16)
         call(vk, "vkCreateCommandPool", vk.device, @pool_info, 0, @pool_out, 0, 0)
         vk.pool := ffi.get64(pool_out, 0)
-        var alloc_info: *void := ffi.block(32)
-        ffi.put32(alloc_info, 0, 40)
-        ffi.put64(alloc_info, 16, vk.pool)
-        ffi.put32(alloc_info, 24, 0)
-        ffi.put32(alloc_info, 28, 1)
-        var command_out: *void := ffi.block(16)
-        call(vk, "vkAllocateCommandBuffers", vk.device, @alloc_info, @command_out, 0, 0, 0)
-        vk.command := ffi.get64(command_out, 0)
+        vk.single := new_command_buffer(vk)
+        vk.command := vk.single
+        vk.fence := new_fence(vk, 0)
         free(app)
         free(info)
         free(out)
         free(counts)
-        free(devices)
+        free(device_handles)
         free(properties)
         free(families)
         free(priority)
@@ -268,18 +682,23 @@ begin
         free(queue_out)
         free(pool_info)
         free(pool_out)
-        free(alloc_info)
-        free(command_out)
+        free(extension_names)
+        free(layer_names)
+        free(enabled_names)
+        free(device_extension_data)
         return vk
     end
 
     fn close(vk: *vulkan.Vulkan)
     begin
         call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+        call(vk, "vkDestroyFence", vk.device, vk.fence, 0, 0, 0, 0)
         call(vk, "vkDestroyCommandPool", vk.device, vk.pool, 0, 0, 0, 0)
         call(vk, "vkDestroyDevice", vk.device, 0, 0, 0, 0, 0)
         call(vk, "vkDestroyInstance", vk.instance, 0, 0, 0, 0, 0)
         free(vk.memory)
+        free(vk.cache_names)
+        free(vk.cache_values)
         free(vk)
     end
 
@@ -293,12 +712,56 @@ begin
         return vk.discrete
     end
 
+    // "discrete GPU", "integrated GPU", "virtual GPU", "CPU (software)" or "other".
+    fn device_type(vk: *vulkan.Vulkan): string
+    begin
+        return type_name(vk.device_type)
+    end
+
+    // "NVIDIA", "AMD", "Intel", "Apple", ...
+    fn vendor(vk: *vulkan.Vulkan): string
+    begin
+        return vendor_name(vk.vendor_id)
+    end
+
+    // Every Vulkan device on the machine, one per line ("0: name (type)"); XE_VK_DEVICE takes the number.
+    fn devices(vk: *vulkan.Vulkan): string
+    begin
+        return vk.device_list
+    end
+
+    // 1 when windows can be presented to (VK_KHR_swapchain is available).
+    fn can_present(vk: *vulkan.Vulkan): int
+    begin
+        return vk.swapchain_ext
+    end
+
+    // 1 when the chosen queue can draw (graphics); compute-only devices return 0.
+    fn has_graphics(vk: *vulkan.Vulkan): int
+    begin
+        return vk.graphics
+    end
+
+    // 1 when an instance extension is enabled (for example "VK_KHR_xcb_surface").
+    fn instance_extension(vk: *vulkan.Vulkan, name: string): int
+    begin
+        return has_name(vk.instance_extensions, name)
+    end
+
     // "major.minor.patch" of the Vulkan version the GPU supports.
     fn api_version(vk: *vulkan.Vulkan): string
     begin
         return str.number(vk.api_version >> 22) + "." + str.number((vk.api_version >> 12) & 1023) + "." + str.number(vk.api_version & 4095)
     end
 
+    fn wait_idle(vk: *vulkan.Vulkan)
+    begin
+        call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+    end
+
+    // ======================================================================== memory, formats, sync objects
+
+    // Index of a memory type allowed by type_bits that has all `wanted` property bits, or -1.
     fn memory_type(vk: *vulkan.Vulkan, type_bits: int, wanted: int): int
     begin
         var count: int := ffi.get32(vk.memory, 0)
@@ -310,21 +773,214 @@ begin
         return -1
     end
 
-    // A host-visible, host-coherent storage buffer of `size` bytes. `.data` points at its mapped memory.
+    // Like memory_type, trying `preferred` first and then `required`.
+    fn memory_type_prefer(vk: *vulkan.Vulkan, type_bits: int, preferred: int, required: int): int
+    begin
+        var index: int := memory_type(vk, type_bits, preferred)
+        if index < 0 { index := memory_type(vk, type_bits, required) }
+        return index
+    end
+
+    // The optimal-tiling feature bits of a format on this GPU.
+    fn format_features(vk: *vulkan.Vulkan, format: int): int
+    begin
+        var props: *void := ffi.block(16)
+        ffi.call3(address(vk, "vkGetPhysicalDeviceFormatProperties"), vk.physical, format, @props)
+        var features: int := ffi.get32(props, 4)
+        free(props)
+        return features
+    end
+
+    // A depth format this GPU can render to: D32_SFLOAT, else X8_D24, else D16 (D16 support is mandatory).
+    fn choose_depth_format(vk: *vulkan.Vulkan): int
+    begin
+        if (format_features(vk, 126) & 512) != 0 { return 126 }
+        if (format_features(vk, 125) & 512) != 0 { return 125 }
+        if (format_features(vk, 129) & 512) != 0 { return 129 }
+        if (format_features(vk, 130) & 512) != 0 { return 130 }
+        return 124
+    end
+
+    fn new_fence(vk: *vulkan.Vulkan, signaled: int): int
+    begin
+        var info: *void := ffi.block(24)
+        ffi.put32(info, 0, 8)
+        ffi.put32(info, 16, signaled)
+        var out: *void := ffi.block(16)
+        call(vk, "vkCreateFence", vk.device, @info, 0, @out, 0, 0)
+        var fence: int := ffi.get64(out, 0)
+        free(info)
+        free(out)
+        return fence
+    end
+
+    fn new_semaphore(vk: *vulkan.Vulkan): int
+    begin
+        var info: *void := ffi.block(24)
+        ffi.put32(info, 0, 9)
+        var out: *void := ffi.block(16)
+        call(vk, "vkCreateSemaphore", vk.device, @info, 0, @out, 0, 0)
+        var semaphore: int := ffi.get64(out, 0)
+        free(info)
+        free(out)
+        return semaphore
+    end
+
+    fn new_command_buffer(vk: *vulkan.Vulkan): int
+    begin
+        var info: *void := ffi.block(32)
+        ffi.put32(info, 0, 40)
+        ffi.put64(info, 16, vk.pool)
+        ffi.put32(info, 24, 0)
+        ffi.put32(info, 28, 1)
+        var out: *void := ffi.block(16)
+        call(vk, "vkAllocateCommandBuffers", vk.device, @info, @out, 0, 0, 0)
+        var command: int := ffi.get64(out, 0)
+        free(info)
+        free(out)
+        return command
+    end
+
+    fn wait_fence(vk: *vulkan.Vulkan, fence: int): int
+    begin
+        var fences: *void := ffi.block(16)
+        ffi.put64(fences, 0, fence)
+        var result: int := call(vk, "vkWaitForFences", vk.device, 1, @fences, 1, -1, 0)
+        free(fences)
+        return result
+    end
+
+    fn reset_fence(vk: *vulkan.Vulkan, fence: int)
+    begin
+        var fences: *void := ffi.block(16)
+        ffi.put64(fences, 0, fence)
+        call(vk, "vkResetFences", vk.device, 1, @fences, 0, 0, 0)
+        free(fences)
+    end
+
+    fn begin_commands(vk: *vulkan.Vulkan, command: int): int
+    begin
+        call(vk, "vkResetCommandBuffer", command, 0, 0, 0, 0, 0)
+        var info: *void := ffi.block(32)
+        ffi.put32(info, 0, 42)
+        ffi.put32(info, 16, 1)
+        var result: int := call(vk, "vkBeginCommandBuffer", command, @info, 0, 0, 0, 0)
+        free(info)
+        return result
+    end
+
+    // Submits a command buffer and waits for it with a fence. wait/signal semaphores are optional (0).
+    fn submit(vk: *vulkan.Vulkan, command: int, wait_semaphore: int, wait_stage: int, signal_semaphore: int, fence: int): int
+    begin
+        var commands: *void := ffi.block(16)
+        ffi.put64(commands, 0, command)
+        var waits: *void := ffi.block(16)
+        ffi.put64(waits, 0, wait_semaphore)
+        var stages: *void := ffi.block(16)
+        ffi.put32(stages, 0, wait_stage)
+        var signals: *void := ffi.block(16)
+        ffi.put64(signals, 0, signal_semaphore)
+        var info: *void := ffi.block(72)
+        ffi.put32(info, 0, 4)
+        if wait_semaphore != 0 {
+            ffi.put32(info, 16, 1)
+            ffi.put64(info, 24, @waits)
+            ffi.put64(info, 32, @stages)
+        }
+        ffi.put32(info, 40, 1)
+        ffi.put64(info, 48, @commands)
+        if signal_semaphore != 0 {
+            ffi.put32(info, 56, 1)
+            ffi.put64(info, 64, @signals)
+        }
+        var result: int := call(vk, "vkQueueSubmit", vk.queue, 1, @info, fence, 0, 0)
+        free(commands)
+        free(waits)
+        free(stages)
+        free(signals)
+        free(info)
+        return result
+    end
+
+    // Start recording one-shot work (uploads, layout changes) into vk.single.
+    fn single_begin(vk: *vulkan.Vulkan): int
+    begin
+        return begin_commands(vk, vk.single)
+    end
+
+    // Submit the one-shot work and wait until the GPU has finished it.
+    fn single_end(vk: *vulkan.Vulkan): int
+    begin
+        call(vk, "vkEndCommandBuffer", vk.single, 0, 0, 0, 0, 0)
+        var result: int := submit(vk, vk.single, 0, 0, 0, vk.fence)
+        if result = 0 { result := wait_fence(vk, vk.fence) }
+        reset_fence(vk, vk.fence)
+        return result
+    end
+
+    // A global memory dependency (so later stages, or the host, see what earlier stages wrote).
+    fn memory_barrier(vk: *vulkan.Vulkan, command: int, src_stage: int, src_access: int, dst_stage: int, dst_access: int)
+    begin
+        var barrier: *void := ffi.block(24)
+        ffi.put32(barrier, 0, 46)
+        ffi.put32(barrier, 16, src_access)
+        ffi.put32(barrier, 20, dst_access)
+        call10(vk, "vkCmdPipelineBarrier", command, src_stage, dst_stage, 0, 1, @barrier, 0, 0, 0, 0)
+        free(barrier)
+    end
+
+    // Changes the layout of mip levels [base, base + levels) of an image.
+    fn image_barrier(vk: *vulkan.Vulkan, command: int, image: int, aspect: int, old_layout: int, new_layout: int, src_access: int, dst_access: int, src_stage: int, dst_stage: int, base: int, levels: int)
+    begin
+        var barrier: *void := ffi.block(72)
+        ffi.put32(barrier, 0, 45)
+        ffi.put32(barrier, 16, src_access)
+        ffi.put32(barrier, 20, dst_access)
+        ffi.put32(barrier, 24, old_layout)
+        ffi.put32(barrier, 28, new_layout)
+        ffi.put32(barrier, 32, 4294967295)
+        ffi.put32(barrier, 36, 4294967295)
+        ffi.put64(barrier, 40, image)
+        ffi.put32(barrier, 48, aspect)
+        ffi.put32(barrier, 52, base)
+        ffi.put32(barrier, 56, levels)
+        ffi.put32(barrier, 60, 0)
+        ffi.put32(barrier, 64, 1)
+        call10(vk, "vkCmdPipelineBarrier", command, src_stage, dst_stage, 0, 0, 0, 0, 0, 1, @barrier)
+        free(barrier)
+    end
+
+    // ======================================================================== buffers
+
+    // A host-visible, host-coherent buffer of `size` bytes usable as storage/uniform/vertex/index/transfer
+    // buffer. `.data` points at its mapped memory.
     fn buffer_new(vk: *vulkan.Vulkan, size: int): *vulkan.Buffer
     begin
-        return buffer_new_usage(vk, size, 227)
+        return buffer_new_usage(vk, size, 243)
     end
 
     // usage bits: 1 transfer-src, 2 transfer-dst, 0x10 uniform, 0x20 storage, 0x40 index, 0x80 vertex.
     fn buffer_new_usage(vk: *vulkan.Vulkan, size: int, usage: int): *vulkan.Buffer
     begin
+        return buffer_create(vk, size, usage, 6, 6)
+    end
+
+    // A buffer whose CPU reads are fast (host-cached when the GPU offers it), for reading results back.
+    fn buffer_readback(vk: *vulkan.Vulkan, size: int): *vulkan.Buffer
+    begin
+        return buffer_create(vk, size, 243, 14, 6)
+    end
+
+    fn buffer_create(vk: *vulkan.Vulkan, size: int, usage: int, preferred: int, required: int): *vulkan.Buffer
+    begin
         var none: *vulkan.Buffer
+        var real_size: int := size
+        if real_size < 4 { real_size := 4 }
         var buffer: *vulkan.Buffer := alloc(48)
-        buffer.size := size
+        buffer.size := real_size
         var info: *void := ffi.block(56)
         ffi.put32(info, 0, 12)
-        ffi.put64(info, 24, size)
+        ffi.put64(info, 24, real_size)
         ffi.put32(info, 32, usage)
         var out: *void := ffi.block(16)
         if call(vk, "vkCreateBuffer", vk.device, @info, 0, @out, 0, 0) != 0 {
@@ -334,8 +990,9 @@ begin
         buffer.handle := ffi.get64(out, 0)
         var requirements: *void := ffi.block(32)
         call(vk, "vkGetBufferMemoryRequirements", vk.device, buffer.handle, @requirements, 0, 0, 0)
-        var type_index: int := memory_type(vk, ffi.get32(requirements, 16), 6)
+        var type_index: int := memory_type_prefer(vk, ffi.get32(requirements, 16), preferred, required)
         if type_index < 0 {
+            call(vk, "vkDestroyBuffer", vk.device, buffer.handle, 0, 0, 0, 0)
             free(buffer)
             return none
         }
@@ -344,13 +1001,14 @@ begin
         ffi.put64(allocate, 16, ffi.get64(requirements, 0))
         ffi.put32(allocate, 24, type_index)
         if call(vk, "vkAllocateMemory", vk.device, @allocate, 0, @out, 0, 0) != 0 {
+            call(vk, "vkDestroyBuffer", vk.device, buffer.handle, 0, 0, 0, 0)
             free(buffer)
             return none
         }
         buffer.memory := ffi.get64(out, 0)
         call(vk, "vkBindBufferMemory", vk.device, buffer.handle, buffer.memory, 0, 0, 0)
         var mapped: *void := ffi.block(16)
-        call(vk, "vkMapMemory", vk.device, buffer.memory, 0, size, 0, @mapped)
+        call(vk, "vkMapMemory", vk.device, buffer.memory, 0, -1, 0, @mapped)
         buffer.data := ffi.pointer_at(mapped, 0)
         free(info)
         free(out)
@@ -368,17 +1026,35 @@ begin
         free(buffer)
     end
 
-    // Reads a whole file into raw memory; returns its size through size_out[0].
+    // Write a float (as a 32-bit float) at byte offset `offset` of a buffer.
+    fn buffer_float(buffer: *vulkan.Buffer, offset: int, value: flt)
+    begin
+        ffi.put_float32(buffer.data, offset, value)
+    end
+
+    fn buffer_int32(buffer: *vulkan.Buffer, offset: int, value: int)
+    begin
+        ffi.put32(buffer.data, offset, value)
+    end
+
+    // Reads a whole file into raw memory; returns its size through size_out[0] (null when it cannot be read).
     fn load_file(path: string, size_out: *[1]int): *void
     begin
         var none: *void
         var fd: int := syscall.io.open(path, 0, 0)
         if fd < 0 { return none }
-        var capacity: int := 1048576
+        var capacity: int := 65536
         var data: *void := alloc(capacity)
         var total: int := 0
         var reading: int := 1
-        while reading = 1 && total < capacity {
+        while reading = 1 {
+            if total = capacity {
+                var bigger: *void := alloc(capacity * 2)
+                runtime.mem.copy(bigger, data, total)
+                free(data)
+                data := bigger
+                capacity := capacity * 2
+            }
             var n: int := syscall.io.read(fd, data + total, capacity - total)
             if n <= 0 { reading := 0 }
             else { total := total + n }
@@ -387,6 +1063,8 @@ begin
         (*size_out)[0] := total
         return data
     end
+
+    // ======================================================================== compute
 
     // Builds a compute pipeline from a SPIR-V file. The shader sees `buffers` storage buffers at set 0,
     // bindings 0..buffers-1, and a push-constant block of `push_bytes` bytes (0 for none).
@@ -399,19 +1077,26 @@ begin
             free(size)
             return none
         }
+        var job: *vulkan.Compute := compute_from_memory(vk, code, (*size)[0], buffers, push_bytes)
+        free(code)
+        free(size)
+        return job
+    end
+
+    // Same as compute_new, with the SPIR-V already in memory.
+    fn compute_from_memory(vk: *vulkan.Vulkan, code: *void, code_size: int, buffers: int, push_bytes: int): *vulkan.Compute
+    begin
+        var none: *vulkan.Compute
         var job: *vulkan.Compute := alloc(80)
+        runtime.mem.set(job, 0, 80)
         job.buffers := buffers
         job.push_bytes := push_bytes
-        var out: *void := ffi.block(16)
-        var module_info: *void := ffi.block(40)
-        ffi.put32(module_info, 0, 16)
-        ffi.put64(module_info, 24, (*size)[0])
-        ffi.put64(module_info, 32, @code)
-        if call(vk, "vkCreateShaderModule", vk.device, @module_info, 0, @out, 0, 0) != 0 {
+        job.shader := shader_module_from_memory(vk, code, code_size)
+        if job.shader = 0 {
             free(job)
             return none
         }
-        job.shader := ffi.get64(out, 0)
+        var out: *void := ffi.block(16)
         var bindings: *void := ffi.block(24 * buffers + 8)
         var i: int := 0
         while i < buffers {
@@ -443,12 +1128,13 @@ begin
         }
         call(vk, "vkCreatePipelineLayout", vk.device, @pipeline_layout_info, 0, @out, 0, 0)
         job.pipeline_layout := ffi.get64(out, 0)
+        var main_name: string := "main"
         var pipeline_info: *void := ffi.block(96)
         ffi.put32(pipeline_info, 0, 29)
         ffi.put32(pipeline_info, 24, 18)
         ffi.put32(pipeline_info, 44, 32)
         ffi.put64(pipeline_info, 48, job.shader)
-        ffi.put64(pipeline_info, 56, ffi.cstr("main"))
+        ffi.put64(pipeline_info, 56, ffi.cstr(main_name))
         ffi.put64(pipeline_info, 72, job.pipeline_layout)
         ffi.put32(pipeline_info, 88, 4294967295)
         var result: int := call(vk, "vkCreateComputePipelines", vk.device, 0, 1, @pipeline_info, 0, @out)
@@ -457,36 +1143,35 @@ begin
             return none
         }
         job.pipeline := ffi.get64(out, 0)
-        var pool_size: *void := ffi.block(8)
-        ffi.put32(pool_size, 0, 7)
-        ffi.put32(pool_size, 4, buffers)
-        var pool_info: *void := ffi.block(40)
-        ffi.put32(pool_info, 0, 33)
-        ffi.put32(pool_info, 20, 1)
-        ffi.put32(pool_info, 24, 1)
-        ffi.put64(pool_info, 32, @pool_size)
-        call(vk, "vkCreateDescriptorPool", vk.device, @pool_info, 0, @out, 0, 0)
-        job.pool := ffi.get64(out, 0)
-        var set_info: *void := ffi.block(40)
-        ffi.put32(set_info, 0, 34)
-        ffi.put64(set_info, 16, job.pool)
-        ffi.put32(set_info, 24, 1)
-        ffi.put64(set_info, 32, @set_layouts)
-        call(vk, "vkAllocateDescriptorSets", vk.device, @set_info, @out, 0, 0, 0)
-        job.set := ffi.get64(out, 0)
-        free(size)
-        free(code)
+        if buffers > 0 {
+            var pool_size: *void := ffi.block(8)
+            ffi.put32(pool_size, 0, 7)
+            ffi.put32(pool_size, 4, buffers)
+            var pool_info: *void := ffi.block(40)
+            ffi.put32(pool_info, 0, 33)
+            ffi.put32(pool_info, 20, 1)
+            ffi.put32(pool_info, 24, 1)
+            ffi.put64(pool_info, 32, @pool_size)
+            call(vk, "vkCreateDescriptorPool", vk.device, @pool_info, 0, @out, 0, 0)
+            job.pool := ffi.get64(out, 0)
+            var set_info: *void := ffi.block(40)
+            ffi.put32(set_info, 0, 34)
+            ffi.put64(set_info, 16, job.pool)
+            ffi.put32(set_info, 24, 1)
+            ffi.put64(set_info, 32, @set_layouts)
+            call(vk, "vkAllocateDescriptorSets", vk.device, @set_info, @out, 0, 0, 0)
+            job.set := ffi.get64(out, 0)
+            free(pool_size)
+            free(pool_info)
+            free(set_info)
+        }
         free(out)
-        free(module_info)
         free(bindings)
         free(layout_info)
         free(set_layouts)
         free(range)
         free(pipeline_layout_info)
         free(pipeline_info)
-        free(pool_size)
-        free(pool_info)
-        free(set_info)
         return job
     end
 
@@ -496,7 +1181,7 @@ begin
         var buffer_info: *void := ffi.block(24)
         ffi.put64(buffer_info, 0, buffer.handle)
         ffi.put64(buffer_info, 8, 0)
-        ffi.put64(buffer_info, 16, buffer.size)
+        ffi.put64(buffer_info, 16, -1)
         var write: *void := ffi.block(64)
         ffi.put32(write, 0, 35)
         ffi.put64(write, 16, job.set)
@@ -505,45 +1190,35 @@ begin
         ffi.put32(write, 32, 1)
         ffi.put32(write, 36, 7)
         ffi.put64(write, 48, @buffer_info)
-        ffi.call5(proc(vk.instance, "vkUpdateDescriptorSets"), vk.device, 1, @write, 0, 0)
+        ffi.call5(address(vk, "vkUpdateDescriptorSets"), vk.device, 1, @write, 0, 0)
         free(buffer_info)
         free(write)
     end
 
-    // Dispatch groups_x * groups_y * groups_z workgroups and wait for the GPU. `push` points at the
-    // push-constant bytes (or 0 when the shader has none).
+    // Dispatch groups_x * groups_y * groups_z workgroups and wait for the GPU; the results are then visible in the
+    // buffers' `.data`. `push` points at the push-constant bytes (or 0 when the shader has none).
     fn compute_run(vk: *vulkan.Vulkan, job: *vulkan.Compute, groups_x: int, groups_y: int, groups_z: int, push: *void): int
     begin
-        var begin_info: *void := ffi.block(32)
-        ffi.put32(begin_info, 0, 42)
-        ffi.put32(begin_info, 16, 1)
-        var result: int := call(vk, "vkBeginCommandBuffer", vk.command, @begin_info, 0, 0, 0, 0)
+        var result: int := single_begin(vk)
         if result != 0 { return result }
-        call(vk, "vkCmdBindPipeline", vk.command, 1, job.pipeline, 0, 0, 0)
-        var sets: *void := ffi.block(16)
-        ffi.put64(sets, 0, job.set)
-        ffi.call8(proc(vk.instance, "vkCmdBindDescriptorSets"), vk.command, 1, job.pipeline_layout, 0, 1, @sets, 0, 0)
-        if job.push_bytes > 0 { call(vk, "vkCmdPushConstants", vk.command, job.pipeline_layout, 32, 0, job.push_bytes, @push) }
-        call(vk, "vkCmdDispatch", vk.command, groups_x, groups_y, groups_z, 0, 0)
-        call(vk, "vkEndCommandBuffer", vk.command, 0, 0, 0, 0, 0)
-        var commands: *void := ffi.block(16)
-        ffi.put64(commands, 0, vk.command)
-        var submit: *void := ffi.block(72)
-        ffi.put32(submit, 0, 4)
-        ffi.put32(submit, 40, 1)
-        ffi.put64(submit, 48, @commands)
-        result := call(vk, "vkQueueSubmit", vk.queue, 1, @submit, 0, 0, 0)
-        if result = 0 { result := call(vk, "vkQueueWaitIdle", vk.queue, 0, 0, 0, 0, 0) }
-        free(begin_info)
-        free(sets)
-        free(commands)
-        free(submit)
-        return result
+        call(vk, "vkCmdBindPipeline", vk.single, 1, job.pipeline, 0, 0, 0)
+        if job.buffers > 0 {
+            var sets: *void := ffi.block(16)
+            ffi.put64(sets, 0, job.set)
+            call8(vk, "vkCmdBindDescriptorSets", vk.single, 1, job.pipeline_layout, 0, 1, @sets, 0, 0)
+            free(sets)
+        }
+        if job.push_bytes > 0 { call(vk, "vkCmdPushConstants", vk.single, job.pipeline_layout, 32, 0, job.push_bytes, @push) }
+        call(vk, "vkCmdDispatch", vk.single, groups_x, groups_y, groups_z, 0, 0)
+        // make the shader's writes visible to the CPU (needed on GPUs with non-coherent caches)
+        memory_barrier(vk, vk.single, 2048, 64, 16384, 8192)
+        return single_end(vk)
     end
 
     fn compute_free(vk: *vulkan.Vulkan, job: *vulkan.Compute)
     begin
-        call(vk, "vkDestroyDescriptorPool", vk.device, job.pool, 0, 0, 0, 0)
+        call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+        if job.pool != 0 { call(vk, "vkDestroyDescriptorPool", vk.device, job.pool, 0, 0, 0, 0) }
         call(vk, "vkDestroyPipeline", vk.device, job.pipeline, 0, 0, 0, 0)
         call(vk, "vkDestroyPipelineLayout", vk.device, job.pipeline_layout, 0, 0, 0, 0)
         call(vk, "vkDestroyDescriptorSetLayout", vk.device, job.set_layout, 0, 0, 0, 0)
@@ -551,24 +1226,15 @@ begin
         free(job)
     end
 
-    // ======================================================================== graphics
-    // Render with vertex/fragment shaders into an offscreen image, then copy it to a `canvas` and show it
-    // with `window`, or save it with `image`:
-    //
-    //     var target: *vulkan.Target := vulkan.target_new(vk, 640, 420, 1)
-    //     var pipe: *vulkan.Pipeline := vulkan.pipeline_new(vk, target, "tri.vert.spv", "tri.frag.spv", attrs, 2, 64, 0)
-    //     vulkan.frame_begin(vk, target, 0.1, 0.1, 0.15)
-    //     vulkan.frame_draw(vk, pipe, vertices, 3, push)
-    //     vulkan.frame_end(vk, target)                    // submits and waits
-    //     vulkan.read_canvas(target, win.canvas)           // pixels -> canvas
+    // ======================================================================== images
+
     fn image_memory(vk: *vulkan.Vulkan, image: int, device_local: int): int
     begin
         var requirements: *void := ffi.block(32)
         call(vk, "vkGetImageMemoryRequirements", vk.device, image, @requirements, 0, 0, 0)
         var wanted: int := 0
         if device_local = 1 { wanted := 1 }
-        var type_index: int := memory_type(vk, ffi.get32(requirements, 16), wanted)
-        if type_index < 0 { type_index := memory_type(vk, ffi.get32(requirements, 16), 0) }
+        var type_index: int := memory_type_prefer(vk, ffi.get32(requirements, 16), wanted, 0)
         var allocate: *void := ffi.block(32)
         ffi.put32(allocate, 0, 5)
         ffi.put64(allocate, 16, ffi.get64(requirements, 0))
@@ -583,7 +1249,7 @@ begin
         return memory
     end
 
-    fn make_image(vk: *vulkan.Vulkan, width: int, height: int, format: int, usage: int, out: *void): int
+    fn make_image_levels(vk: *vulkan.Vulkan, width: int, height: int, format: int, usage: int, levels: int, out: *void): int
     begin
         var info: *void := ffi.block(88)
         ffi.put32(info, 0, 14)
@@ -592,19 +1258,25 @@ begin
         ffi.put32(info, 28, width)
         ffi.put32(info, 32, height)
         ffi.put32(info, 36, 1)
-        ffi.put32(info, 40, 1)
+        ffi.put32(info, 40, levels)
         ffi.put32(info, 44, 1)
         ffi.put32(info, 48, 1)
         ffi.put32(info, 52, 0)
         ffi.put32(info, 56, usage)
         ffi.put32(info, 60, 0)
         ffi.put32(info, 80, 0)
+        ffi.put64(out, 0, 0)
         call(vk, "vkCreateImage", vk.device, @info, 0, @out, 0, 0)
         free(info)
         return ffi.get64(out, 0)
     end
 
-    fn make_view(vk: *vulkan.Vulkan, image: int, format: int, aspect: int, out: *void): int
+    fn make_image(vk: *vulkan.Vulkan, width: int, height: int, format: int, usage: int, out: *void): int
+    begin
+        return make_image_levels(vk, width, height, format, usage, 1, out)
+    end
+
+    fn make_view_levels(vk: *vulkan.Vulkan, image: int, format: int, aspect: int, levels: int, out: *void): int
     begin
         var info: *void := ffi.block(80)
         ffi.put32(info, 0, 15)
@@ -613,54 +1285,46 @@ begin
         ffi.put32(info, 36, format)
         ffi.put32(info, 56, aspect)
         ffi.put32(info, 60, 0)
-        ffi.put32(info, 64, 1)
+        ffi.put32(info, 64, levels)
         ffi.put32(info, 68, 0)
         ffi.put32(info, 72, 1)
+        ffi.put64(out, 0, 0)
         call(vk, "vkCreateImageView", vk.device, @info, 0, @out, 0, 0)
         free(info)
         return ffi.get64(out, 0)
     end
 
-    // Offscreen render target of width x height (RGBA8) with an optional 32-bit depth buffer.
-    fn target_new(vk: *vulkan.Vulkan, width: int, height: int, with_depth: int): *vulkan.Target
+    fn make_view(vk: *vulkan.Vulkan, image: int, format: int, aspect: int, out: *void): int
     begin
-        var t: *vulkan.Target := alloc(112)
-        t.width := width
-        t.height := height
-        t.has_depth := with_depth
-        var out: *void := ffi.block(16)
-        t.color_image := make_image(vk, width, height, 37, 17, out)
-        t.color_memory := image_memory(vk, t.color_image, 1)
-        t.color_view := make_view(vk, t.color_image, 37, 1, out)
-        t.depth_image := 0
-        t.depth_memory := 0
-        t.depth_view := 0
-        var attachments: *void := ffi.block(16)
-        ffi.put64(attachments, 0, t.color_view)
-        var count: int := 1
-        if with_depth = 1 {
-            t.depth_image := make_image(vk, width, height, 126, 32, out)
-            t.depth_memory := image_memory(vk, t.depth_image, 1)
-            t.depth_view := make_view(vk, t.depth_image, 126, 2, out)
-            ffi.put64(attachments, 8, t.depth_view)
-            count := 2
-        }
-        // render pass: attachment 0 = color (cleared, kept, ends as transfer source), attachment 1 = depth
+        return make_view_levels(vk, image, format, aspect, 1, out)
+    end
+
+    fn depth_aspect(format: int): int
+    begin
+        if format = 129 || format = 130 { return 6 }
+        return 2
+    end
+
+    // ======================================================================== render passes and targets
+
+    // One color attachment (cleared, stored, ending in final_layout) and an optional depth attachment.
+    fn make_render_pass(vk: *vulkan.Vulkan, color_format: int, final_layout: int, depth_format: int): int
+    begin
         var descriptions: *void := ffi.block(80)
-        ffi.put32(descriptions, 4, 37)
+        ffi.put32(descriptions, 4, color_format)
         ffi.put32(descriptions, 8, 1)
         ffi.put32(descriptions, 12, 1)
         ffi.put32(descriptions, 16, 0)
         ffi.put32(descriptions, 20, 2)
-        ffi.put32(descriptions, 24, 2)
+        ffi.put32(descriptions, 24, 1)
         ffi.put32(descriptions, 28, 0)
-        ffi.put32(descriptions, 32, 6)
-        ffi.put32(descriptions, 36 + 4, 126)
+        ffi.put32(descriptions, 32, final_layout)
+        ffi.put32(descriptions, 36 + 4, depth_format)
         ffi.put32(descriptions, 36 + 8, 1)
         ffi.put32(descriptions, 36 + 12, 1)
         ffi.put32(descriptions, 36 + 16, 1)
         ffi.put32(descriptions, 36 + 20, 2)
-        ffi.put32(descriptions, 36 + 24, 2)
+        ffi.put32(descriptions, 36 + 24, 1)
         ffi.put32(descriptions, 36 + 28, 0)
         ffi.put32(descriptions, 36 + 32, 3)
         var color_ref: *void := ffi.block(8)
@@ -673,72 +1337,402 @@ begin
         ffi.put32(subpass, 4, 0)
         ffi.put32(subpass, 24, 1)
         ffi.put64(subpass, 32, @color_ref)
-        if with_depth = 1 { ffi.put64(subpass, 48, @depth_ref) }
+        if depth_format != 0 { ffi.put64(subpass, 48, @depth_ref) }
+        // external -> subpass: wait for earlier color/depth use (previous frame, presentation engine) before
+        // writing; subpass -> external: make the color writes visible to the copy / presentation that follows
         var dependencies: *void := ffi.block(64)
         ffi.put32(dependencies, 0, 4294967295)
         ffi.put32(dependencies, 4, 0)
-        ffi.put32(dependencies, 8, 1280)
-        ffi.put32(dependencies, 12, 1280)
-        ffi.put32(dependencies, 16, 0)
-        ffi.put32(dependencies, 20, 1280)
+        ffi.put32(dependencies, 8, 1024 | 512)
+        ffi.put32(dependencies, 12, 1024 | 256)
+        ffi.put32(dependencies, 16, 1024)
+        ffi.put32(dependencies, 20, 256 | 1024)
         ffi.put32(dependencies, 28 + 0, 0)
         ffi.put32(dependencies, 28 + 4, 4294967295)
         ffi.put32(dependencies, 28 + 8, 1024)
-        ffi.put32(dependencies, 28 + 12, 4096)
+        ffi.put32(dependencies, 28 + 12, 4096 | 8192)
         ffi.put32(dependencies, 28 + 16, 256)
-        ffi.put32(dependencies, 28 + 20, 2048)
+        ffi.put32(dependencies, 28 + 20, 2048 | 32768)
         var pass_info: *void := ffi.block(64)
         ffi.put32(pass_info, 0, 38)
+        var count: int := 1
+        if depth_format != 0 { count := 2 }
         ffi.put32(pass_info, 20, count)
         ffi.put64(pass_info, 24, @descriptions)
         ffi.put32(pass_info, 32, 1)
         ffi.put64(pass_info, 40, @subpass)
         ffi.put32(pass_info, 48, 2)
         ffi.put64(pass_info, 56, @dependencies)
+        var out: *void := ffi.block(16)
         call(vk, "vkCreateRenderPass", vk.device, @pass_info, 0, @out, 0, 0)
-        t.render_pass := ffi.get64(out, 0)
-        var fb_info: *void := ffi.block(64)
-        ffi.put32(fb_info, 0, 37)
-        ffi.put64(fb_info, 24, t.render_pass)
-        ffi.put32(fb_info, 32, count)
-        ffi.put64(fb_info, 40, @attachments)
-        ffi.put32(fb_info, 48, width)
-        ffi.put32(fb_info, 52, height)
-        ffi.put32(fb_info, 56, 1)
-        call(vk, "vkCreateFramebuffer", vk.device, @fb_info, 0, @out, 0, 0)
-        t.framebuffer := ffi.get64(out, 0)
-        t.readback := buffer_new(vk, width * height * 4)
-        free(out)
-        free(attachments)
+        var pass: int := ffi.get64(out, 0)
         free(descriptions)
         free(color_ref)
         free(depth_ref)
         free(subpass)
         free(dependencies)
         free(pass_info)
-        free(fb_info)
+        free(out)
+        return pass
+    end
+
+    fn make_framebuffer(vk: *vulkan.Vulkan, pass: int, color_view: int, depth_view: int, width: int, height: int): int
+    begin
+        var attachments: *void := ffi.block(16)
+        ffi.put64(attachments, 0, color_view)
+        var count: int := 1
+        if depth_view != 0 {
+            ffi.put64(attachments, 8, depth_view)
+            count := 2
+        }
+        var info: *void := ffi.block(64)
+        ffi.put32(info, 0, 37)
+        ffi.put64(info, 24, pass)
+        ffi.put32(info, 32, count)
+        ffi.put64(info, 40, @attachments)
+        ffi.put32(info, 48, width)
+        ffi.put32(info, 52, height)
+        ffi.put32(info, 56, 1)
+        var out: *void := ffi.block(16)
+        call(vk, "vkCreateFramebuffer", vk.device, @info, 0, @out, 0, 0)
+        var framebuffer: int := ffi.get64(out, 0)
+        free(attachments)
+        free(info)
+        free(out)
+        return framebuffer
+    end
+
+    fn target_alloc(): *vulkan.Target
+    begin
+        var t: *vulkan.Target := alloc(512)
+        runtime.mem.set(t, 0, 512)
+        t.images := alloc(16 * 8)
+        t.views := alloc(16 * 8)
+        t.framebuffers := alloc(16 * 8)
+        t.rendered := alloc(16 * 8)
+        var i: int := 0
+        while i < 16 {
+            (*t.images)[i] := 0
+            (*t.views)[i] := 0
+            (*t.framebuffers)[i] := 0
+            (*t.rendered)[i] := 0
+            i := i + 1
+        }
         return t
+    end
+
+    fn make_depth(vk: *vulkan.Vulkan, t: *vulkan.Target, width: int, height: int)
+    begin
+        var out: *void := ffi.block(16)
+        t.depth_image := make_image(vk, width, height, t.depth_format, 32, out)
+        t.depth_memory := image_memory(vk, t.depth_image, 1)
+        t.depth_view := make_view(vk, t.depth_image, t.depth_format, depth_aspect(t.depth_format), out)
+        free(out)
+    end
+
+    fn free_depth(vk: *vulkan.Vulkan, t: *vulkan.Target)
+    begin
+        if t.depth_view != 0 { call(vk, "vkDestroyImageView", vk.device, t.depth_view, 0, 0, 0, 0) }
+        if t.depth_image != 0 { call(vk, "vkDestroyImage", vk.device, t.depth_image, 0, 0, 0, 0) }
+        if t.depth_memory != 0 { call(vk, "vkFreeMemory", vk.device, t.depth_memory, 0, 0, 0, 0) }
+        t.depth_view := 0
+        t.depth_image := 0
+        t.depth_memory := 0
+    end
+
+    fn offscreen_images(vk: *vulkan.Vulkan, t: *vulkan.Target)
+    begin
+        var out: *void := ffi.block(16)
+        t.color_image := make_image(vk, t.width, t.height, t.color_format, 16 | 1, out)
+        t.color_memory := image_memory(vk, t.color_image, 1)
+        t.color_view := make_view(vk, t.color_image, t.color_format, 1, out)
+        if t.has_depth = 1 { make_depth(vk, t, t.width, t.height) }
+        t.framebuffer := make_framebuffer(vk, t.render_pass, t.color_view, t.depth_view, t.width, t.height)
+        t.readback := buffer_readback(vk, t.width * t.height * 4)
+        free(out)
+    end
+
+    fn free_offscreen_images(vk: *vulkan.Vulkan, t: *vulkan.Target)
+    begin
+        call(vk, "vkDestroyFramebuffer", vk.device, t.framebuffer, 0, 0, 0, 0)
+        call(vk, "vkDestroyImageView", vk.device, t.color_view, 0, 0, 0, 0)
+        call(vk, "vkDestroyImage", vk.device, t.color_image, 0, 0, 0, 0)
+        call(vk, "vkFreeMemory", vk.device, t.color_memory, 0, 0, 0, 0)
+        free_depth(vk, t)
+        buffer_free(vk, t.readback)
+    end
+
+    // Offscreen render target of width x height (RGBA8) with an optional depth buffer.
+    fn target_new(vk: *vulkan.Vulkan, width: int, height: int, with_depth: int): *vulkan.Target
+    begin
+        var t: *vulkan.Target := target_alloc()
+        t.kind := 0
+        t.width := width
+        t.height := height
+        t.wanted_width := width
+        t.wanted_height := height
+        t.has_depth := with_depth
+        t.color_format := 37
+        t.depth_format := 0
+        if with_depth = 1 { t.depth_format := vk.depth_format }
+        t.render_pass := make_render_pass(vk, 37, 6, t.depth_format)
+        t.frame_command := new_command_buffer(vk)
+        offscreen_images(vk, t)
+        return t
+    end
+
+    // Window target on a VkSurfaceKHR (made by vkplatform for the window): a swapchain. vsync 1 waits for the
+    // display (no tearing, always available); 0 presents as fast as possible when the GPU allows it.
+    // Returns null when the surface cannot be presented to with this GPU/queue.
+    fn target_swapchain(vk: *vulkan.Vulkan, surface: int, width: int, height: int, with_depth: int, vsync: int): *vulkan.Target
+    begin
+        var none: *vulkan.Target
+        if vk.swapchain_ext = 0 || surface = 0 { return none }
+        var flag: *void := ffi.block(16)
+        call(vk, "vkGetPhysicalDeviceSurfaceSupportKHR", vk.physical, vk.family, surface, @flag, 0, 0)
+        var supported: int := ffi.get32(flag, 0)
+        free(flag)
+        if supported = 0 { return none }
+        var t: *vulkan.Target := target_alloc()
+        t.kind := 1
+        t.surface := surface
+        t.has_depth := with_depth
+        t.vsync := vsync
+        t.wanted_width := width
+        t.wanted_height := height
+        t.depth_format := 0
+        if with_depth = 1 { t.depth_format := vk.depth_format }
+        // surface format: 8-bit BGRA/RGBA UNORM in the standard color space when offered
+        var counts: *void := ffi.block(16)
+        call(vk, "vkGetPhysicalDeviceSurfaceFormatsKHR", vk.physical, surface, @counts, 0, 0, 0)
+        var format_count: int := ffi.get32(counts, 0)
+        if format_count = 0 {
+            free(t)
+            return none
+        }
+        var formats: *void := ffi.block(format_count * 8 + 8)
+        call(vk, "vkGetPhysicalDeviceSurfaceFormatsKHR", vk.physical, surface, @counts, @formats, 0, 0)
+        format_count := ffi.get32(counts, 0)
+        t.color_format := ffi.get32(formats, 0)
+        t.color_space := ffi.get32(formats, 4)
+        var best: int := 99
+        var i: int := 0
+        while i < format_count {
+            var format: int := ffi.get32(formats, i * 8)
+            var space: int := ffi.get32(formats, i * 8 + 4)
+            var rank: int := 50
+            if format = 44 && space = 0 { rank := 0 }
+            if format = 37 && space = 0 { rank := 1 }
+            if format = 64 && space = 0 { rank := 2 }
+            if format = 50 && space = 0 { rank := 10 }
+            if format = 43 && space = 0 { rank := 11 }
+            if rank < best {
+                best := rank
+                t.color_format := format
+                t.color_space := space
+            }
+            i := i + 1
+        }
+        if format_count = 1 && t.color_format = 0 {
+            t.color_format := 44
+            t.color_space := 0
+        }
+        free(formats)
+        // present mode: FIFO is always there; without vsync prefer MAILBOX, then IMMEDIATE
+        t.present_mode := 2
+        if vsync = 0 {
+            ffi.put32(counts, 0, 0)
+            call(vk, "vkGetPhysicalDeviceSurfacePresentModesKHR", vk.physical, surface, @counts, 0, 0, 0)
+            var mode_count: int := ffi.get32(counts, 0)
+            var modes: *void := ffi.block(mode_count * 4 + 8)
+            call(vk, "vkGetPhysicalDeviceSurfacePresentModesKHR", vk.physical, surface, @counts, @modes, 0, 0)
+            var has_mailbox: int := 0
+            var has_immediate: int := 0
+            i := 0
+            while i < ffi.get32(counts, 0) {
+                if ffi.get32(modes, i * 4) = 1 { has_mailbox := 1 }
+                if ffi.get32(modes, i * 4) = 0 { has_immediate := 1 }
+                i := i + 1
+            }
+            if has_immediate = 1 { t.present_mode := 0 }
+            if has_mailbox = 1 { t.present_mode := 1 }
+            free(modes)
+        }
+        free(counts)
+        t.render_pass := make_render_pass(vk, t.color_format, 1000001002, t.depth_format)
+        t.acquired := new_semaphore(vk)
+        t.frame_fence := new_fence(vk, 1)
+        t.frame_command := new_command_buffer(vk)
+        var built: int := build_swapchain(vk, t)
+        if built < 0 {
+            target_free(vk, t)
+            return none
+        }
+        return t
+    end
+
+    fn free_swapchain_images(vk: *vulkan.Vulkan, t: *vulkan.Target)
+    begin
+        var i: int := 0
+        while i < t.image_count {
+            if (*t.framebuffers)[i] != 0 { call(vk, "vkDestroyFramebuffer", vk.device, (*t.framebuffers)[i], 0, 0, 0, 0) }
+            if (*t.views)[i] != 0 { call(vk, "vkDestroyImageView", vk.device, (*t.views)[i], 0, 0, 0, 0) }
+            if (*t.rendered)[i] != 0 { call(vk, "vkDestroySemaphore", vk.device, (*t.rendered)[i], 0, 0, 0, 0) }
+            (*t.framebuffers)[i] := 0
+            (*t.views)[i] := 0
+            (*t.rendered)[i] := 0
+            i := i + 1
+        }
+        t.image_count := 0
+        free_depth(vk, t)
+    end
+
+    // (Re)creates the swapchain for the surface's current size. Returns 1 when ready, 0 when the window has no
+    // area (minimized; try again later) and -1 on failure.
+    fn build_swapchain(vk: *vulkan.Vulkan, t: *vulkan.Target): int
+    begin
+        var caps: *void := ffi.block(64)
+        var result: int := call(vk, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", vk.physical, t.surface, @caps, 0, 0, 0)
+        if result != 0 {
+            free(caps)
+            return -1
+        }
+        var width: int := ffi.get32(caps, 8)
+        var height: int := ffi.get32(caps, 12)
+        if width = 4294967295 {
+            width := t.wanted_width
+            height := t.wanted_height
+            if width < ffi.get32(caps, 16) { width := ffi.get32(caps, 16) }
+            if height < ffi.get32(caps, 20) { height := ffi.get32(caps, 20) }
+            if width > ffi.get32(caps, 24) { width := ffi.get32(caps, 24) }
+            if height > ffi.get32(caps, 28) { height := ffi.get32(caps, 28) }
+        }
+        if width = 0 || height = 0 {
+            free(caps)
+            t.width := 0
+            t.height := 0
+            t.stale := 1
+            return 0
+        }
+        call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+        free_swapchain_images(vk, t)
+        var image_count: int := ffi.get32(caps, 0) + 1
+        if ffi.get32(caps, 4) > 0 && image_count > ffi.get32(caps, 4) { image_count := ffi.get32(caps, 4) }
+        if image_count > 16 { image_count := 16 }
+        var usage: int := 16
+        if (ffi.get32(caps, 48) & 2) != 0 { usage := usage | 2 }
+        var composite: int := 1
+        var supported_alpha: int := ffi.get32(caps, 44)
+        if (supported_alpha & 1) = 0 {
+            composite := 8
+            if (supported_alpha & 8) = 0 {
+                composite := 2
+                if (supported_alpha & 2) = 0 { composite := 4 }
+            }
+        }
+        var info: *void := ffi.block(104)
+        ffi.put32(info, 0, 1000001000)
+        ffi.put64(info, 24, t.surface)
+        ffi.put32(info, 32, image_count)
+        ffi.put32(info, 36, t.color_format)
+        ffi.put32(info, 40, t.color_space)
+        ffi.put32(info, 44, width)
+        ffi.put32(info, 48, height)
+        ffi.put32(info, 52, 1)
+        ffi.put32(info, 56, usage)
+        ffi.put32(info, 60, 0)
+        ffi.put32(info, 80, ffi.get32(caps, 40))
+        ffi.put32(info, 84, composite)
+        ffi.put32(info, 88, t.present_mode)
+        ffi.put32(info, 92, 1)
+        ffi.put64(info, 96, t.swapchain)
+        var out: *void := ffi.block(16)
+        result := call(vk, "vkCreateSwapchainKHR", vk.device, @info, 0, @out, 0, 0)
+        free(info)
+        free(caps)
+        if result != 0 {
+            free(out)
+            return -1
+        }
+        if t.swapchain != 0 { call(vk, "vkDestroySwapchainKHR", vk.device, t.swapchain, 0, 0, 0, 0) }
+        t.swapchain := ffi.get64(out, 0)
+        t.width := width
+        t.height := height
+        var counts: *void := ffi.block(16)
+        ffi.put32(counts, 0, 16)
+        var images: *void := ffi.block(16 * 8)
+        call(vk, "vkGetSwapchainImagesKHR", vk.device, t.swapchain, @counts, @images, 0, 0)
+        t.image_count := ffi.get32(counts, 0)
+        if t.has_depth = 1 { make_depth(vk, t, width, height) }
+        var i: int := 0
+        while i < t.image_count {
+            (*t.images)[i] := ffi.get64(images, i * 8)
+            (*t.views)[i] := make_view(vk, (*t.images)[i], t.color_format, 1, out)
+            (*t.framebuffers)[i] := make_framebuffer(vk, t.render_pass, (*t.views)[i], t.depth_view, width, height)
+            (*t.rendered)[i] := new_semaphore(vk)
+            i := i + 1
+        }
+        free(counts)
+        free(images)
+        free(out)
+        t.stale := 0
+        return 1
+    end
+
+    // After the window changed size: make the target match (the swapchain follows the surface by itself).
+    fn target_resize(vk: *vulkan.Vulkan, t: *vulkan.Target, width: int, height: int)
+    begin
+        t.wanted_width := width
+        t.wanted_height := height
+        if t.kind = 1 {
+            t.stale := 1
+            return
+        }
+        if width <= 0 || height <= 0 { return }
+        if width = t.width && height = t.height { return }
+        call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+        free_offscreen_images(vk, t)
+        t.width := width
+        t.height := height
+        offscreen_images(vk, t)
+    end
+
+    // 1 for a window swapchain, 0 for an offscreen image.
+    fn target_presents(t: *vulkan.Target): int
+    begin
+        return t.kind
     end
 
     fn target_free(vk: *vulkan.Vulkan, t: *vulkan.Target)
     begin
         call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
-        call(vk, "vkDestroyFramebuffer", vk.device, t.framebuffer, 0, 0, 0, 0)
-        call(vk, "vkDestroyRenderPass", vk.device, t.render_pass, 0, 0, 0, 0)
-        call(vk, "vkDestroyImageView", vk.device, t.color_view, 0, 0, 0, 0)
-        call(vk, "vkDestroyImage", vk.device, t.color_image, 0, 0, 0, 0)
-        call(vk, "vkFreeMemory", vk.device, t.color_memory, 0, 0, 0, 0)
-        if t.has_depth = 1 {
-            call(vk, "vkDestroyImageView", vk.device, t.depth_view, 0, 0, 0, 0)
-            call(vk, "vkDestroyImage", vk.device, t.depth_image, 0, 0, 0, 0)
-            call(vk, "vkFreeMemory", vk.device, t.depth_memory, 0, 0, 0, 0)
+        if t.kind = 0 { free_offscreen_images(vk, t) }
+        else {
+            free_swapchain_images(vk, t)
+            if t.swapchain != 0 { call(vk, "vkDestroySwapchainKHR", vk.device, t.swapchain, 0, 0, 0, 0) }
+            if t.acquired != 0 { call(vk, "vkDestroySemaphore", vk.device, t.acquired, 0, 0, 0, 0) }
+            if t.frame_fence != 0 { call(vk, "vkDestroyFence", vk.device, t.frame_fence, 0, 0, 0, 0) }
+            if t.surface != 0 { call(vk, "vkDestroySurfaceKHR", vk.instance, t.surface, 0, 0, 0, 0) }
         }
-        buffer_free(vk, t.readback)
+        if t.frame_command != 0 {
+            var commands: *void := ffi.block(16)
+            ffi.put64(commands, 0, t.frame_command)
+            call(vk, "vkFreeCommandBuffers", vk.device, vk.pool, 1, @commands, 0, 0)
+            free(commands)
+        }
+        call(vk, "vkDestroyRenderPass", vk.device, t.render_pass, 0, 0, 0, 0)
+        free(t.images)
+        free(t.views)
+        free(t.framebuffers)
+        free(t.rendered)
         free(t)
     end
 
+    // ======================================================================== shaders and pipelines
+
     fn shader_module_from_memory(vk: *vulkan.Vulkan, code: *void, size: int): int
     begin
+        if size <= 0 { return 0 }
         var info: *void := ffi.block(40)
         ffi.put32(info, 0, 16)
         ffi.put64(info, 24, size)
@@ -771,6 +1765,38 @@ begin
         return 109
     end
 
+    // A pipeline description with the defaults: no attributes, no push constants, no uniforms or textures,
+    // triangles, no culling, opaque, depth test and depth writes on (when the target has depth).
+    fn pipeline_desc(): *vulkan.PipelineDesc
+    begin
+        var d: *vulkan.PipelineDesc := alloc(160)
+        runtime.mem.set(d, 0, 160)
+        d.floats := alloc(8 * 8)
+        var i: int := 0
+        while i < 8 {
+            (*d.floats)[i] := 0
+            i := i + 1
+        }
+        d.depth_test := 1
+        d.depth_write := 1
+        return d
+    end
+
+    // Load vertex and fragment SPIR-V files into a description (returns 0 when a file cannot be read).
+    fn desc_shaders(d: *vulkan.PipelineDesc, vertex_spv: string, fragment_spv: string): int
+    begin
+        var size: *[1]int := alloc(16)
+        d.vertex_code := load_file(vertex_spv, size)
+        d.vertex_size := (*size)[0]
+        if @d.vertex_code = 0 { d.vertex_size := 0 }
+        d.fragment_code := load_file(fragment_spv, size)
+        d.fragment_size := (*size)[0]
+        if @d.fragment_code = 0 { d.fragment_size := 0 }
+        free(size)
+        if d.vertex_size = 0 || d.fragment_size = 0 { return 0 }
+        return 1
+    end
+
     // Graphics pipeline for vertices made of float attributes: floats_per_attribute[i] (1..4) floats for
     // location i, tightly packed. push_bytes is the size of the push-constant block (0 for none, at most
     // 128). cull: 0 none, 1 back faces (counter-clockwise = front). topology: 0 triangles, 1 lines, 2 points.
@@ -787,47 +1813,133 @@ begin
 
     fn pipeline_build(vk: *vulkan.Vulkan, t: *vulkan.Target, vertex_module: int, fragment_module: int, floats_per_attribute: *[8]int, attributes: int, push_bytes: int, cull: int, topology: int): *vulkan.Pipeline
     begin
+        var d: *vulkan.PipelineDesc := pipeline_desc()
+        d.attributes := attributes
+        var i: int := 0
+        while i < attributes && i < 8 {
+            (*d.floats)[i] := (*floats_per_attribute)[i]
+            i := i + 1
+        }
+        d.push_bytes := push_bytes
+        d.cull := cull
+        d.topology := topology
+        var p: *vulkan.Pipeline := pipeline_with_modules(vk, t, d, vertex_module, fragment_module)
+        free(d.floats)
+        free(d)
+        return p
+    end
+
+    // Builds a graphics pipeline from a description (shaders in d.vertex_code / d.fragment_code).
+    // Uniform buffers are at set 0, bindings 0..uniforms-1; textures (combined image samplers) follow at bindings
+    // uniforms..uniforms+textures-1. Use bindings_new to give a draw its buffers and textures.
+    fn pipeline_create(vk: *vulkan.Vulkan, t: *vulkan.Target, d: *vulkan.PipelineDesc): *vulkan.Pipeline
+    begin
+        return pipeline_with_modules(vk, t, d, shader_module_from_memory(vk, d.vertex_code, d.vertex_size), shader_module_from_memory(vk, d.fragment_code, d.fragment_size))
+    end
+
+    fn pipeline_with_modules(vk: *vulkan.Vulkan, t: *vulkan.Target, d: *vulkan.PipelineDesc, vertex_module: int, fragment_module: int): *vulkan.Pipeline
+    begin
         var none: *vulkan.Pipeline
-        var p: *vulkan.Pipeline := alloc(64)
-        p.push_bytes := push_bytes
+        var p: *vulkan.Pipeline := alloc(96)
+        runtime.mem.set(p, 0, 96)
+        p.push_bytes := d.push_bytes
         p.vertex_shader := vertex_module
         p.fragment_shader := fragment_module
+        p.uniforms := d.uniforms
+        p.textures := d.textures
         if p.vertex_shader = 0 || p.fragment_shader = 0 {
+            if p.vertex_shader != 0 { call(vk, "vkDestroyShaderModule", vk.device, p.vertex_shader, 0, 0, 0, 0) }
+            if p.fragment_shader != 0 { call(vk, "vkDestroyShaderModule", vk.device, p.fragment_shader, 0, 0, 0, 0) }
             free(p)
             return none
         }
         var out: *void := ffi.block(16)
+        // descriptor set layout + pool when the shaders use uniforms or textures
+        var set_layouts: *void := ffi.block(16)
+        var resources: int := d.uniforms + d.textures
+        if resources > 0 {
+            var bindings: *void := ffi.block(24 * resources + 8)
+            var b: int := 0
+            while b < resources {
+                ffi.put32(bindings, b * 24, b)
+                if b < d.uniforms {
+                    ffi.put32(bindings, b * 24 + 4, 6)
+                    ffi.put32(bindings, b * 24 + 12, 17)
+                }
+                else {
+                    ffi.put32(bindings, b * 24 + 4, 1)
+                    ffi.put32(bindings, b * 24 + 12, 16)
+                }
+                ffi.put32(bindings, b * 24 + 8, 1)
+                b := b + 1
+            }
+            var layout_info: *void := ffi.block(32)
+            ffi.put32(layout_info, 0, 32)
+            ffi.put32(layout_info, 20, resources)
+            ffi.put64(layout_info, 24, @bindings)
+            call(vk, "vkCreateDescriptorSetLayout", vk.device, @layout_info, 0, @out, 0, 0)
+            p.set_layout := ffi.get64(out, 0)
+            ffi.put64(set_layouts, 0, p.set_layout)
+            var sizes: *void := ffi.block(16)
+            var size_count: int := 0
+            if d.uniforms > 0 {
+                ffi.put32(sizes, 0, 6)
+                ffi.put32(sizes, 4, d.uniforms * 1024)
+                size_count := 1
+            }
+            if d.textures > 0 {
+                ffi.put32(sizes, size_count * 8, 1)
+                ffi.put32(sizes, size_count * 8 + 4, d.textures * 1024)
+                size_count := size_count + 1
+            }
+            var pool_info: *void := ffi.block(40)
+            ffi.put32(pool_info, 0, 33)
+            ffi.put32(pool_info, 16, 1)
+            ffi.put32(pool_info, 20, 1024)
+            ffi.put32(pool_info, 24, size_count)
+            ffi.put64(pool_info, 32, @sizes)
+            call(vk, "vkCreateDescriptorPool", vk.device, @pool_info, 0, @out, 0, 0)
+            p.pool := ffi.get64(out, 0)
+            free(bindings)
+            free(layout_info)
+            free(sizes)
+            free(pool_info)
+        }
         var range: *void := ffi.block(16)
         ffi.put32(range, 0, 17)
         ffi.put32(range, 4, 0)
-        ffi.put32(range, 8, push_bytes)
-        var layout_info: *void := ffi.block(48)
-        ffi.put32(layout_info, 0, 30)
-        if push_bytes > 0 {
-            ffi.put32(layout_info, 32, 1)
-            ffi.put64(layout_info, 40, @range)
+        ffi.put32(range, 8, d.push_bytes)
+        var layout_info2: *void := ffi.block(48)
+        ffi.put32(layout_info2, 0, 30)
+        if resources > 0 {
+            ffi.put32(layout_info2, 20, 1)
+            ffi.put64(layout_info2, 24, @set_layouts)
         }
-        call(vk, "vkCreatePipelineLayout", vk.device, @layout_info, 0, @out, 0, 0)
+        if d.push_bytes > 0 {
+            ffi.put32(layout_info2, 32, 1)
+            ffi.put64(layout_info2, 40, @range)
+        }
+        call(vk, "vkCreatePipelineLayout", vk.device, @layout_info2, 0, @out, 0, 0)
         p.layout := ffi.get64(out, 0)
-        var main_name: int := ffi.cstr("main")
+        var main_name: string := "main"
         var stages: *void := ffi.block(96)
         ffi.put32(stages, 0, 18)
         ffi.put32(stages, 20, 1)
         ffi.put64(stages, 24, p.vertex_shader)
-        ffi.put64(stages, 32, main_name)
+        ffi.put64(stages, 32, ffi.cstr(main_name))
         ffi.put32(stages, 48, 18)
         ffi.put32(stages, 48 + 20, 16)
         ffi.put64(stages, 48 + 24, p.fragment_shader)
-        ffi.put64(stages, 48 + 32, main_name)
-        var attribute_info: *void := ffi.block(16 * attributes + 16)
+        ffi.put64(stages, 48 + 32, ffi.cstr(main_name))
+        var attribute_info: *void := ffi.block(16 * d.attributes + 16)
         var stride: int := 0
         var i: int := 0
-        while i < attributes {
+        while i < d.attributes {
             ffi.put32(attribute_info, i * 16, i)
             ffi.put32(attribute_info, i * 16 + 4, 0)
-            ffi.put32(attribute_info, i * 16 + 8, float_format((*floats_per_attribute)[i]))
+            ffi.put32(attribute_info, i * 16 + 8, float_format((*d.floats)[i]))
             ffi.put32(attribute_info, i * 16 + 12, stride)
-            stride := stride + (*floats_per_attribute)[i] * 4
+            stride := stride + (*d.floats)[i] * 4
             i := i + 1
         }
         var binding: *void := ffi.block(16)
@@ -836,48 +1948,60 @@ begin
         ffi.put32(binding, 8, 0)
         var vertex_input: *void := ffi.block(48)
         ffi.put32(vertex_input, 0, 19)
-        ffi.put32(vertex_input, 20, 1)
-        ffi.put64(vertex_input, 24, @binding)
-        ffi.put32(vertex_input, 32, attributes)
-        ffi.put64(vertex_input, 40, @attribute_info)
+        if d.attributes > 0 {
+            ffi.put32(vertex_input, 20, 1)
+            ffi.put64(vertex_input, 24, @binding)
+            ffi.put32(vertex_input, 32, d.attributes)
+            ffi.put64(vertex_input, 40, @attribute_info)
+        }
         var assembly: *void := ffi.block(32)
         ffi.put32(assembly, 0, 20)
         var kind: int := 3
-        if topology = 1 { kind := 1 }
-        if topology = 2 { kind := 0 }
+        if d.topology = 1 { kind := 1 }
+        if d.topology = 2 { kind := 0 }
+        if d.topology = 3 { kind := 4 }
         ffi.put32(assembly, 20, kind)
-        var viewport: *void := ffi.block(32)
-        ffi.put_float32(viewport, 0, 0.0)
-        ffi.put_float32(viewport, 4, 0.0)
-        ffi.put_float32(viewport, 8, t.width * 1.0)
-        ffi.put_float32(viewport, 12, t.height * 1.0)
-        ffi.put_float32(viewport, 16, 0.0)
-        ffi.put_float32(viewport, 20, 1.0)
-        var scissor: *void := ffi.block(16)
-        ffi.put32(scissor, 8, t.width)
-        ffi.put32(scissor, 12, t.height)
+        // viewport and scissor are set per frame (dynamic state), so a pipeline survives window resizes
         var viewport_state: *void := ffi.block(48)
         ffi.put32(viewport_state, 0, 22)
         ffi.put32(viewport_state, 20, 1)
-        ffi.put64(viewport_state, 24, @viewport)
         ffi.put32(viewport_state, 32, 1)
-        ffi.put64(viewport_state, 40, @scissor)
+        var dynamic_states: *void := ffi.block(16)
+        ffi.put32(dynamic_states, 0, 0)
+        ffi.put32(dynamic_states, 4, 1)
+        var dynamic: *void := ffi.block(32)
+        ffi.put32(dynamic, 0, 27)
+        ffi.put32(dynamic, 20, 2)
+        ffi.put64(dynamic, 24, @dynamic_states)
         var raster: *void := ffi.block(64)
         ffi.put32(raster, 0, 23)
         ffi.put32(raster, 28, 0)
-        if cull = 1 { ffi.put32(raster, 32, 2) }
+        if d.cull = 1 { ffi.put32(raster, 32, 2) }
+        if d.cull = 2 { ffi.put32(raster, 32, 1) }
         ffi.put32(raster, 36, 0)
         ffi.put_float32(raster, 56, 1.0)
         var multisample: *void := ffi.block(48)
         ffi.put32(multisample, 0, 24)
         ffi.put32(multisample, 20, 1)
+        ffi.put_float32(multisample, 28, 1.0)
         var depth_state: *void := ffi.block(104)
         ffi.put32(depth_state, 0, 25)
-        ffi.put32(depth_state, 20, t.has_depth)
-        ffi.put32(depth_state, 24, t.has_depth)
-        ffi.put32(depth_state, 28, 1)
+        if t.has_depth = 1 {
+            ffi.put32(depth_state, 20, d.depth_test)
+            ffi.put32(depth_state, 24, d.depth_write)
+        }
+        ffi.put32(depth_state, 28, 3)
         ffi.put_float32(depth_state, 100, 1.0)
         var blend_attachment: *void := ffi.block(32)
+        if d.blend = 1 {
+            ffi.put32(blend_attachment, 0, 1)
+            ffi.put32(blend_attachment, 4, 6)
+            ffi.put32(blend_attachment, 8, 7)
+            ffi.put32(blend_attachment, 12, 0)
+            ffi.put32(blend_attachment, 16, 1)
+            ffi.put32(blend_attachment, 20, 7)
+            ffi.put32(blend_attachment, 24, 0)
+        }
         ffi.put32(blend_attachment, 28, 15)
         var blend: *void := ffi.block(56)
         ffi.put32(blend, 0, 26)
@@ -894,6 +2018,7 @@ begin
         ffi.put64(info, 72, @multisample)
         ffi.put64(info, 80, @depth_state)
         ffi.put64(info, 88, @blend)
+        ffi.put64(info, 96, @dynamic)
         ffi.put64(info, 104, p.layout)
         ffi.put64(info, 112, t.render_pass)
         ffi.put32(info, 120, 0)
@@ -905,16 +2030,17 @@ begin
         }
         p.handle := ffi.get64(out, 0)
         free(out)
+        free(set_layouts)
         free(range)
-        free(layout_info)
+        free(layout_info2)
         free(stages)
         free(attribute_info)
         free(binding)
         free(vertex_input)
         free(assembly)
-        free(viewport)
-        free(scissor)
         free(viewport_state)
+        free(dynamic_states)
+        free(dynamic)
         free(raster)
         free(multisample)
         free(depth_state)
@@ -929,18 +2055,317 @@ begin
         call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
         call(vk, "vkDestroyPipeline", vk.device, p.handle, 0, 0, 0, 0)
         call(vk, "vkDestroyPipelineLayout", vk.device, p.layout, 0, 0, 0, 0)
+        if p.pool != 0 { call(vk, "vkDestroyDescriptorPool", vk.device, p.pool, 0, 0, 0, 0) }
+        if p.set_layout != 0 { call(vk, "vkDestroyDescriptorSetLayout", vk.device, p.set_layout, 0, 0, 0, 0) }
         call(vk, "vkDestroyShaderModule", vk.device, p.vertex_shader, 0, 0, 0, 0)
         call(vk, "vkDestroyShaderModule", vk.device, p.fragment_shader, 0, 0, 0, 0)
         free(p)
     end
 
-    // Start recording a frame: clears color to (r, g, b) in 0.0..1.0 and depth to 1.0.
-    fn frame_begin(vk: *vulkan.Vulkan, t: *vulkan.Target, r: flt, g: flt, b: flt)
+    // ======================================================================== descriptor sets
+
+    // A set of buffers/textures for draws with pipeline `p` (null when the pipeline has none or the pool is full).
+    fn bindings_new(vk: *vulkan.Vulkan, p: *vulkan.Pipeline): *vulkan.Bindings
     begin
-        var begin_info: *void := ffi.block(32)
-        ffi.put32(begin_info, 0, 42)
-        ffi.put32(begin_info, 16, 1)
-        call(vk, "vkBeginCommandBuffer", vk.command, @begin_info, 0, 0, 0, 0)
+        var none: *vulkan.Bindings
+        if p.set_layout = 0 { return none }
+        var layouts: *void := ffi.block(16)
+        ffi.put64(layouts, 0, p.set_layout)
+        var info: *void := ffi.block(40)
+        ffi.put32(info, 0, 34)
+        ffi.put64(info, 16, p.pool)
+        ffi.put32(info, 24, 1)
+        ffi.put64(info, 32, @layouts)
+        var out: *void := ffi.block(16)
+        var result: int := call(vk, "vkAllocateDescriptorSets", vk.device, @info, @out, 0, 0, 0)
+        var b: *vulkan.Bindings := alloc(16)
+        b.set := ffi.get64(out, 0)
+        b.pipeline := p
+        free(layouts)
+        free(info)
+        free(out)
+        if result != 0 {
+            free(b)
+            return none
+        }
+        return b
+    end
+
+    // Uniform buffer number `index` (binding `index`) of a draw.
+    fn bind_uniform(vk: *vulkan.Vulkan, b: *vulkan.Bindings, index: int, buffer: *vulkan.Buffer)
+    begin
+        var buffer_info: *void := ffi.block(24)
+        ffi.put64(buffer_info, 0, buffer.handle)
+        ffi.put64(buffer_info, 8, 0)
+        ffi.put64(buffer_info, 16, -1)
+        var write: *void := ffi.block(64)
+        ffi.put32(write, 0, 35)
+        ffi.put64(write, 16, b.set)
+        ffi.put32(write, 24, index)
+        ffi.put32(write, 32, 1)
+        ffi.put32(write, 36, 6)
+        ffi.put64(write, 48, @buffer_info)
+        ffi.call5(address(vk, "vkUpdateDescriptorSets"), vk.device, 1, @write, 0, 0)
+        free(buffer_info)
+        free(write)
+    end
+
+    // Texture number `index` (binding uniforms + index) of a draw.
+    fn bind_texture(vk: *vulkan.Vulkan, b: *vulkan.Bindings, index: int, tex: *vulkan.Texture)
+    begin
+        var image_info: *void := ffi.block(24)
+        ffi.put64(image_info, 0, tex.sampler)
+        ffi.put64(image_info, 8, tex.view)
+        ffi.put32(image_info, 16, 5)
+        var write: *void := ffi.block(64)
+        ffi.put32(write, 0, 35)
+        ffi.put64(write, 16, b.set)
+        ffi.put32(write, 24, b.pipeline.uniforms + index)
+        ffi.put32(write, 32, 1)
+        ffi.put32(write, 36, 1)
+        ffi.put64(write, 40, @image_info)
+        ffi.call5(address(vk, "vkUpdateDescriptorSets"), vk.device, 1, @write, 0, 0)
+        free(image_info)
+        free(write)
+    end
+
+    fn bindings_free(vk: *vulkan.Vulkan, b: *vulkan.Bindings)
+    begin
+        call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+        var sets: *void := ffi.block(16)
+        ffi.put64(sets, 0, b.set)
+        call(vk, "vkFreeDescriptorSets", vk.device, b.pipeline.pool, 1, @sets, 0, 0)
+        free(sets)
+        free(b)
+    end
+
+    // ======================================================================== textures
+
+    fn mip_levels(width: int, height: int): int
+    begin
+        var size: int := width
+        if height > size { size := height }
+        var levels: int := 1
+        while size > 1 {
+            size := size / 2
+            levels := levels + 1
+        }
+        return levels
+    end
+
+    // A width x height RGBA texture. flags: 1 smooth (linear) filtering, else nearest (pixel art);
+    // 2 clamp to the edge, else repeat; 4 mipmaps (smoother when drawn small).
+    fn texture_new(vk: *vulkan.Vulkan, width: int, height: int, flags: int): *vulkan.Texture
+    begin
+        var tex: *vulkan.Texture := alloc(80)
+        runtime.mem.set(tex, 0, 80)
+        tex.width := width
+        tex.height := height
+        tex.levels := 1
+        var blit_bits: int := 1024 | 2048 | 4096
+        if (flags & 4) != 0 && (vk.rgba_features & blit_bits) = blit_bits { tex.levels := mip_levels(width, height) }
+        var usage: int := 2 | 4
+        if tex.levels > 1 { usage := usage | 1 }
+        var out: *void := ffi.block(16)
+        tex.image := make_image_levels(vk, width, height, 37, usage, tex.levels, out)
+        tex.memory := image_memory(vk, tex.image, 1)
+        tex.view := make_view_levels(vk, tex.image, 37, 1, tex.levels, out)
+        tex.layout := 0
+        var filter: int := 0
+        if (flags & 1) != 0 { filter := 1 }
+        var address_mode: int := 0
+        if (flags & 2) != 0 { address_mode := 2 }
+        var info: *void := ffi.block(80)
+        ffi.put32(info, 0, 31)
+        ffi.put32(info, 20, filter)
+        ffi.put32(info, 24, filter)
+        ffi.put32(info, 28, filter)
+        ffi.put32(info, 32, address_mode)
+        ffi.put32(info, 36, address_mode)
+        ffi.put32(info, 40, address_mode)
+        ffi.put_float32(info, 44, 0.0)
+        ffi.put32(info, 48, 0)
+        ffi.put_float32(info, 52, 1.0)
+        ffi.put32(info, 56, 0)
+        ffi.put32(info, 60, 7)
+        ffi.put_float32(info, 64, 0.0)
+        ffi.put_float32(info, 68, tex.levels * 1.0)
+        ffi.put32(info, 72, 0)
+        ffi.put32(info, 76, 0)
+        call(vk, "vkCreateSampler", vk.device, @info, 0, @out, 0, 0)
+        tex.sampler := ffi.get64(out, 0)
+        free(info)
+        free(out)
+        return tex
+    end
+
+    // Upload RGBA bytes (width * height * 4, row by row) into a texture and build its mipmaps.
+    fn texture_upload_rgba(vk: *vulkan.Vulkan, tex: *vulkan.Texture, rgba: *void): int
+    begin
+        var bytes: int := tex.width * tex.height * 4
+        var staging: *vulkan.Buffer := buffer_new_usage(vk, bytes, 1)
+        if @staging = 0 { return -2 }
+        runtime.mem.copy(staging.data, rgba, bytes)
+        var result: int := texture_from_staging(vk, tex, staging)
+        buffer_free(vk, staging)
+        return result
+    end
+
+    // Upload canvas-style pixels (ints 0xRRGGBB, rows `stride` ints apart) as an opaque texture.
+    fn texture_upload(vk: *vulkan.Vulkan, tex: *vulkan.Texture, pixels: *[268435456]int, stride: int): int
+    begin
+        return texture_upload_keyed(vk, tex, pixels, stride, -1)
+    end
+
+    // Like texture_upload, but pixels of color `key` become fully transparent (for sprites).
+    fn texture_upload_keyed(vk: *vulkan.Vulkan, tex: *vulkan.Texture, pixels: *[268435456]int, stride: int, key: int): int
+    begin
+        var bytes: int := tex.width * tex.height * 4
+        var staging: *vulkan.Buffer := buffer_new_usage(vk, bytes, 1)
+        if @staging = 0 { return -2 }
+        var y: int := 0
+        while y < tex.height {
+            var x: int := 0
+            var line: *void := staging.data + y * tex.width * 4
+            while x < tex.width {
+                var c: int := (*pixels)[y * stride + x] & 16777215
+                var alpha: int := 255
+                if c = key { alpha := 0 }
+                runtime.hw.write32(line + x * 4, ((c >> 16) & 255) | (c & 65280) | ((c & 255) << 16) | (alpha << 24))
+                x := x + 1
+            }
+            y := y + 1
+        }
+        var result: int := texture_from_staging(vk, tex, staging)
+        buffer_free(vk, staging)
+        return result
+    end
+
+    fn texture_from_staging(vk: *vulkan.Vulkan, tex: *vulkan.Texture, staging: *vulkan.Buffer): int
+    begin
+        var result: int := single_begin(vk)
+        if result != 0 { return result }
+        var src_access: int := 0
+        var src_stage: int := 1
+        if tex.layout = 5 {
+            src_access := 32
+            src_stage := 128
+        }
+        image_barrier(vk, vk.single, tex.image, 1, tex.layout, 7, src_access, 4096, src_stage, 4096, 0, tex.levels)
+        var region: *void := ffi.block(64)
+        ffi.put32(region, 16, 1)
+        ffi.put32(region, 20, 0)
+        ffi.put32(region, 28, 1)
+        ffi.put32(region, 44, tex.width)
+        ffi.put32(region, 48, tex.height)
+        ffi.put32(region, 52, 1)
+        call(vk, "vkCmdCopyBufferToImage", vk.single, staging.handle, tex.image, 7, 1, @region)
+        free(region)
+        // mip chain: each level is a linear blit of the one above
+        var level: int := 1
+        var w: int := tex.width
+        var h: int := tex.height
+        var blit: *void := ffi.block(80)
+        while level < tex.levels {
+            image_barrier(vk, vk.single, tex.image, 1, 7, 6, 4096, 2048, 4096, 4096, level - 1, 1)
+            var nw: int := w / 2
+            var nh: int := h / 2
+            if nw < 1 { nw := 1 }
+            if nh < 1 { nh := 1 }
+            runtime.mem.set(blit, 0, 80)
+            ffi.put32(blit, 0, 1)
+            ffi.put32(blit, 4, level - 1)
+            ffi.put32(blit, 12, 1)
+            ffi.put32(blit, 28, w)
+            ffi.put32(blit, 32, h)
+            ffi.put32(blit, 36, 1)
+            ffi.put32(blit, 40, 1)
+            ffi.put32(blit, 44, level)
+            ffi.put32(blit, 52, 1)
+            ffi.put32(blit, 68, nw)
+            ffi.put32(blit, 72, nh)
+            ffi.put32(blit, 76, 1)
+            call8(vk, "vkCmdBlitImage", vk.single, tex.image, 6, tex.image, 7, 1, @blit, 1)
+            image_barrier(vk, vk.single, tex.image, 1, 6, 5, 2048, 32, 4096, 128, level - 1, 1)
+            w := nw
+            h := nh
+            level := level + 1
+        }
+        free(blit)
+        image_barrier(vk, vk.single, tex.image, 1, 7, 5, 4096, 32, 4096, 128, tex.levels - 1, 1)
+        tex.layout := 5
+        return single_end(vk)
+    end
+
+    fn texture_free(vk: *vulkan.Vulkan, tex: *vulkan.Texture)
+    begin
+        call(vk, "vkDeviceWaitIdle", vk.device, 0, 0, 0, 0, 0)
+        call(vk, "vkDestroySampler", vk.device, tex.sampler, 0, 0, 0, 0)
+        call(vk, "vkDestroyImageView", vk.device, tex.view, 0, 0, 0, 0)
+        call(vk, "vkDestroyImage", vk.device, tex.image, 0, 0, 0, 0)
+        call(vk, "vkFreeMemory", vk.device, tex.memory, 0, 0, 0, 0)
+        free(tex)
+    end
+
+    // ======================================================================== frames
+
+    fn set_viewport(vk: *vulkan.Vulkan, command: int, width: int, height: int)
+    begin
+        var viewport: *void := ffi.block(32)
+        ffi.put_float32(viewport, 0, 0.0)
+        ffi.put_float32(viewport, 4, 0.0)
+        ffi.put_float32(viewport, 8, width * 1.0)
+        ffi.put_float32(viewport, 12, height * 1.0)
+        ffi.put_float32(viewport, 16, 0.0)
+        ffi.put_float32(viewport, 20, 1.0)
+        call(vk, "vkCmdSetViewport", command, 0, 1, @viewport, 0, 0)
+        var scissor: *void := ffi.block(16)
+        ffi.put32(scissor, 8, width)
+        ffi.put32(scissor, 12, height)
+        call(vk, "vkCmdSetScissor", command, 0, 1, @scissor, 0, 0)
+        free(viewport)
+        free(scissor)
+    end
+
+    // Start recording a frame: clears color to (r, g, b) in 0.0..1.0 and depth to 1.0. Returns 0 when the frame
+    // can be drawn; otherwise (minimized window, lost surface) skip drawing and frame_end does nothing.
+    // When it returns, the GPU has finished the previous frame of this target, so buffers can be changed freely.
+    fn frame_begin(vk: *vulkan.Vulkan, t: *vulkan.Target, r: flt, g: flt, b: flt): int
+    begin
+        t.recording := 0
+        var framebuffer: int := t.framebuffer
+        if t.kind = 1 {
+            if t.stale = 1 || t.width = 0 {
+                wait_fence(vk, t.frame_fence)
+                var built: int := build_swapchain(vk, t)
+                if built <= 0 { return 1 }
+            }
+            wait_fence(vk, t.frame_fence)
+            var index_out: *void := ffi.block(16)
+            var acquire: int := call(vk, "vkAcquireNextImageKHR", vk.device, t.swapchain, -1, t.acquired, 0, @index_out)
+            if acquire = -1000001004 {
+                if build_swapchain(vk, t) <= 0 {
+                    free(index_out)
+                    return 1
+                }
+                acquire := call(vk, "vkAcquireNextImageKHR", vk.device, t.swapchain, -1, t.acquired, 0, @index_out)
+            }
+            if acquire = 1000001003 {
+                t.stale := 1
+                acquire := 0
+            }
+            if acquire != 0 {
+                free(index_out)
+                return acquire
+            }
+            t.image_index := ffi.get32(index_out, 0)
+            free(index_out)
+            reset_fence(vk, t.frame_fence)
+            framebuffer := (*t.framebuffers)[t.image_index]
+        }
+        var result: int := begin_commands(vk, t.frame_command)
+        if result != 0 { return result }
+        vk.command := t.frame_command
         var clears: *void := ffi.block(32)
         ffi.put_float32(clears, 0, r)
         ffi.put_float32(clears, 4, g)
@@ -950,88 +2375,143 @@ begin
         var pass: *void := ffi.block(64)
         ffi.put32(pass, 0, 43)
         ffi.put64(pass, 16, t.render_pass)
-        ffi.put64(pass, 24, t.framebuffer)
+        ffi.put64(pass, 24, framebuffer)
         ffi.put32(pass, 40, t.width)
         ffi.put32(pass, 44, t.height)
         ffi.put32(pass, 48, 1 + t.has_depth)
         ffi.put64(pass, 56, @clears)
         call(vk, "vkCmdBeginRenderPass", vk.command, @pass, 0, 0, 0, 0)
-        free(begin_info)
+        set_viewport(vk, vk.command, t.width, t.height)
         free(clears)
         free(pass)
+        t.recording := 1
+        return 0
+    end
+
+    fn bind_vertices(vk: *vulkan.Vulkan, vertices: *vulkan.Buffer)
+    begin
+        if @vertices = 0 { return }
+        var handles: *void := ffi.block(16)
+        var offsets: *void := ffi.block(16)
+        ffi.put64(handles, 0, vertices.handle)
+        ffi.call5(address(vk, "vkCmdBindVertexBuffers"), vk.command, 0, 1, @handles, @offsets)
+        free(handles)
+        free(offsets)
+    end
+
+    fn bind_set(vk: *vulkan.Vulkan, p: *vulkan.Pipeline, b: *vulkan.Bindings)
+    begin
+        if @b = 0 { return }
+        var sets: *void := ffi.block(16)
+        ffi.put64(sets, 0, b.set)
+        call8(vk, "vkCmdBindDescriptorSets", vk.command, 0, p.layout, 0, 1, @sets, 0, 0)
+        free(sets)
     end
 
     // Draw `vertex_count` vertices from `vertices` with `pipeline`. push points at the push-constant bytes.
     fn frame_draw(vk: *vulkan.Vulkan, p: *vulkan.Pipeline, vertices: *vulkan.Buffer, vertex_count: int, push: *void)
     begin
-        call(vk, "vkCmdBindPipeline", vk.command, 0, p.handle, 0, 0, 0)
-        var handles: *void := ffi.block(16)
-        var offsets: *void := ffi.block(16)
-        ffi.put64(handles, 0, vertices.handle)
-        ffi.call5(proc(vk.instance, "vkCmdBindVertexBuffers"), vk.command, 0, 1, @handles, @offsets)
-        if p.push_bytes > 0 { call(vk, "vkCmdPushConstants", vk.command, p.layout, 17, 0, p.push_bytes, @push) }
-        call(vk, "vkCmdDraw", vk.command, vertex_count, 1, 0, 0, 0)
-        free(handles)
-        free(offsets)
+        var nothing: *vulkan.Bindings
+        frame_draw_with(vk, p, nothing, vertices, vertex_count, push)
     end
 
     // Indexed draw: `indices` holds 32-bit indices.
     fn frame_draw_indexed(vk: *vulkan.Vulkan, p: *vulkan.Pipeline, vertices: *vulkan.Buffer, indices: *vulkan.Buffer, index_count: int, push: *void)
     begin
+        var nothing: *vulkan.Bindings
+        frame_draw_indexed_with(vk, p, nothing, vertices, indices, index_count, push)
+    end
+
+    // Draw with uniform buffers / textures (b may be null). vertices may be null for shaders that make their own.
+    fn frame_draw_with(vk: *vulkan.Vulkan, p: *vulkan.Pipeline, b: *vulkan.Bindings, vertices: *vulkan.Buffer, vertex_count: int, push: *void)
+    begin
         call(vk, "vkCmdBindPipeline", vk.command, 0, p.handle, 0, 0, 0)
-        var handles: *void := ffi.block(16)
-        var offsets: *void := ffi.block(16)
-        ffi.put64(handles, 0, vertices.handle)
-        ffi.call5(proc(vk.instance, "vkCmdBindVertexBuffers"), vk.command, 0, 1, @handles, @offsets)
+        bind_set(vk, p, b)
+        bind_vertices(vk, vertices)
+        if p.push_bytes > 0 { call(vk, "vkCmdPushConstants", vk.command, p.layout, 17, 0, p.push_bytes, @push) }
+        call(vk, "vkCmdDraw", vk.command, vertex_count, 1, 0, 0, 0)
+    end
+
+    fn frame_draw_indexed_with(vk: *vulkan.Vulkan, p: *vulkan.Pipeline, b: *vulkan.Bindings, vertices: *vulkan.Buffer, indices: *vulkan.Buffer, index_count: int, push: *void)
+    begin
+        call(vk, "vkCmdBindPipeline", vk.command, 0, p.handle, 0, 0, 0)
+        bind_set(vk, p, b)
+        bind_vertices(vk, vertices)
         call(vk, "vkCmdBindIndexBuffer", vk.command, indices.handle, 0, 1, 0, 0)
         if p.push_bytes > 0 { call(vk, "vkCmdPushConstants", vk.command, p.layout, 17, 0, p.push_bytes, @push) }
         call(vk, "vkCmdDrawIndexed", vk.command, index_count, 1, 0, 0, 0)
-        free(handles)
-        free(offsets)
     end
 
-    // Finish the frame: copies the image into the target's readback buffer, submits and waits.
+    // Finish the frame. Offscreen: copies the image into the readback buffer, submits and waits (then use
+    // read_pixels / pixel). Window: submits and presents. Returns 0 on success.
     fn frame_end(vk: *vulkan.Vulkan, t: *vulkan.Target): int
     begin
+        if t.recording = 0 { return 0 }
+        t.recording := 0
         call(vk, "vkCmdEndRenderPass", vk.command, 0, 0, 0, 0, 0)
-        var region: *void := ffi.block(64)
-        ffi.put32(region, 16, 1)
-        ffi.put32(region, 28, 1)
-        ffi.put32(region, 44, t.width)
-        ffi.put32(region, 48, t.height)
-        ffi.put32(region, 52, 1)
-        call(vk, "vkCmdCopyImageToBuffer", vk.command, t.color_image, 6, t.readback.handle, 1, @region)
+        if t.kind = 0 {
+            var region: *void := ffi.block(64)
+            ffi.put32(region, 16, 1)
+            ffi.put32(region, 28, 1)
+            ffi.put32(region, 44, t.width)
+            ffi.put32(region, 48, t.height)
+            ffi.put32(region, 52, 1)
+            call(vk, "vkCmdCopyImageToBuffer", vk.command, t.color_image, 6, t.readback.handle, 1, @region)
+            free(region)
+            memory_barrier(vk, vk.command, 4096, 4096, 16384, 8192)
+            call(vk, "vkEndCommandBuffer", vk.command, 0, 0, 0, 0, 0)
+            var result: int := submit(vk, vk.command, 0, 0, 0, vk.fence)
+            if result = 0 { result := wait_fence(vk, vk.fence) }
+            reset_fence(vk, vk.fence)
+            return result
+        }
         call(vk, "vkEndCommandBuffer", vk.command, 0, 0, 0, 0, 0)
-        var commands: *void := ffi.block(16)
-        ffi.put64(commands, 0, vk.command)
-        var submit: *void := ffi.block(72)
-        ffi.put32(submit, 0, 4)
-        ffi.put32(submit, 40, 1)
-        ffi.put64(submit, 48, @commands)
-        var result: int := call(vk, "vkQueueSubmit", vk.queue, 1, @submit, 0, 0, 0)
-        if result = 0 { result := call(vk, "vkQueueWaitIdle", vk.queue, 0, 0, 0, 0, 0) }
-        free(region)
-        free(commands)
-        free(submit)
-        return result
+        var rendered: int := (*t.rendered)[t.image_index]
+        var submitted: int := submit(vk, vk.command, t.acquired, 1024, rendered, t.frame_fence)
+        if submitted != 0 { return submitted }
+        var waits: *void := ffi.block(16)
+        ffi.put64(waits, 0, rendered)
+        var chains: *void := ffi.block(16)
+        ffi.put64(chains, 0, t.swapchain)
+        var indices: *void := ffi.block(16)
+        ffi.put32(indices, 0, t.image_index)
+        var info: *void := ffi.block(64)
+        ffi.put32(info, 0, 1000001001)
+        ffi.put32(info, 16, 1)
+        ffi.put64(info, 24, @waits)
+        ffi.put32(info, 32, 1)
+        ffi.put64(info, 40, @chains)
+        ffi.put64(info, 48, @indices)
+        var presented: int := call(vk, "vkQueuePresentKHR", vk.queue, @info, 0, 0, 0, 0)
+        free(waits)
+        free(chains)
+        free(indices)
+        free(info)
+        if presented = -1000001004 || presented = 1000001003 {
+            t.stale := 1
+            return 0
+        }
+        return presented
     end
 
-    // Pixel (x, y) of the last rendered frame as 0xRRGGBB.
+    // Pixel (x, y) of the last rendered offscreen frame as 0xRRGGBB.
     fn pixel(t: *vulkan.Target, x: int, y: int): int
     begin
         var v: int := ffi.get32(t.readback.data, (y * t.width + x) * 4)
         return ((v & 255) << 16) | (v & 65280) | ((v >> 16) & 255)
     end
 
-    // Copy the last rendered frame into a canvas (same size or larger). Takes the canvas pixel array.
+    // Copy the last rendered offscreen frame into a canvas (same size or larger). Takes the canvas pixel array.
     fn read_pixels(t: *vulkan.Target, pixels: *[268435456]int, stride: int)
     begin
         var y: int := 0
         while y < t.height {
             var x: int := 0
+            var line: *void := t.readback.data + y * t.width * 4
+            var base: int := y * stride
             while x < t.width {
-                var v: int := ffi.get32(t.readback.data, (y * t.width + x) * 4)
-                (*pixels)[y * stride + x] := ((v & 255) << 16) | (v & 65280) | ((v >> 16) & 255)
+                var v: int := runtime.hw.read32(line + x * 4)
+                (*pixels)[base + x] := ((v & 255) << 16) | (v & 65280) | ((v >> 16) & 255)
                 x := x + 1
             }
             y := y + 1

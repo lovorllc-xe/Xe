@@ -9,7 +9,7 @@ xe_command="${XE:-$project_dir/build/xe}"
 export XE_HOME="${XE_HOME:-$project_dir}"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/xe-wintests.XXXXXX")"
 trap 'rm -rf "$temp_dir"' EXIT
-skip=" lib_network_test lib_system_test lib_misc_test lib_vulkan_test "
+skip=" lib_network_test lib_system_test lib_misc_test "
 passed=0; failed=0; skipped=0
 for source_file in "$script_dir"/*.xe; do
     name="$(basename "$source_file" .xe)"

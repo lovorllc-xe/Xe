@@ -1,0 +1,31 @@
+// vkplatform (Windows): makes a Vulkan surface (VkSurfaceKHR) for a Win32 window.
+uses vulkan
+uses ffi
+uses win32
+
+module vkplatform
+begin
+    // Returns the surface, or 0 when this window cannot be presented to.
+    fn create_surface(vk: *vulkan.Vulkan, kind: int, handle: int): int
+    begin
+        if kind != 2 || handle = 0 { return 0 }
+        if vulkan.instance_extension(vk, "VK_KHR_win32_surface") = 0 { return 0 }
+        var create: int := vulkan.address(vk, "vkCreateWin32SurfaceKHR")
+        var module: int := win32.proc("kernel32.dll", "GetModuleHandleA")
+        if create = 0 || module = 0 { return 0 }
+        var args: *[16]int := alloc(128)
+        (*args)[0] := 0
+        var instance: int := win32.call(module, args, 1)
+        free(args)
+        var info: *void := ffi.block(48)
+        ffi.put32(info, 0, 1000009000)
+        ffi.put64(info, 24, instance)
+        ffi.put64(info, 32, handle)
+        var out: *void := ffi.block(16)
+        var surface: int := 0
+        if ffi.int32(ffi.call4(create, vk.instance, @info, 0, @out)) = 0 { surface := ffi.get64(out, 0) }
+        free(info)
+        free(out)
+        return surface
+    end
+end

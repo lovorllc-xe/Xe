@@ -1,6 +1,6 @@
 # Xe library index
 
-169 importable libraries. Add one with `uses name` at the top of a source file.
+170 importable libraries. Add one with `uses name` at the top of a source file.
 
 ## Containers
 
@@ -172,8 +172,8 @@
 | `gfx3d` | a software 3D renderer - vectors, 4x4 matrices, meshes (cube, plane, sphere, torus, OBJ files), |
 | `game` | building blocks for 2D games - collision tests, tile maps, sprite sheets and animation, |
 | `vkscene` | GPU-rendered 3D scenes with Vulkan, ready to use. It bundles lit vertex/fragment shaders, uploads |
-| `vulkan` | Vulkan bindings written in Xe. The program links dynamically against the system Vulkan loader |
-| `ffi` | call C functions from shared libraries (Vulkan, libc, ...) and build C structs in raw memory. |
+| `vulkan` | Vulkan for Xe, on every platform and GPU. The Vulkan loader is opened at run time (libvulkan.so.1 on |
+| `ffi` | call C functions in shared libraries and build C structs in raw memory, the same way on every platform. |
 
 ## Concurrency
 
@@ -223,5 +223,6 @@
 
 | Library | What it does |
 |---|---|
+| `vkwindow` | show Vulkan rendering in a `window`, the same way on every platform. |
 | `wayland` | a pure-Xe Wayland client. It speaks the Wayland wire protocol over the compositor's Unix |
 | `wevent` | the window event record and event kinds shared by every window backend (X11, Wayland, Win32, ...). |

@@ -1,0 +1,206 @@
+// ccall (Linux): calls C functions with the System V x86-64 calling convention and loads shared libraries at run
+// time (dlopen/dlsym). This is the platform half of `ffi`; programs use `ffi`, the compiler picks this file
+// for `-p linux`. Linking against libdl makes the program dynamically linked, but no library has to exist at
+// build time: everything else is loaded when the program asks for it.
+// xe-link: libdl.so.2
+// xe-link: libc.so.6
+
+module ccall
+begin
+    fn call0(target: int): int
+    begin
+        asm {
+            mov rax, rdi
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call1(target: int, a: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call2(target: int, a: int, b: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call3(target: int, a: int, b: int, c: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call4(target: int, a: int, b: int, c: int, d: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call5(target: int, a: int, b: int, c: int, d: int, e: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call6(target: int, a: int, b: int, c: int, d: int, e: int, f: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            mov r9, qword ptr [rbp+16]
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call8(target: int, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            mov r9, qword ptr [rbp+16]
+            and rsp, -16
+            push qword ptr [rbp+32]
+            push qword ptr [rbp+24]
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call10(target: int, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int, j: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            mov r9, qword ptr [rbp+16]
+            and rsp, -16
+            push qword ptr [rbp+48]
+            push qword ptr [rbp+40]
+            push qword ptr [rbp+32]
+            push qword ptr [rbp+24]
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    // Address of the first byte of a string (Xe strings are NUL terminated, so they are valid C strings).
+    fn cstr(text: string): int
+    begin
+        var holder: *[1]string := alloc(16)
+        (*holder)[0] := text
+        var raw: *void := holder
+        var address: int := runtime.hw.read32(raw) & 4294967295
+        address := address | ((runtime.hw.read32(raw + 4) & 4294967295) << 32)
+        free(holder)
+        return address
+    end
+
+    fn dlopen_address(): int
+    begin
+        asm {
+            mov rax, qword ptr [rip+dlopen@GOTPCREL]
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn dlsym_address(): int
+    begin
+        asm {
+            mov rax, qword ptr [rip+dlsym@GOTPCREL]
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn convention(): string
+    begin
+        return "sysv"
+    end
+
+    // Loads a shared library ("libvulkan.so.1"); returns its handle, or 0 when it cannot be loaded.
+    fn open_library(name: string): int
+    begin
+        return call2(dlopen_address(), cstr(name), 2)
+    end
+
+    // Address of a function in a loaded library, or 0.
+    fn symbol(library: int, name: string): int
+    begin
+        if library = 0 { return 0 }
+        return call2(dlsym_address(), library, cstr(name))
+    end
+end

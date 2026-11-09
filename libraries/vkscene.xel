@@ -24,6 +24,7 @@ begin
         push: *void
         width: int
         height: int
+        owned: int
     end
 
     type Model: record
@@ -124,15 +125,25 @@ begin
         return text
     end
 
-    // A drawing context of width x height pixels (uses its own render target and pipeline).
+    // A drawing context of width x height pixels (uses its own offscreen render target and pipeline).
     fn new(vk: *vulkan.Vulkan, width: int, height: int): *vkscene.Scene
+    begin
+        var scene: *vkscene.Scene := new_on(vk, vulkan.target_new(vk, width, height, 1))
+        if @scene != 0 { scene.owned := 1 }
+        return scene
+    end
+
+    // A drawing context that renders into an existing target with a depth buffer (for example the swapchain of a
+    // window made with vkwindow.new). The target stays yours: release does not free it.
+    fn new_on(vk: *vulkan.Vulkan, target: *vulkan.Target): *vkscene.Scene
     begin
         var none: *vkscene.Scene
         var scene: *vkscene.Scene := alloc(64)
+        runtime.mem.set(scene, 0, 64)
         scene.vk := vk
-        scene.width := width
-        scene.height := height
-        scene.target := vulkan.target_new(vk, width, height, 1)
+        scene.width := target.width
+        scene.height := target.height
+        scene.target := target
         var sizes: *[1]int := alloc(16)
         var vertex_code: *void := decode(vertex_spirv(), sizes)
         var vertex_size: int := (*sizes)[0]
@@ -158,7 +169,7 @@ begin
     fn release(scene: *vkscene.Scene)
     begin
         vulkan.pipeline_free(scene.vk, scene.pipeline)
-        vulkan.target_free(scene.vk, scene.target)
+        if scene.owned = 1 { vulkan.target_free(scene.vk, scene.target) }
         free(scene.push)
         free(scene)
     end
@@ -207,15 +218,16 @@ begin
     end
 
     // Begin a frame with the given background color (0.0 - 1.0).
-    fn start(scene: *vkscene.Scene, r: flt, g: flt, b: flt)
+    // Returns 0 when the frame can be drawn (nonzero: skip it, for example while the window is minimized).
+    fn start(scene: *vkscene.Scene, r: flt, g: flt, b: flt): int
     begin
-        vulkan.frame_begin(scene.vk, scene.target, r, g, b)
+        return vulkan.frame_begin(scene.vk, scene.target, r, g, b)
     end
 
     // Draw a model transformed by `model_matrix` (a gfx3d mat4) seen from a camera looking at a target.
     fn draw(scene: *vkscene.Scene, m: *vkscene.Model, model_matrix: *[16]flt, eye_x: flt, eye_y: flt, eye_z: flt, target_x: flt, target_y: flt, target_z: flt, fov_degrees: flt)
     begin
-        var aspect: flt := scene.width * 1.0 / scene.height
+        var aspect: flt := scene.target.width * 1.0 / scene.target.height
         var view: *[16]flt := gfx3d.mat4_look_at(gfx3d.vec3(eye_x, eye_y, eye_z), gfx3d.vec3(target_x, target_y, target_z), gfx3d.vec3(0.0, 1.0, 0.0))
         var projection: *[16]flt := gfx3d.mat4_perspective(gfx3d.radians(fov_degrees), aspect, 0.1, 100.0)
         gfx3d.mat4_to_vulkan(projection)

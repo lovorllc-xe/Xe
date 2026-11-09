@@ -8,5 +8,5 @@ install-name:    '/usr/lib/libSystem.B.dylib'
 current-version: 1311
 exports:
   - targets:         [ x86_64-macos ]
-    symbols:         [ dyld_stub_binder ]
+    symbols:         [ dyld_stub_binder, _dlopen, _dlsym, _dlerror ]
 ...

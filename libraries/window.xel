@@ -143,6 +143,18 @@ begin
         return native.next_event(win.native, win.event, timeout_ms)
     end
 
+    // What a graphics API needs to draw into this window: native_kind 1 = X11 window, 2 = Win32 window, 0 = none;
+    // native_handle is the window id / HWND. Used by vkwindow.
+    fn native_kind(win: *window.Window): int
+    begin
+        return native.window_kind(win.native)
+    end
+
+    fn native_handle(win: *window.Window): int
+    begin
+        return native.window_handle(win.native)
+    end
+
     // The color of one window pixel as 0xRRGGBB, or -1 when the platform cannot read it back.
     fn read_pixel(win: *window.Window, x: int, y: int): int
     begin

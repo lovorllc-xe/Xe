@@ -1,0 +1,53 @@
+// vkplatform (Linux): makes a Vulkan surface (VkSurfaceKHR) for an X11 window, through libxcb or libX11 loaded at
+// run time. The window itself is made by the pure-Xe X11 client in `x11`; Vulkan gets its own connection to the same
+// X server, which is allowed because window ids are server-wide. On Wayland sessions the window is an XWayland
+// window, which Vulkan presents to as well.
+uses vulkan
+uses ffi
+
+module vkplatform
+begin
+    // Returns the surface, or 0 when this window cannot be presented to.
+    fn create_surface(vk: *vulkan.Vulkan, kind: int, handle: int): int
+    begin
+        if kind != 1 || handle = 0 { return 0 }
+        var out: *void := ffi.block(16)
+        var info: *void := ffi.block(48)
+        var surface: int := 0
+        var xcb: int := 0
+        if vulkan.instance_extension(vk, "VK_KHR_xcb_surface") = 1 { xcb := ffi.library("libxcb.so.1") }
+        if xcb != 0 {
+            var connect: int := ffi.symbol(xcb, "xcb_connect")
+            var screen: *void := ffi.block(16)
+            var connection: int := 0
+            if connect != 0 { connection := ffi.call2(connect, 0, @screen) }
+            var create: int := vulkan.address(vk, "vkCreateXcbSurfaceKHR")
+            if connection != 0 && create != 0 {
+                ffi.put32(info, 0, 1000005000)
+                ffi.put64(info, 24, connection)
+                ffi.put32(info, 32, handle)
+                if ffi.int32(ffi.call4(create, vk.instance, @info, 0, @out)) = 0 { surface := ffi.get64(out, 0) }
+            }
+            free(screen)
+        }
+        if surface = 0 && vulkan.instance_extension(vk, "VK_KHR_xlib_surface") = 1 {
+            var xlib: int := ffi.library("libX11.so.6")
+            if xlib != 0 {
+                var open_display: int := ffi.symbol(xlib, "XOpenDisplay")
+                var display: int := 0
+                if open_display != 0 { display := ffi.call1(open_display, 0) }
+                var create_xlib: int := vulkan.address(vk, "vkCreateXlibSurfaceKHR")
+                if display != 0 && create_xlib != 0 {
+                    runtime.mem.set(info, 0, 48)
+                    ffi.put32(info, 0, 1000004000)
+                    ffi.put64(info, 24, display)
+                    ffi.put64(info, 32, handle)
+                    if ffi.int32(ffi.call4(create_xlib, vk.instance, @info, 0, @out)) = 0 { surface := ffi.get64(out, 0) }
+                }
+            }
+        }
+        free(out)
+        free(info)
+        return surface
+    end
+end

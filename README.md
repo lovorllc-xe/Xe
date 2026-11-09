@@ -39,7 +39,8 @@ point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-
 | Console programs, files, memory, GC | yes | yes (tested under Wine: `tests/run_windows_tests.sh`) | builds; **not run on real hardware** |
 | Threads, sync, processes | yes | yes | no |
 | Windows/GUI (`window`) | X11 (default) or Wayland | Win32 | **no native backend yet** (`window.open` returns null) |
-| Sockets, epoll, inotify, file mmap, directory walking, Vulkan | yes | not yet | no |
+| Sockets, epoll, inotify, file mmap, directory walking | yes | not yet | no |
+| Vulkan (compute, graphics, textures, swapchain) | yes (tested) | builds, **not run** | builds, **not run**; no window surface |
 
 ## What is new in 2.x
 
@@ -66,9 +67,9 @@ point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-
 - **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG, baseline JPEG, BMP, PPM), `window` + `wayland` + `x11`
   (windows, keyboard, mouse over native Wayland or X11, no libwayland or libX11), `gui` (immediate-mode widgets), `gfx3d` (software 3D:
   meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
-  `vulkan` (instance/device/buffers/compute/graphics pipelines/depth/render targets), `vkscene` (GPU-lit 3D
+  `vulkan` (any GPU, any platform: compute, graphics, textures, swapchains), `vkwindow`, `vkscene` (GPU-lit 3D
   scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **169 libraries** covering containers, math, text, encodings, hashing and
+- **170 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -161,7 +162,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-169 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+170 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -205,13 +206,20 @@ end
   shading, wireframes, cube/sphere/torus/plane generators, `.obj` loader).
 - **GUI:** `gui` is immediate-mode: widgets are function calls (`button`, `checkbox`, `radio`, `slider`,
   `textbox`, `list`, `progress`, `panel`, auto-layout variants).
-- **Vulkan:** `vulkan` binds the core API directly (the compiler links `libvulkan.so.1` dynamically when a
-  library asks for it). It covers instance/GPU selection, devices and queues, memory and buffers, SPIR-V
-  shader modules, compute pipelines (`compute_new/bind/run`) and graphics (offscreen render targets with
-  depth, render passes, pipelines, vertex/index buffers, push constants, `frame_begin/draw/end`). `vkscene`
-  gives ready-made lit 3D rendering on the GPU. Compile shaders with `glslc`. Frames are read back into a
-  `canvas` and shown through `window`; **swapchain presentation directly to a window surface and textures /
-  descriptor sets for graphics pipelines are not implemented yet.**
+- **Vulkan:** `vulkan` works on every platform and GPU. The Vulkan loader is opened at run time (`libvulkan.so.1`,
+  `vulkan-1.dll`, or `libvulkan.1.dylib` / MoltenVK), so programs build without a Vulkan SDK and `vulkan.open` simply
+  returns null where Vulkan is missing. Nothing is assumed about the GPU: the device (discrete, integrated, virtual,
+  software; `XE_VK_DEVICE` overrides), queue family, memory types, depth format, swapchain format and present mode are
+  chosen from what the driver reports, and MoltenVK's portability extensions are enabled. It covers buffers, SPIR-V
+  shader modules, compute (`compute_new/bind/run`), graphics (render passes, pipelines with uniform buffers,
+  textures with optional mipmaps and blending, vertex/index buffers, push constants, dynamic viewport),
+  synchronization with fences/semaphores, offscreen targets with read-back, and **window swapchains**:
+  `vkwindow.new(vk, win, depth, vsync)` presents straight into a `window` on Linux (X11/XWayland) and Windows, and
+  falls back to rendering offscreen and copying where a surface is not available (macOS, native Wayland windows).
+  `vkscene` gives ready-made lit 3D on the GPU. Compile shaders with `glslc`. `XE_VK_VALIDATION=1` turns on the
+  Khronos validation layer when installed. Verified here only on an Intel Arc GPU under Linux (compute, graphics,
+  textures, uniforms, swapchain with resize, and the offscreen fallback); the Windows and macOS paths build but were
+  not run, and other vendors' GPUs were not available to test.
 - Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Wayland keyboard input assumes a US layout, and GNOME gives Wayland windows no title bar. There is no audio library yet.
 
 ## Benchmarks

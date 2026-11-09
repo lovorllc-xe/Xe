@@ -1,0 +1,98 @@
+// vkwindow: show Vulkan rendering in a `window`, the same way on every platform.
+//
+//     var vk: *vulkan.Vulkan := vulkan.open("game")
+//     var win: *window.Window := window.open("game", 800, 600)
+//     var view: *vkwindow.View := vkwindow.new(vk, win, 1, 1)         // depth buffer, vsync
+//     var pipe: *vulkan.Pipeline := vulkan.pipeline_new(vk, vkwindow.target(view), ...)
+//     while window.is_open(win) {
+//         window.poll(win)
+//         vkwindow.resize(vk, view, win)                             // follow window resizes
+//         if vkwindow.start(vk, view, 0.1, 0.1, 0.15) = 0 {
+//             vulkan.frame_draw(vk, pipe, vertices, 3, push)
+//             vkwindow.finish(vk, view, win)                            // presents
+//         }
+//     }
+//
+// On Linux (X11 / XWayland) and Windows the frames are drawn straight into the window's swapchain. Where that is not
+// possible (macOS, Wayland-native windows, GPUs without presentation support) the frame is rendered offscreen,
+// read back and shown with window.present, so programs behave the same. vkwindow.direct tells which one is used.
+uses vulkan
+uses vkplatform
+uses window
+uses canvas
+
+module vkwindow
+begin
+    type View: record
+    begin
+        target: *vulkan.Target
+        direct: int
+        width: int
+        height: int
+        depth: int
+    end
+
+    // vsync 1: wait for the display refresh (no tearing); 0: present as fast as the GPU allows.
+    fn new(vk: *vulkan.Vulkan, win: *window.Window, with_depth: int, vsync: int): *vkwindow.View
+    begin
+        var view: *vkwindow.View := alloc(48)
+        view.depth := with_depth
+        view.width := win.width
+        view.height := win.height
+        view.direct := 0
+        var surface: int := vkplatform.create_surface(vk, window.native_kind(win), window.native_handle(win))
+        if surface != 0 {
+            view.target := vulkan.target_swapchain(vk, surface, win.width, win.height, with_depth, vsync)
+            if @view.target != 0 { view.direct := 1 }
+        }
+        if view.direct = 0 { view.target := vulkan.target_new(vk, win.width, win.height, with_depth) }
+        return view
+    end
+
+    fn target(view: *vkwindow.View): *vulkan.Target
+    begin
+        return view.target
+    end
+
+    // 1 when frames go straight to the window's swapchain, 0 when they are rendered offscreen and copied.
+    fn direct(view: *vkwindow.View): int
+    begin
+        return view.direct
+    end
+
+    // Call after window.poll: resizes the render target when the window changed size (and the window's canvas).
+    fn resize(vk: *vulkan.Vulkan, view: *vkwindow.View, win: *window.Window)
+    begin
+        if win.width != view.width || win.height != view.height {
+            view.width := win.width
+            view.height := win.height
+            vulkan.target_resize(vk, view.target, win.width, win.height)
+            if view.direct = 0 { window.fit_canvas(win) }
+        }
+    end
+
+    // Start a frame cleared to (r, g, b); returns 0 when you should draw it, nonzero when it must be skipped
+    // (for example while the window is minimized).
+    fn start(vk: *vulkan.Vulkan, view: *vkwindow.View, r: flt, g: flt, b: flt): int
+    begin
+        return vulkan.frame_begin(vk, view.target, r, g, b)
+    end
+
+    // Finish and show the frame. Returns 0 on success.
+    fn finish(vk: *vulkan.Vulkan, view: *vkwindow.View, win: *window.Window): int
+    begin
+        var result: int := vulkan.frame_end(vk, view.target)
+        if view.direct = 0 && result = 0 {
+            if win.canvas.width != view.target.width || win.canvas.height != view.target.height { window.fit_canvas(win) }
+            vulkan.read_pixels(view.target, win.canvas.pixels, win.canvas.width)
+            window.present(win)
+        }
+        return result
+    end
+
+    fn release(vk: *vulkan.Vulkan, view: *vkwindow.View)
+    begin
+        vulkan.target_free(vk, view.target)
+        free(view)
+    end
+end

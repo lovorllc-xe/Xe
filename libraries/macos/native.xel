@@ -48,6 +48,16 @@ begin
         return -1
     end
 
+    fn window_kind(n: *native.Window): int
+    begin
+        return 0
+    end
+
+    fn window_handle(n: *native.Window): int
+    begin
+        return 0
+    end
+
     fn close(n: *native.Window)
     begin
     end

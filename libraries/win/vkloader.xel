@@ -1,0 +1,10 @@
+// vkloader (win): where to find the Vulkan loader library on this platform: the Khronos loader installed with every Windows GPU driver (NVIDIA, AMD, Intel).
+// Used by `vulkan`; set XE_VULKAN_LIBRARY to a path to use a different one.
+module vkloader
+begin
+    // Library names to try, separated by ";".
+    fn library_names(): string
+    begin
+        return "vulkan-1.dll"
+    end
+end

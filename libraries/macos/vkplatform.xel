@@ -1,0 +1,13 @@
+// vkplatform (macOS): Vulkan reaches the screen on macOS through a CAMetalLayer (VK_EXT_metal_surface), which
+// needs Cocoa, and this library has no Cocoa window backend yet. create_surface therefore reports "no surface",
+// and `vkwindow` falls back to rendering offscreen and showing the pixels with `window` (offscreen Vulkan
+// rendering and compute work through MoltenVK).
+uses vulkan
+
+module vkplatform
+begin
+    fn create_surface(vk: *vulkan.Vulkan, kind: int, handle: int): int
+    begin
+        return 0
+    end
+end

@@ -1,0 +1,10 @@
+// vkloader (macos): where to find the Vulkan loader library on this platform: the Vulkan SDK loader or MoltenVK (Vulkan on Metal); programs are x86-64, so on Apple Silicon the x86-64 build of MoltenVK is needed.
+// Used by `vulkan`; set XE_VULKAN_LIBRARY to a path to use a different one.
+module vkloader
+begin
+    // Library names to try, separated by ";".
+    fn library_names(): string
+    begin
+        return "libvulkan.1.dylib;libvulkan.dylib;libMoltenVK.dylib;/usr/local/lib/libvulkan.1.dylib;/usr/local/lib/libMoltenVK.dylib;/opt/homebrew/lib/libvulkan.1.dylib;/opt/homebrew/lib/libMoltenVK.dylib"
+    end
+end

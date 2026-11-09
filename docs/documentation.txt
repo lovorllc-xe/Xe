@@ -17,9 +17,10 @@ Syntax is unchanged. The compiler, runtime and library set changed:
    unqualified for module functions; call them as module.new().
  - xe --version / -v / -V prints the colored logo.
  - Platforms: xe --build prog.xe -o out -p linux|win|macos (see README, Platforms). Linux window backends: X11 (default), Wayland.
- - 169 libraries; see docs/libraries.md. New: canvas, image, window, wayland, x11, gui, gfx3d, game, ffi, vulkan,
-   vkscene (2D/3D graphics, GUI widgets, games, Vulkan). Libraries can request shared objects with a line
-   comment "xe-link: NAME" at the start of a line; the program is then linked dynamically (vulkan.xel uses it).
+ - 170 libraries; see docs/libraries.md. New: canvas, image, window, wayland, x11, gui, gfx3d, game, ffi, vulkan,
+   vkscene, vkwindow (2D/3D graphics, GUI widgets, games, Vulkan). ffi.library/ffi.symbol load shared libraries at
+   run time on every platform (vulkan uses this). Libraries can still request shared objects at build time with a
+   line comment "xe-link: NAME" at the start of a line (Linux).
  - Programs exit with exit_group, so helper threads of loaded C libraries cannot keep a finished process alive.
  - Functions with an empty body are emitted (they used to be missing at link time).
  - Parenthesised names such as (n) * 8 now parse correctly.

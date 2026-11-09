@@ -1,128 +1,77 @@
-// ffi: call C functions from shared libraries (Vulkan, libc, ...) and build C structs in raw memory.
+// ffi: call C functions in shared libraries and build C structs in raw memory, the same way on every platform.
 //
-// A library that needs a shared object states it with a line comment at the start of a line:
-//     xe-link: libvulkan.so.1        (written as an ordinary "//" comment; see vulkan.xel)
-// The compiler then links the program dynamically against it. Function addresses are obtained by the
-// library's own small asm thunks (see vulkan.xel) or from a loader function such as vkGetInstanceProcAddr.
+//     var lib: int := ffi.library("libvulkan.so.1")          // vulkan-1.dll on Windows, libvulkan.1.dylib on macOS
+//     var f: int := ffi.symbol(lib, "vkGetInstanceProcAddr")
+//     var result: int := ffi.call2(f, 0, ffi.cstr("vkCreateInstance"))
 //
-// call0..call8 pass up to 8 integer/pointer arguments by the System V ABI and return rax.
+// call0..call10 pass up to 10 integer/pointer arguments with the platform's C calling convention (System V on
+// Linux and macOS, Microsoft x64 on Windows; the compiler picks the right `ccall` for -p) and return rax.
+// A library can also link a shared object at build time with a line comment "xe-link: NAME" (Linux only).
+uses ccall
+
 module ffi
 begin
     fn call0(target: int): int
     begin
-        asm {
-            mov rax, rdi
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call0(target)
     end
 
     fn call1(target: int, a: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call1(target, a)
     end
 
     fn call2(target: int, a: int, b: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            mov rsi, rdx
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call2(target, a, b)
     end
 
     fn call3(target: int, a: int, b: int, c: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            mov rsi, rdx
-            mov rdx, rcx
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call3(target, a, b, c)
     end
 
     fn call4(target: int, a: int, b: int, c: int, d: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            mov rsi, rdx
-            mov rdx, rcx
-            mov rcx, r8
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call4(target, a, b, c, d)
     end
 
     fn call5(target: int, a: int, b: int, c: int, d: int, e: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            mov rsi, rdx
-            mov rdx, rcx
-            mov rcx, r8
-            mov r8, r9
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call5(target, a, b, c, d, e)
     end
 
     fn call6(target: int, a: int, b: int, c: int, d: int, e: int, f: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            mov rsi, rdx
-            mov rdx, rcx
-            mov rcx, r8
-            mov r8, r9
-            mov r9, qword ptr [rbp+16]
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call6(target, a, b, c, d, e, f)
     end
 
     fn call8(target: int, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int): int
     begin
-        asm {
-            mov rax, rdi
-            mov rdi, rsi
-            mov rsi, rdx
-            mov rdx, rcx
-            mov rcx, r8
-            mov r8, r9
-            mov r9, qword ptr [rbp+16]
-            push qword ptr [rbp+32]
-            push qword ptr [rbp+24]
-            call rax
-            leave
-            ret
-        }
-        return 0
+        return ccall.call8(target, a, b, c, d, e, f, g, h)
+    end
+
+    fn call10(target: int, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int, j: int): int
+    begin
+        return ccall.call10(target, a, b, c, d, e, f, g, h, i, j)
+    end
+
+    // Loads a shared library at run time (libfoo.so.1 / foo.dll / libfoo.dylib); 0 when it cannot be loaded.
+    fn library(name: string): int
+    begin
+        return ccall.open_library(name)
+    end
+
+    // Address of a function in a library returned by ffi.library, or 0.
+    fn symbol(library_handle: int, name: string): int
+    begin
+        return ccall.symbol(library_handle, name)
+    end
+
+    // The C calling convention of the platform being built for: "sysv" (Linux, macOS) or "ms" (Windows).
+    fn convention(): string
+    begin
+        return ccall.convention()
     end
 
     // A C function returning `int` leaves garbage in the upper half of rax; this sign-extends the low 32 bits.
