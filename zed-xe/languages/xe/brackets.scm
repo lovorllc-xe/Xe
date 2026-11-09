@@ -4,6 +4,5 @@
 (function_body "begin" @open "end" @close)
 (module_declaration "begin" @open "end" @close)
 (record_declaration "begin" @open "end" @close)
-(enum_declaration "begin" @open "end" @close)
 (switch_statement "begin" @open "end" @close)
 (gc_statement (gc_begin "begin" @open) (gc_end "end" @close))

@@ -6,6 +6,4 @@
 (module_declaration
   body: (module_body) @class.inside) @class.around
 
-(enum_declaration) @class.around
-
 (comment) @comment.around
