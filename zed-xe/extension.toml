@@ -1,10 +1,14 @@
 id = "xe"
 name = "Xe"
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 1
 authors = ["lovro <crnkovic@lovro.me>"]
-description = "Syntax highlighting for the Xe programming language."
+description = "Xe language support: highlighting, auto-indent, outline, and the Xe language server (diagnostics, formatting, completion, go to definition)."
 repository = "https://github.com/lovorllc-xe/Xe"
+
+[language_servers.xe-lsp]
+name = "Xe Language Server"
+languages = ["Xe"]
 
 [grammars.xe]
 # Zed fetches the grammar with git, so `rev` must be a commit that

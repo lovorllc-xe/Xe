@@ -4,6 +4,9 @@ path_suffixes = ["xe", "xel"]
 line_comments = ["// "]
 tab_size = 4
 hard_tabs = false
+# letters, digits and `_` make up a word (double-click, word motions, completion)
+word_characters = ["_"]
+completion_query_characters = ["_", "."]
 autoclose_before = ";:.,=}])> \n\t\""
 brackets = [
     { start = "{", end = "}", close = true, newline = true },
@@ -11,3 +14,7 @@ brackets = [
     { start = "(", end = ")", close = true, newline = false },
     { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
 ]
+# Auto-indent that does not depend on the parser: indent after `begin`, `{`, `case ...` and `default`; outdent a line
+# that starts with `end` or `}`.
+increase_indent_pattern = "(\\bbegin\\s*(//.*)?$|\\{\\s*(//.*)?$|^\\s*case\\b.*$|^\\s*default\\s*$)"
+decrease_indent_pattern = "^\\s*(end\\b|\\}|case\\b|default\\b)"

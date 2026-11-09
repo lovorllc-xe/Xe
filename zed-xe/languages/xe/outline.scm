@@ -13,3 +13,14 @@
 (type_alias
   "type" @context
   name: (_) @name) @item
+
+(enum_declaration
+  "enum" @context
+  name: (_) @name) @item
+
+(enum_member
+  name: (_) @name) @item
+
+(global_declaration
+  "global" @context
+  name: (identifier) @name) @item

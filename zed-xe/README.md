@@ -1,7 +1,28 @@
 # Xe for Zed
 
-Syntax highlighting, bracket matching, auto-indent and outline support for
+Syntax highlighting, bracket matching, auto-indent, outline, word handling and the Xe language server for
 the Xe programming language (`.xe`, `.xel`) in Zed.
+
+- **Words:** letters, digits and `_` form a word (double-click, word motions); completion queries include `.` so
+  `module.function` completes.
+- **Auto-indent:** the line after `begin`, `{`, `case ...` or `default` is indented; a line that starts with `end`, `}`, `case`
+  or `default` is outdented. This works from patterns in `languages/xe/config.toml`, so it does not depend on the parser.
+- **Brackets:** `( ) [ ] { }` pair and auto-close, `begin`/`end` match (functions, modules, records, enums, `switch`).
+- **Outline and text objects:** functions, modules, records, aliases, enums (with members) and globals.
+- **Language server:** `src/lib.rs` starts `xe lsp`: diagnostics as you type, format on save (`xe fmt` rules), go to
+  definition and completion. `xe` must be on `PATH`. The extension is built by Zed when you install it as a dev extension
+  and needs Rust installed through `rustup` (Zed adds the wasm target itself). It has not been built or run by the author's
+  tooling: if Zed reports a build error, the message will say what to fix.
+
+Suggested `settings.json`:
+
+```json
+{
+  "languages": {
+    "Xe": { "format_on_save": "on", "tab_size": 4, "language_servers": ["xe-lsp"] }
+  }
+}
+```
 
 ```
 zed-xe/
