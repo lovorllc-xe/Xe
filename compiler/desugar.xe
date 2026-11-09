@@ -1,0 +1,635 @@
+// desugar: language features that are lowered to plain Xe before the program is parsed.
+//
+//   global counter: int := 0            a global variable (any type; `string`, pointers, arrays, records too)
+//   global const LIMIT: int := 100      a global constant: every use is replaced by its value
+//   enum Color                          named integer constants: Color.red, Color.green ... (and `Color` is an int)
+//   begin
+//       red
+//       green := 5
+//   end
+//
+// Global declarations may be indented and may also appear inside a `module` (then `m.name` outside and `name`
+// inside the module). A global variable lives in static memory (which the garbage collector scans); every use
+// `counter` becomes `(*xeglobal.counter())`, where xeglobal.counter() is a generated function returning the address
+// of its storage. The initial values run at the start of main. Line numbers do not change: declarations are replaced
+// by blanks and the generated code is appended at the end of the source.
+//
+// A global name may not be reused for a parameter, local variable, field or function (the compiler reports it).
+module desugar
+begin
+    fn wordAt(source: string, at: int, word: string): int
+    begin
+        var size: int := str.length(word)
+        if at + size > str.length(source) { return 0 }
+        if str.slice(source, at, at + size) != word { return 0 }
+        if at > 0 {
+            var before: int := str.char(source, at - 1)
+            if lexer.letter(before) = 1 || lexer.digit(before) = 1 { return 0 }
+        }
+        if at + size < str.length(source) {
+            var after: int := str.char(source, at + size)
+            if lexer.letter(after) = 1 || lexer.digit(after) = 1 { return 0 }
+        }
+        return 1
+    end
+
+    // Cheap test: is there a line that starts (after blanks) with `global` or `enum`?
+    fn needed(source: string): int
+    begin
+        var size: int := str.length(source)
+        var index: int := 0
+        var atStart: int := 1
+        while index < size {
+            var value: int := str.char(source, index)
+            if value = 10 {
+                atStart := 1
+                index := index + 1
+            }
+            else {
+                if value = 32 || value = 9 || value = 13 { index := index + 1 }
+                else {
+                    if atStart = 1 {
+                        if value = 103 && wordAt(source, index, "global") = 1 { return 1 }
+                        if value = 101 && wordAt(source, index, "enum") = 1 { return 1 }
+                    }
+                    atStart := 0
+                    index := index + 1
+                }
+            }
+        }
+        return 0
+    end
+
+    fn parseNumber(text: string): int
+    begin
+        var value: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            value := value * 10 + str.char(text, i) - 48
+            i := i + 1
+        }
+        return value
+    end
+
+    // Table of everything declared: key ("name", "module.name" or "Enum.member"), kind (1 variable, 2 constant or
+    // enum member), replacement text, and for variables the type text, initializer and storage offset.
+    type Table: record
+    begin
+        keys: *[4096]string
+        kinds: *[4096]int
+        values: *[4096]string
+        types: *[4096]string
+        inits: *[4096]string
+        offsets: *[4096]int
+        modules: *[4096]string
+        count: int
+        bytes: int
+        failed: int
+        touched: int
+    end
+
+    fn find(table: *desugar.Table, key: string): int
+    begin
+        var i: int := 0
+        while i < table.count {
+            if (*table.keys)[i] = key { return i }
+            i := i + 1
+        }
+        return -1
+    end
+
+    fn failure(source: string, offset: int, message: string): int
+    begin
+        diag.print(source, offset, message)
+        return 1
+    end
+
+    fn blanked(text: string): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < str.length(text) {
+            if str.char(text, i) = 10 { out := str.append(out, "\n") }
+            else { out := str.append(out, " ") }
+            i := i + 1
+        }
+        return out
+    end
+
+    fn trim(text: string): string
+    begin
+        var start: int := 0
+        var finish: int := str.length(text)
+        while start < finish && (str.char(text, start) = 32 || str.char(text, start) = 9 || str.char(text, start) = 10 || str.char(text, start) = 13) { start := start + 1 }
+        while finish > start && (str.char(text, finish - 1) = 32 || str.char(text, finish - 1) = 9 || str.char(text, finish - 1) = 10 || str.char(text, finish - 1) = 13) { finish := finish - 1 }
+        return str.slice(text, start, finish)
+    end
+
+    // The replacement for a constant's value: a single token stays as is, anything else gets parentheses.
+    fn constantText(value: string): string
+    begin
+        var first: [4]int := lexer.scan(value, 0, 1)
+        var second: [4]int := lexer.scan(value, first[2], first[3])
+        if second[0] = token.endKind() && (first[0] = token.numberKind() || first[0] = token.stringKind() || first[0] = token.nameKind()) { return value }
+        return "(" + value + ")"
+    end
+
+    fn add(table: *desugar.Table, key: string, kind: int, value: string, type: string, init: string, module: string): int
+    begin
+        if table.count >= 4096 { return -1 }
+        var i: int := table.count
+        (*table.keys)[i] := key
+        (*table.kinds)[i] := kind
+        (*table.values)[i] := value
+        (*table.types)[i] := type
+        (*table.inits)[i] := init
+        (*table.offsets)[i] := 0
+        (*table.modules)[i] := module
+        table.count := i + 1
+        return i
+    end
+
+    // Parses `global [const] name: Type [:= value]` starting at the `global` token at `start`; returns the offset
+    // just past the declaration, or -1 after reporting an error.
+    fn declaration(source: string, table: *desugar.Table, start: int, line: int, module: string): int
+    begin
+        var keyword: [4]int := lexer.scan(source, start, line)
+        var next: [4]int := lexer.scan(source, keyword[2], keyword[3])
+        var isConst: int := 0
+        if next[0] = token.nameKind() && str.slice(source, next[1], next[2]) = "const" {
+            isConst := 1
+            next := lexer.scan(source, next[2], next[3])
+        }
+        if next[0] != token.nameKind() { return failure(source, next[1], "expected a name after 'global'") - 2 }
+        var name: string := str.slice(source, next[1], next[2])
+        var colon: [4]int := lexer.scan(source, next[2], next[3])
+        if colon[0] != 58 { return failure(source, colon[1], "expected ':' and a type after global '" + name + "' (write: global " + name + ": int := 0)") - 2 }
+        var typeStart: int := colon[2]
+        var item: [4]int := lexer.scan(source, typeStart, colon[3])
+        var typeEnd: int := typeStart
+        var assign: int := -1
+        var finish: int := typeStart
+        while item[0] != token.endKind() && item[0] != 10 {
+            if item[0] = token.assignKind() && assign < 0 {
+                assign := item[2]
+                typeEnd := item[1]
+            }
+            finish := item[2]
+            item := lexer.scan(source, item[2], item[3])
+        }
+        if assign < 0 { typeEnd := finish }
+        var typeText: string := trim(str.slice(source, typeStart, typeEnd))
+        var initText: string := ""
+        if assign >= 0 { initText := trim(str.slice(source, assign, finish)) }
+        if str.length(typeText) = 0 { return failure(source, colon[1], "expected a type after ':' in global '" + name + "'") - 2 }
+        if isConst = 1 && str.length(initText) = 0 { return failure(source, next[1], "global constant '" + name + "' needs a value (:= ...)") - 2 }
+        var key: string := name
+        if str.length(module) > 0 { key := module + "." + name }
+        if find(table, key) >= 0 { return failure(source, next[1], "global '" + key + "' is declared twice") - 2 }
+        if isConst = 1 { add(table, key, 2, constantText(initText), typeText, "", module) }
+        else {
+            var index: int := add(table, key, 1, "", typeText, initText, module)
+            if index < 0 { return failure(source, next[1], "too many globals (limit 4096)") - 2 }
+            var words: int := codegen.typeWords(source, typeText)
+            if words < 1 { words := 1 }
+            (*table.offsets)[index] := table.bytes
+            table.bytes := table.bytes + words * 8
+        }
+        return finish
+    end
+
+    // Parses `enum Name begin member [:= value] ... end` at the `enum` token; returns the offset past `end`.
+    fn enumeration(source: string, table: *desugar.Table, start: int, line: int, module: string, aliasOut: *[1]string): int
+    begin
+        var keyword: [4]int := lexer.scan(source, start, line)
+        var name: [4]int := significant(source, keyword[2], keyword[3])
+        if name[0] != token.nameKind() { return failure(source, name[1], "expected a name after 'enum'") - 2 }
+        var opening: [4]int := significant(source, name[2], name[3])
+        if str.slice(source, opening[1], opening[2]) != "begin" { return failure(source, opening[1], "expected 'begin' after the enum name") - 2 }
+        var enumName: string := str.slice(source, name[1], name[2])
+        var value: int := 0
+        var item: [4]int := significant(source, opening[2], opening[3])
+        while item[0] != token.endKind() && str.slice(source, item[1], item[2]) != "end" {
+            if item[0] != token.nameKind() { return failure(source, item[1], "expected a member name in enum '" + enumName + "'") - 2 }
+            var member: string := str.slice(source, item[1], item[2])
+            var after: [4]int := lexer.scan(source, item[2], item[3])
+            var last: int := item[2]
+            if after[0] = token.assignKind() {
+                var expressionStart: int := after[2]
+                var walker: [4]int := lexer.scan(source, after[2], after[3])
+                var expressionEnd: int := expressionStart
+                while walker[0] != token.endKind() && walker[0] != 10 {
+                    expressionEnd := walker[2]
+                    walker := lexer.scan(source, walker[2], walker[3])
+                }
+                var text: string := trim(str.slice(source, expressionStart, expressionEnd))
+                var first: [4]int := lexer.scan(text, 0, 1)
+                var numberToken: [4]int := first
+                var negative: int := 0
+                if first[0] = 45 {
+                    negative := 1
+                    numberToken := lexer.scan(text, first[2], first[3])
+                }
+                var tail: [4]int := lexer.scan(text, numberToken[2], numberToken[3])
+                if numberToken[0] != token.numberKind() || tail[0] != token.endKind() { return failure(source, expressionStart, "an enum value must be an integer literal") - 2 }
+                value := parseNumber(str.slice(text, numberToken[1], numberToken[2]))
+                if negative = 1 { value := 0 - value }
+                last := expressionEnd
+            }
+            var key: string := enumName + "." + member
+            if str.length(module) > 0 { key := module + "." + key }
+            if find(table, key) >= 0 { return failure(source, item[1], "enum member '" + key + "' is declared twice") - 2 }
+            add(table, key, 2, constantText(str.number(value)), "int", "", module)
+            value := value + 1
+            item := significant(source, last, item[3])
+        }
+        if item[0] = token.endKind() { return failure(source, opening[1], "this enum has no 'end'") - 2 }
+        (*aliasOut)[0] := "type " + enumName + ": int"
+        return item[2]
+    end
+
+    fn significant(source: string, position: int, line: int): [4]int
+    begin
+        var item: [4]int := lexer.scan(source, position, line)
+        while item[0] = 10 { item := lexer.scan(source, item[2], item[3]) }
+        return item
+    end
+
+    // Collects every declaration and returns the source with the declarations blanked out (same line count).
+    fn collect(source: string, table: *desugar.Table): string
+    begin
+        var out: string := str.builder("")
+        var copied: int := 0
+        var position: int := 0
+        var line: int := 1
+        var depth: int := 0
+        var module: string := ""
+        var pending: string := ""
+        var lineStart: int := 1
+        var running: int := 1
+        while running = 1 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                if item[0] = 10 {
+                    lineStart := 1
+                    position := item[2]
+                    line := item[3]
+                }
+                else {
+                    var text: string := ""
+                    if item[0] = token.nameKind() { text := str.slice(source, item[1], item[2]) }
+                    var handled: int := 0
+                    if lineStart = 1 && item[0] = token.nameKind() && (depth = 0 || (str.length(module) > 0 && depth = 1)) {
+                        if text = "global" {
+                            var finish: int := declaration(source, table, item[1], item[3], module)
+                            if finish < 0 {
+                                table.failed := 1
+                                return source
+                            }
+                            out := str.append(out, str.slice(source, copied, item[1]) + blanked(str.slice(source, item[1], finish)))
+                            copied := finish
+                            position := finish
+                            handled := 1
+                        }
+                        if text = "enum" {
+                            var alias: *[1]string := alloc(16)
+                            var finish: int := enumeration(source, table, item[1], item[3], module, alias)
+                            if finish < 0 {
+                                table.failed := 1
+                                return source
+                            }
+                            var aliasText: string := (*alias)[0]
+                            free(alias)
+                            var region: string := str.slice(source, item[1], finish)
+                            out := str.append(out, str.slice(source, copied, item[1]) + aliasText + blanked(region))
+                            copied := finish
+                            position := finish
+                            handled := 1
+                        }
+                    }
+                    if handled = 0 {
+                        lineStart := 0
+                        if item[0] = token.nameKind() {
+                            if text = "begin" {
+                                depth := depth + 1
+                                if str.length(pending) > 0 {
+                                    module := pending
+                                    pending := ""
+                                }
+                            }
+                            if text = "end" {
+                                depth := depth - 1
+                                if depth = 0 { module := "" }
+                            }
+                            if text = "module" && depth = 0 {
+                                var nameToken: [4]int := significant(source, item[2], item[3])
+                                if nameToken[0] = token.nameKind() { pending := str.slice(source, nameToken[1], nameToken[2]) }
+                            }
+                        }
+                        position := item[2]
+                        line := item[3]
+                    }
+                    else { lineStart := 0 }
+                }
+            }
+        }
+        out := str.append(out, str.slice(source, copied, str.length(source)))
+        return out
+    end
+
+    fn accessorName(key: string): string
+    begin
+        return "xeglobal." + key
+    end
+
+    // Names declared by the function that starts at `start` (just after its `fn`): parameters and every `var` /
+    // `const` in its body. They hide a global of the same name inside that function.
+    fn scanShadows(source: string, start: int, line: int, names: *[256]string): int
+    begin
+        var count: int := 0
+        var item: [4]int := lexer.scan(source, start, line)
+        var round: int := 0
+        var depth: int := 0
+        var started: int := 0
+        var running: int := 1
+        var previous: string := ""
+        while running = 1 {
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                var text: string := ""
+                if item[0] = token.nameKind() { text := str.slice(source, item[1], item[2]) }
+                if item[0] = 40 { round := round + 1 }
+                if item[0] = 41 { round := round - 1 }
+                if text = "begin" {
+                    depth := depth + 1
+                    started := 1
+                }
+                if text = "end" {
+                    depth := depth - 1
+                    if started = 1 && depth = 0 { running := 0 }
+                }
+                if item[0] = token.nameKind() && count < 256 {
+                    var after: [4]int := lexer.scan(source, item[2], item[3])
+                    var isParameter: int := 0
+                    if started = 0 && round = 1 && after[0] = 58 { isParameter := 1 }
+                    if isParameter = 1 || previous = "var" || previous = "const" {
+                        (*names)[count] := text
+                        count := count + 1
+                    }
+                }
+                previous := text
+                item := lexer.scan(source, item[2], item[3])
+            }
+        }
+        return count
+    end
+
+    fn shadowed(names: *[256]string, count: int, text: string): int
+    begin
+        var i: int := 0
+        while i < count {
+            if (*names)[i] = text { return 1 }
+            i := i + 1
+        }
+        return 0
+    end
+
+    fn fieldName(key: string): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < str.length(key) {
+            if str.char(key, i) = 46 { out := str.append(out, "_") }
+            else { out := str.append(out, str.fromchar(str.char(key, i))) }
+            i := i + 1
+        }
+        return out
+    end
+
+    // Replaces every use of a declared name; `context` is the module the text is inside ("" for top level). Each
+    // function that uses a global variable gets a local `xeg` (a pointer to the block of globals) at its start.
+    fn rewrite(source: string, table: *desugar.Table, context: string, levels: int, fragment: int): string
+    begin
+        var out: string := str.builder("")
+        var body: string := ""
+        var inBody: int := 0
+        var bodyDepth: int := 0
+        var used: int := 0
+        var awaiting: int := 0
+        var shadows: *[256]string := alloc(256 * 8)
+        var shadowCount: int := 0
+        var inRecord: int := 0
+        var recordPending: int := 0
+        var recordDepth: int := 0
+        var copied: int := 0
+        var position: int := 0
+        var line: int := 1
+        var depth: int := 0
+        var module: string := context
+        var pending: string := ""
+        var before: [4]int := lexer.scan("", 0, 1)
+        var beforeText: string := ""
+        var beforeBefore: [4]int := before
+        var running: int := 1
+        while running = 1 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                if item[0] = 10 {
+                    position := item[2]
+                    line := item[3]
+                }
+                else {
+                    var text: string := ""
+                    var replaced: int := 0
+                    if item[0] = token.nameKind() {
+                        text := str.slice(source, item[1], item[2])
+                        if text = "fn" && str.length(context) = 0 && inBody = 0 {
+                            if depth = 0 || (str.length(module) > 0 && depth = 1) {
+                                awaiting := 1
+                                shadowCount := scanShadows(source, item[2], item[3], shadows)
+                            }
+                        }
+                        if text = "record" { recordPending := 1 }
+                        if text = "begin" {
+                            depth := depth + 1
+                            if str.length(pending) > 0 && str.length(context) = 0 {
+                                module := pending
+                                pending := ""
+                            }
+                            if recordPending = 1 {
+                                recordPending := 0
+                                inRecord := 1
+                                recordDepth := depth
+                            }
+                            if awaiting = 1 {
+                                awaiting := 0
+                                out := str.append(out, str.slice(source, copied, item[2]))
+                                copied := item[2]
+                                body := str.builder("")
+                                inBody := 1
+                                bodyDepth := depth
+                                used := 0
+                            }
+                        }
+                        if text = "end" {
+                            depth := depth - 1
+                            if depth = 0 && str.length(context) = 0 { module := "" }
+                            if inRecord = 1 && depth = recordDepth - 1 { inRecord := 0 }
+                            if inBody = 1 && depth = bodyDepth - 1 {
+                                body := str.append(body, str.slice(source, copied, item[1]))
+                                copied := item[1]
+                                if used = 1 { out := str.append(out, " var xeg: *XeGlobalBlock := xeglobal.block()") }
+                                out := str.append(out, body)
+                                inBody := 0
+                            }
+                        }
+                        if text = "module" && depth = 0 && str.length(context) = 0 {
+                            var nameToken: [4]int := significant(source, item[2], item[3])
+                            if nameToken[0] = token.nameKind() { pending := str.slice(source, nameToken[1], nameToken[2]) }
+                        }
+                        if before[0] != 46 && inRecord = 0 && (inBody = 0 || shadowed(shadows, shadowCount, text) = 0) {
+                            var next: [4]int := lexer.scan(source, item[2], item[3])
+                            var index: int := -1
+                            var consumedEnd: int := item[2]
+                            if next[0] = 46 {
+                                var member: [4]int := lexer.scan(source, next[2], next[3])
+                                if member[0] = token.nameKind() {
+                                    var qualified: string := text + "." + str.slice(source, member[1], member[2])
+                                    if str.length(module) > 0 { index := find(table, module + "." + qualified) }
+                                    if index < 0 { index := find(table, qualified) }
+                                    if index >= 0 { consumedEnd := member[2] }
+                                }
+                            }
+                            var simple: int := 0
+                            if index < 0 {
+                                if str.length(module) > 0 { index := find(table, module + "." + text) }
+                                if index < 0 { index := find(table, text) }
+                                simple := 1
+                            }
+                            if index >= 0 {
+                                if simple = 1 {
+                                    if beforeText = "fn" || beforeText = "type" || beforeText = "module" || beforeText = "enum" || beforeText = "global" || beforeText = "uses" {
+                                        failure(source, item[1], "'" + text + "' is a global name; it cannot also be used as a function, type or module name")
+                                        table.failed := 1
+                                        return source
+                                    }
+                                }
+                                var key: string := (*table.keys)[index]
+                                var replacement: string := (*table.values)[index]
+                                var startAt: int := item[1]
+                                if (*table.kinds)[index] = 1 {
+                                    if inBody = 0 && fragment = 0 {
+                                        failure(source, item[1], "the global variable '" + text + "' can only be used inside a function")
+                                        table.failed := 1
+                                        return source
+                                    }
+                                    used := 1
+                                    table.touched := 1
+                                    replacement := "xeg." + fieldName(key)
+                                }
+                                else {
+                                    if levels < 8 {
+                                        table.touched := 0
+                                        replacement := rewrite(replacement, table, (*table.modules)[index], levels + 1, 1)
+                                        if table.touched = 1 { used := 1 }
+                                    }
+                                }
+                                if startAt < copied { startAt := item[1] }
+                                var chunk: string := str.slice(source, copied, startAt) + replacement
+                                if inBody = 1 { body := str.append(body, chunk) }
+                                else { out := str.append(out, chunk) }
+                                copied := consumedEnd
+                                position := consumedEnd
+                                line := item[3]
+                                replaced := 1
+                            }
+                        }
+                    }
+                    if replaced = 0 {
+                        position := item[2]
+                        line := item[3]
+                    }
+                    beforeBefore := before
+                    before := item
+                    beforeText := text
+                    if replaced = 1 {
+                        before := lexer.scan("x", 0, 1)
+                        beforeText := ""
+                    }
+                }
+            }
+        }
+        if inBody = 1 {
+            body := str.append(body, str.slice(source, copied, str.length(source)))
+            if used = 1 { out := str.append(out, " var xeg: *XeGlobalBlock := xeglobal.block()") }
+            out := str.append(out, body)
+        }
+        else { out := str.append(out, str.slice(source, copied, str.length(source))) }
+        return out
+    end
+
+    // The block that holds the globals' storage, and the functions that set it up and initialize it.
+    fn generated(source: string, table: *desugar.Table): string
+    begin
+        var out: string := str.builder("\n// xelang-generated: globals\n")
+        var total: int := table.bytes + 8
+        out := str.append(out, "type XeGlobalBlock: record\nbegin\n    xeready: int\n")
+        var i: int := 0
+        while i < table.count {
+            if (*table.kinds)[i] = 1 { out := str.append(out, "    " + fieldName((*table.keys)[i]) + ": " + (*table.types)[i] + "\n") }
+            i := i + 1
+        }
+        out := str.append(out, "end\n")
+        out := str.append(out, "fn xeglobal.raw(): *XeGlobalBlock\nbegin\n    var none: *XeGlobalBlock\n    asm {\n        lea rax, [rip+.LxeGlobalBlock]\n        leave\n        ret\n        .data\n        .balign 16\n    .LxeGlobalBlock:\n        .skip " + str.number(total) + "\n        .text\n    }\n    return none\nend\n")
+        out := str.append(out, "fn xeglobal.roots()\nbegin\n    asm {\n        lea rax, [rip+.LxeGlobalBlock]\n        mov qword ptr [rip+.LxeUserRoots], rax\n        lea rax, [rip+.LxeGlobalBlock+" + str.number(total) + "]\n        mov qword ptr [rip+.LxeUserRootsEnd], rax\n        leave\n        ret\n    }\nend\n")
+        out := str.append(out, "fn xeglobal.block(): *XeGlobalBlock\nbegin\n    var p: *XeGlobalBlock := xeglobal.raw()\n    if p.xeready = 0 {\n        p.xeready := 1\n        xeglobal.roots()\n        xeglobal.init()\n    }\n    return p\nend\n")
+        var initial: string := str.builder("fn xeglobal.init()\nbegin\n")
+        i := 0
+        while i < table.count {
+            if (*table.kinds)[i] = 1 {
+                var key: string := (*table.keys)[i]
+                var typeText: string := (*table.types)[i]
+                var text: string := (*table.inits)[i]
+                if str.length(text) = 0 && typeText = "string" { text := "\"\"" }
+                if str.length(text) > 0 {
+                    text := rewrite(text, table, (*table.modules)[i], 0, 1)
+                    initial := str.append(initial, "    " + key + " := " + text + "\n")
+                }
+            }
+            i := i + 1
+        }
+        initial := str.append(initial, "end\n")
+        return out + initial
+    end
+
+    // The entry point: returns the lowered source, or "" after reporting an error.
+    fn run(source: string): string
+    begin
+        if needed(source) = 0 { return source }
+        var table: *desugar.Table := alloc(128)
+        runtime.mem.set(table, 0, 128)
+        table.keys := alloc(4096 * 8)
+        table.kinds := alloc(4096 * 8)
+        table.values := alloc(4096 * 8)
+        table.types := alloc(4096 * 8)
+        table.inits := alloc(4096 * 8)
+        table.offsets := alloc(4096 * 8)
+        table.modules := alloc(4096 * 8)
+        var stripped: string := collect(source, table)
+        if table.failed = 1 { return "" }
+        if table.count = 0 { return stripped }
+        var hasVariables: int := 0
+        var i: int := 0
+        while i < table.count {
+            if (*table.kinds)[i] = 1 { hasVariables := 1 }
+            i := i + 1
+        }
+        var withGenerated: string := stripped
+        if hasVariables = 1 { withGenerated := stripped + generated(stripped, table) }
+        var result: string := rewrite(withGenerated, table, "", 0, 0)
+        if table.failed = 1 { return "" }
+        return result
+    end
+end

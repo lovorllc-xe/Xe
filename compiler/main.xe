@@ -505,6 +505,10 @@ begin
             }
         }
         var source: string := readSources(sources, sourceCount, libraries)
+        if str.find(source, token.character(1) + "xelang-missing-import") < 0 {
+            source := desugar.run(source)
+            if str.length(source) = 0 { return 1 }
+        }
         if checkOnly = 1 {
             var checked: int := compile(source, "", target)
             if checked = 0 && quiet = 0 { writeln("check passed in " + duration(nanoseconds() - started)) }

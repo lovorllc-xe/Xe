@@ -1055,7 +1055,7 @@ begin
                                             }
                                             if arm >= 0 || fallback > 1 { return failStatement(source, pool, statement, kind) }
                                         }
-                                        else { if kind != ast.assemblyKind() { return failStatement(source, pool, statement, kind) } }
+                                        else { if kind != ast.assemblyKind() && kind != ast.breakKind() && kind != ast.continueKind() { return failStatement(source, pool, statement, kind) } }
                                     }
                                 }
                             }
@@ -1124,12 +1124,49 @@ begin
         return 1
     end
 
+    // 'break' and 'continue' must be inside a while loop, and the loop must not hold 'defer' or 'gc.begin'
+    // (leaving the loop early would skip their cleanup).
+    fn validateLoopControl(source: string, pool: *[12582912]int, nodeCount: int): int
+    begin
+        var id: int := 0
+        while id < nodeCount {
+            var kind: int := ast.read(pool, id, 0)
+            if kind = ast.breakKind() || kind = ast.continueKind() {
+                var word: string := "break"
+                if kind = ast.continueKind() { word := "continue" }
+                var owner: int := ast.read(pool, id, 9)
+                var position: int := ast.read(pool, id, 1)
+                var best: int := -1
+                var candidate: int := 0
+                while candidate < nodeCount {
+                    if ast.read(pool, candidate, 0) = ast.loopKind() && ast.read(pool, candidate, 9) = owner && ast.read(pool, candidate, 1) <= position && ast.read(pool, candidate, 2) > position {
+                        if best < 0 || ast.read(pool, candidate, 1) > ast.read(pool, best, 1) { best := candidate }
+                    }
+                    candidate := candidate + 1
+                }
+                if best < 0 { return diag.report(source, pool, position, "'" + word + "' can only be used inside a 'while' loop") }
+                var body: int := ast.read(pool, best, 6)
+                var inner: int := 0
+                while inner < nodeCount {
+                    var innerKind: int := ast.read(pool, inner, 0)
+                    if (innerKind = ast.deferKind() || innerKind = ast.gcKind()) && ast.read(pool, inner, 9) = owner && ast.read(pool, inner, 1) >= ast.read(pool, body, 1) && ast.read(pool, inner, 1) < ast.read(pool, body, 2) {
+                        return diag.report(source, pool, position, "'" + word + "' cannot be used in a loop that contains 'defer' or 'gc.begin' (it would skip the cleanup); move that code into a function")
+                    }
+                    inner := inner + 1
+                }
+            }
+            id := id + 1
+        }
+        return 1
+    end
+
     fn validate(source: string, pool: *[12582912]int, program: [4]int, nodeCount: int): int
     begin
         if program[0] != 1 || program[1] < 0 || program[2] < 1 || program[3] < 0 || nodeCount < program[2] || nodeCount > 1048576 {
             return diag.report(source, pool, 0, "could not parse the program")
         }
         if program[2] > 4096 { return diag.report(source, pool, 0, "too many functions (limit 4096)") }
+        if validateLoopControl(source, pool, nodeCount) = 0 { return 0 }
         var id: int := program[1]
         var visited: int := 0
         var mainFound: int := 0

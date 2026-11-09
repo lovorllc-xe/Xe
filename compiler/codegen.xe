@@ -4160,9 +4160,31 @@ begin
         return value + " test rax, rax\n jz " + label + "\n"
     end
 
+    // The innermost while loop of the function that contains the statement, or -1.
+    fn enclosingLoop(pool: *[12582912]int, functionId: int, statement: int): int
+    begin
+        var limit: int := ast.read(pool, functionId, 11)
+        var position: int := ast.read(pool, statement, 1)
+        var best: int := -1
+        var candidate: int := functionId
+        while candidate < limit {
+            if ast.read(pool, candidate, 9) = functionId && ast.read(pool, candidate, 0) = ast.loopKind() && ast.read(pool, candidate, 1) <= position && ast.read(pool, candidate, 2) > position {
+                if best < 0 || ast.read(pool, candidate, 1) > ast.read(pool, best, 1) { best := candidate }
+            }
+            candidate := candidate + 1
+        }
+        return best
+    end
+
     fn emitStatement(source: string, pool: *[12582912]int, functionId: int, statement: int): string
     begin
         var kind: int := ast.read(pool, statement, 0)
+        if kind = ast.breakKind() || kind = ast.continueKind() {
+            var loop: int := enclosingLoop(pool, functionId, statement)
+            if loop < 0 { return "" }
+            if kind = ast.breakKind() { return " jmp .LxeWhileEnd" + token.number(loop) + "\n" }
+            return " jmp .LxeWhile" + token.number(loop) + "\n"
+        }
         if kind = ast.variableKind() {
             var declaredType: string := typeTextForFunction(source, pool, functionId, ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
             var name: string := str.slice(source, ast.read(pool, statement, 3), ast.read(pool, statement, 4))

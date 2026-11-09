@@ -79,6 +79,16 @@ begin
         return 17
     end
 
+    fn breakKind(): int
+    begin
+        return 26
+    end
+
+    fn continueKind(): int
+    begin
+        return 27
+    end
+
     fn deferKind(): int
     begin
         return 25

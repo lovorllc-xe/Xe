@@ -782,6 +782,12 @@ xe.alloc.aligned:
  lea rdi, [rip+.LxeGlobals]
  lea rsi, [rdi+2048]
  call .LxeGcScanRange
+ mov rdi, qword ptr [rip+.LxeUserRoots]
+ test rdi, rdi
+ jz .LxeGcNoUserRoots
+ mov rsi, qword ptr [rip+.LxeUserRootsEnd]
+ call .LxeGcScanRange
+.LxeGcNoUserRoots:
  xor r12d, r12d
 .LxeGcRegionRoots:
  cmp r12, qword ptr [rip+.LxeRegionDepth]
