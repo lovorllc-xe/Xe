@@ -1,0 +1,102 @@
+// func: call a function through a pointer, the same way on every platform.
+//
+//     fn square(x: int): int
+//     begin
+//         return x * x
+//     end
+//
+//     var f: *void := &square                // the address of a function is &name
+//     writeln(func.call1(f, 7))              // 49
+//
+// call0 .. call5 pass up to five int / pointer arguments and return an int / pointer (the result of the function). The
+// called function must take only int, pointer or string arguments (not flt). For callbacks that need data, pair a
+// function with a context pointer: see `closure`.
+module func
+begin
+    fn call0(target: *void): int
+    begin
+        asm {
+            mov rax, rdi
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call1(target: *void, a: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call2(target: *void, a: int, b: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call3(target: *void, a: int, b: int, c: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call4(target: *void, a: int, b: int, c: int, d: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+
+    fn call5(target: *void, a: int, b: int, c: int, d: int, e: int): int
+    begin
+        asm {
+            mov rax, rdi
+            mov rdi, rsi
+            mov rsi, rdx
+            mov rdx, rcx
+            mov rcx, r8
+            mov r8, r9
+            and rsp, -16
+            call rax
+            leave
+            ret
+        }
+        return 0
+    end
+end

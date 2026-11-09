@@ -1,0 +1,185 @@
+// Language features added in 2.2: else if, break/continue, globals, constants, enums, casts, function pointers,
+// closures, results and generics. The program returns 0 when everything behaves.
+uses func
+uses closure
+uses result
+
+type Point: record
+begin
+    x: int
+    y: int
+end
+
+type Pair<A, B>: record
+begin
+    first: A
+    second: B
+end
+
+global counter: int := 10
+global label: string
+global scores: [4]int
+global origin: Point
+global head: *Point
+global const LIMIT: int := 3
+global const DOUBLE: int := LIMIT * 2
+
+enum Color
+begin
+    red
+    green := 5
+    blue
+end
+
+module tally
+begin
+    global total: int := 100
+    global const STEP: int := 7
+
+    fn add(): int
+    begin
+        total := total + STEP
+        return total
+    end
+end
+
+type Counter: record
+begin
+    sum: int
+end
+
+fn largest<T>(a: T, b: T): T
+begin
+    if a > b { return a }
+    return b
+end
+
+fn square(x: int): int
+begin
+    return x * x
+end
+
+fn accumulate(env: *Counter, amount: int): int
+begin
+    env.sum := env.sum + amount
+    return env.sum
+end
+
+fn grade(n: int): int
+begin
+    if n < 0 {
+        return 0
+    } else if n < 10 {
+        return 1
+    }
+    else if n < 100 {
+        return 2
+    }
+    else {
+        return 3
+    }
+    return -1
+end
+
+fn bump(): int
+begin
+    counter := counter + 1
+    return counter
+end
+
+fn check(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    // else if
+    failed := failed + check("else if", grade(-4) = 0 && grade(5) = 1 && grade(50) = 2 && grade(5000) = 3)
+    // break and continue, also nested
+    var i: int := 0
+    var total: int := 0
+    while i < 100 {
+        i := i + 1
+        if i % 2 = 0 { continue }
+        if i > 15 { break }
+        total := total + i
+    }
+    failed := failed + check("break/continue", total = 64 && i = 17)
+    var found: int := -1
+    var a: int := 0
+    while a < 10 {
+        var b: int := 0
+        while b < 10 {
+            b := b + 1
+            if a * b = 42 {
+                found := a * 100 + b
+                break
+            }
+        }
+        if found >= 0 { break }
+        a := a + 1
+    }
+    failed := failed + check("nested break", found = 607)
+    // globals
+    bump()
+    bump()
+    failed := failed + check("global int", counter = 12)
+    failed := failed + check("global string default", str.length(label) = 0)
+    label := "set"
+    scores[2] := 9
+    origin.x := 4
+    origin.y := origin.x * 2
+    head := alloc(16)
+    head.x := 77
+    failed := failed + check("global string/array/record/pointer", label = "set" && scores[2] = 9 && origin.y = 8 && head.x = 77)
+    var p: *int := &counter
+    *p := 500
+    failed := failed + check("address of a global", counter = 500)
+    failed := failed + check("global const", LIMIT = 3 && DOUBLE = 6)
+    failed := failed + check("module global", tally.add() = 107 && tally.add() = 114 && tally.total = 114)
+    // enums
+    var shade: Color := Color.blue
+    var name: int := 0
+    switch shade begin
+        case Color.red
+            name := 1
+        case Color.blue
+            name := 3
+        default
+            name := 9
+    end
+    failed := failed + check("enum", Color.red = 0 && Color.green = 5 && Color.blue = 6 && name = 3)
+    // casts
+    var n: int := 7
+    var half: flt := cast.flt(n) / 2.0
+    failed := failed + check("cast.flt/int", half = 3.5 && cast.int(half * 4.0) = 14)
+    var raw: *Point := alloc(16)
+    raw.x := 41
+    var address: int := cast.addr(raw)
+    var again: *Point := cast.ptr(address)
+    failed := failed + check("cast.ptr/addr", again.x = 41)
+    // function pointers and closures
+    failed := failed + check("function pointer", func.call1(&square, 9) = 81)
+    var data: *Counter := alloc(8)
+    var c: *closure.Closure := closure.make(&accumulate, data)
+    closure.call1(c, 5)
+    failed := failed + check("closure", closure.call1(c, 3) = 8 && data.sum = 8)
+    // results
+    var good: *result.Result := result.ok(42)
+    var bad: *result.Result := result.fail("nope")
+    failed := failed + check("result", result.unwrap(good) = 42 && result.is_error(bad) = 1 && result.value_or(bad, 5) = 5 && result.message(bad) = "nope")
+    // generics
+    var pair: *Pair<int, string> := alloc(16)
+    pair.first := 3
+    pair.second := "three"
+    failed := failed + check("generic type", pair.first = 3 && pair.second = "three")
+    failed := failed + check("generic function", largest<int>(3, 9) = 9 && largest<flt>(2.5, 1.5) = 2.5)
+    if failed = 0 { writeln("language ok") }
+    return failed
+end

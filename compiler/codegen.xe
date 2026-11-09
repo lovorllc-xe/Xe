@@ -2699,7 +2699,9 @@ begin
 
     fn functionResultTypeSlow(source: string, pool: *[12582912]int, functionId: int, wanted: string): string
     begin
-        if wanted = "atomic.load" || wanted = "atomic.compare_exchange" || wanted = "flt.toint" || wanted = "runtime.pointer.is_null" { return "int" }
+        if wanted = "atomic.load" || wanted = "atomic.compare_exchange" || wanted = "flt.toint" || wanted = "runtime.pointer.is_null" || wanted = "cast.int" || wanted = "cast.addr" { return "int" }
+        if wanted = "cast.flt" { return "flt" }
+        if wanted = "cast.ptr" { return "*void" }
         if wanted = "atomic.store" { return "void" }
         if wanted = "str.builder" || wanted = "str.append" || wanted = "str.slice" || wanted = "str.number" || wanted = "str.fromchar" || wanted = "arg.get" || wanted = "env.get" || wanted = "file.read" || wanted = "flt.format" { return "string" }
         if wanted = "runtime.pointer.read" || wanted = "runtime.globals" { return "*void" }
@@ -2983,7 +2985,7 @@ begin
         if name = "atomic.store" { return 2 }
         if name = "atomic.compare_exchange" { return 3 }
         if name = "flt.format" { return 2 }
-        if name = "flt.toint" { return 1 }
+        if name = "flt.toint" || name = "cast.int" || name = "cast.flt" || name = "cast.ptr" || name = "cast.addr" { return 1 }
         if name = "runtime.pointer.read" || name = "runtime.pointer.cast.string" || name = "runtime.pointer.free" || name = "runtime.pointer.is_null" || name = "alloc" || name = "new" || name = "free" || name = "delete" { return 1 }
         if name = "runtime.pointer.write" { return 2 }
         if name = "aligned_alloc" || name = "alloc.aligned" { return 2 }
@@ -3010,7 +3012,9 @@ begin
         if name = "atomic.compare_exchange" && (index = 1 || index = 2) { return "int" }
         if name = "flt.format" && index = 0 { return "numeric" }
         if name = "flt.format" && index = 1 { return "int" }
-        if name = "flt.toint" && index = 0 { return "flt" }
+        if (name = "flt.toint" || name = "cast.int") && index = 0 { return "flt" }
+        if (name = "cast.flt" || name = "cast.ptr") && index = 0 { return "int" }
+        if name = "cast.addr" && index = 0 { return "*void" }
         if name = "runtime.pointer.is_null" && index = 0 { return "*void" }
         if name = "alloc" || name = "new" || name = "aligned_alloc" || name = "alloc.aligned" { return "int" }
         if (name = "runtime.pointer.read" || name = "runtime.pointer.cast.string" || name = "runtime.pointer.free") && index = 0 { return "*void" }
@@ -3158,11 +3162,17 @@ begin
             if str.length(pointer) = 0 { return "" }
             return pointer + " test rax, rax\n sete al\n movzx rax, al\n"
         }
-        if name = "flt.toint" {
+        if name = "flt.toint" || name = "cast.int" {
             var value: string := floatExpression(source, pool, functionId, first)
             if str.length(value) = 0 { return "" }
             return value + " cvttsd2si rax, xmm0\n"
         }
+        if name = "cast.flt" {
+            var value: string := integerExpression(source, pool, functionId, first)
+            if str.length(value) = 0 { return "" }
+            return value + " cvtsi2sd xmm0, rax\n"
+        }
+        if name = "cast.ptr" || name = "cast.addr" { return integerExpression(source, pool, functionId, first) }
         if name = "atomic.store" {
             var address: string := integerExpression(source, pool, functionId, first)
             var value: string := integerExpression(source, pool, functionId, ast.read(pool, first, 5))

@@ -1,0 +1,99 @@
+// result: errors as values, and panic for errors that cannot be handled.
+//
+//     fn parse(text: string): *result.Result
+//     begin
+//         if str.length(text) = 0 { return result.fail("empty input") }
+//         return result.ok(42)
+//     end
+//
+//     var r: *result.Result := parse("")
+//     if result.is_error(r) = 1 { writeln("error: ", result.message(r)) }
+//     var value: int := result.unwrap(r)             // panics with the message when r is an error
+//
+// A Result holds one int (or a pointer, via cast.addr / cast.ptr). panic prints "panic: message" to standard error
+// and ends the program with exit status 2.
+uses os
+uses syscall
+
+module result
+begin
+    type Result: record
+    begin
+        ok: int
+        value: int
+        text: string
+        code: int
+    end
+
+    fn ok(value: int): *result.Result
+    begin
+        var r: *result.Result := alloc(32)
+        r.ok := 1
+        r.value := value
+        r.text := ""
+        r.code := 0
+        return r
+    end
+
+    fn fail(message: string): *result.Result
+    begin
+        return fail_code(message, 1)
+    end
+
+    fn fail_code(message: string, code: int): *result.Result
+    begin
+        var r: *result.Result := alloc(32)
+        r.ok := 0
+        r.value := 0
+        r.text := message
+        r.code := code
+        return r
+    end
+
+    fn is_ok(r: *result.Result): int
+    begin
+        return r.ok
+    end
+
+    fn is_error(r: *result.Result): int
+    begin
+        if r.ok = 1 { return 0 }
+        return 1
+    end
+
+    fn message(r: *result.Result): string
+    begin
+        return r.text
+    end
+
+    fn code(r: *result.Result): int
+    begin
+        return r.code
+    end
+
+    // The value, or `fallback` when r is an error.
+    fn value_or(r: *result.Result, fallback: int): int
+    begin
+        if r.ok = 1 { return r.value }
+        return fallback
+    end
+
+    // The value; the program panics when r is an error.
+    fn unwrap(r: *result.Result): int
+    begin
+        if r.ok = 0 { panic("unwrap of an error: " + r.text) }
+        return r.value
+    end
+
+    // Print "panic: message" to standard error and end the program with status 2.
+    fn panic(message: string)
+    begin
+        syscall.io.write.string(2, "panic: " + message + "\n")
+        os.exit(2)
+    end
+
+    fn release(r: *result.Result)
+    begin
+        free(r)
+    end
+end

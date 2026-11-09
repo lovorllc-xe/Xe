@@ -1,0 +1,496 @@
+// generics: generic types and functions, lowered to plain Xe before parsing (like desugar). Every distinct set of type
+// arguments gets its own copy of the declaration with the type parameters replaced:
+//
+//   type Pair<A, B>: record
+//   begin
+//       first: A
+//       second: B
+//   end
+//
+//   fn largest<T>(a: T, b: T): T
+//   begin
+//       if a > b { return a }
+//       return b
+//   end
+//
+//   var p: Pair<int, string>              // the type Pair__int__string
+//   var m: int := largest<int>(3, 4)      // the function largest__int
+//
+// Type arguments are written explicitly. Generic declarations are top-level (not inside a module). The copies are
+// appended at the end of the program, so an error inside one is reported on the line where it was generated.
+module generics
+begin
+    type Table: record
+    begin
+        kinds: *[256]int
+        names: *[256]string
+        params: *[256]string
+        counts: *[256]int
+        texts: *[256]string
+        count: int
+        instanceKeys: *[1024]string
+        instanceCount: int
+        instances: string
+        failed: int
+    end
+
+    fn significant(source: string, position: int, line: int): [4]int
+    begin
+        var item: [4]int := lexer.scan(source, position, line)
+        while item[0] = 10 { item := lexer.scan(source, item[2], item[3]) }
+        return item
+    end
+
+    // Is there a line that starts with `type` or `fn` followed by a name and `<`?
+    fn needed(source: string): int
+    begin
+        var size: int := str.length(source)
+        var index: int := 0
+        var atStart: int := 1
+        while index < size {
+            var value: int := str.char(source, index)
+            if value = 10 {
+                atStart := 1
+                index := index + 1
+            }
+            else {
+                if value = 32 || value = 9 || value = 13 { index := index + 1 }
+                else {
+                    if atStart = 1 && ((value = 116 && desugar.wordAt(source, index, "type") = 1) || (value = 102 && desugar.wordAt(source, index, "fn") = 1)) {
+                        var scan: int := index
+                        while scan < size && (lexer.letter(str.char(source, scan)) = 1 || lexer.digit(str.char(source, scan)) = 1) { scan := scan + 1 }
+                        while scan < size && (str.char(source, scan) = 32 || str.char(source, scan) = 9) { scan := scan + 1 }
+                        while scan < size && (lexer.letter(str.char(source, scan)) = 1 || lexer.digit(str.char(source, scan)) = 1 || str.char(source, scan) = 46) { scan := scan + 1 }
+                        if scan < size && str.char(source, scan) = 60 { return 1 }
+                    }
+                    atStart := 0
+                    index := index + 1
+                }
+            }
+        }
+        return 0
+    end
+
+    fn find(table: *generics.Table, name: string): int
+    begin
+        var i: int := 0
+        while i < table.count {
+            if (*table.names)[i] = name { return i }
+            i := i + 1
+        }
+        return -1
+    end
+
+    fn mangle(text: string): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c = 42 { out := str.append(out, "P") }
+            else {
+                if c = 91 { out := str.append(out, "A") }
+                else {
+                    if c = 93 || c = 46 || c = 44 { out := str.append(out, "_") }
+                    else {
+                        if lexer.letter(c) = 1 || lexer.digit(c) = 1 { out := str.append(out, str.fromchar(c)) }
+                    }
+                }
+            }
+            i := i + 1
+        }
+        return out
+    end
+
+    // The end of the dotted name that starts at the name token `first` (a name, then `.name` pairs).
+    fn chainEnd(source: string, first: [4]int): [4]int
+    begin
+        var last: [4]int := first
+        var next: [4]int := lexer.scan(source, first[2], first[3])
+        var running: int := 1
+        while running = 1 {
+            if next[0] = 46 {
+                var member: [4]int := lexer.scan(source, next[2], next[3])
+                if member[0] = token.nameKind() {
+                    last := member
+                    next := lexer.scan(source, member[2], member[3])
+                }
+                else { running := 0 }
+            }
+            else { running := 0 }
+        }
+        return last
+    end
+
+    // Parses `<arg, arg, ...>` whose `<` token is `open`. Returns the end offset of the closing `>` (0 on error);
+    // the arguments' source ranges go to starts[] / finishes[] and their number to counted[0].
+    fn parseArguments(source: string, open: [4]int, starts: *[16]int, finishes: *[16]int, counted: *[1]int): int
+    begin
+        var depth: int := 1
+        var count: int := 0
+        var argumentStart: int := open[2]
+        var item: [4]int := lexer.scan(source, open[2], open[3])
+        while item[0] != token.endKind() && item[0] != 10 && depth > 0 {
+            var closing: int := 0
+            if item[0] = 60 { depth := depth + 1 }
+            if item[0] = 62 {
+                depth := depth - 1
+                closing := 1
+            }
+            if item[0] = token.shiftRightKind() {
+                depth := depth - 2
+                closing := 2
+            }
+            if depth < 0 { return 0 }
+            if item[0] = 44 && depth = 1 {
+                if count >= 15 { return 0 }
+                (*starts)[count] := argumentStart
+                (*finishes)[count] := item[1]
+                count := count + 1
+                argumentStart := item[2]
+            }
+            if depth = 0 {
+                if count >= 15 { return 0 }
+                (*starts)[count] := argumentStart
+                (*finishes)[count] := item[1]
+                if closing = 2 { (*finishes)[count] := item[1] + 1 }
+                count := count + 1
+                (*counted)[0] := count
+                return item[2]
+            }
+            item := lexer.scan(source, item[2], item[3])
+        }
+        return 0
+    end
+
+    // Rewrites the generic uses in `text` (name<args>) to the names of their instances, creating the instances.
+    fn expand(source: string, table: *generics.Table, levels: int): string
+    begin
+        if levels > 24 {
+            diag.print(source, 0, "generic types are nested too deeply (or instantiate each other endlessly)")
+            table.failed := 1
+            return source
+        }
+        var out: string := str.builder("")
+        var copied: int := 0
+        var position: int := 0
+        var line: int := 1
+        var before: [4]int := lexer.scan("", 0, 1)
+        var running: int := 1
+        while running = 1 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                var advanced: int := 0
+                if item[0] = token.nameKind() && before[0] != 46 {
+                    var last: [4]int := chainEnd(source, item)
+                    var name: string := str.slice(source, item[1], last[2])
+                    var g: int := find(table, name)
+                    if g >= 0 {
+                        var open: [4]int := lexer.scan(source, last[2], last[3])
+                        if open[0] = 60 {
+                            var starts: *[16]int := alloc(128)
+                            var finishes: *[16]int := alloc(128)
+                            var counted: *[1]int := alloc(16)
+                            var finish: int := parseArguments(source, open, starts, finishes, counted)
+                            if finish = 0 {
+                                diag.print(source, open[1], "could not read the type arguments of '" + name + "'")
+                                table.failed := 1
+                                return source
+                            }
+                            if (*counted)[0] != (*table.counts)[g] {
+                                diag.print(source, item[1], "'" + name + "' takes " + str.number((*table.counts)[g]) + " type argument(s), but " + str.number((*counted)[0]) + " were given")
+                                table.failed := 1
+                                return source
+                            }
+                            var arguments: *[16]string := alloc(128)
+                            var a: int := 0
+                            while a < (*counted)[0] {
+                                var raw: string := desugar.trim(str.slice(source, (*starts)[a], (*finishes)[a]))
+                                (*arguments)[a] := expand(raw, table, levels + 1)
+                                a := a + 1
+                            }
+                            var instance: string := instantiate(source, table, g, arguments, (*counted)[0], levels)
+                            if table.failed = 1 { return source }
+                            out := str.append(out, str.slice(source, copied, item[1]) + instance)
+                            copied := finish
+                            position := finish
+                            line := item[3]
+                            advanced := 1
+                            free(starts)
+                            free(finishes)
+                            free(counted)
+                            free(arguments)
+                        }
+                    }
+                }
+                if advanced = 0 {
+                    position := item[2]
+                    line := item[3]
+                }
+                if item[0] != 10 { before := item }
+                if advanced = 1 { before := lexer.scan("x", 0, 1) }
+            }
+        }
+        out := str.append(out, str.slice(source, copied, str.length(source)))
+        return out
+    end
+
+    // The mangled name of generic `g` with these arguments; creates the instance on first use.
+    fn instantiate(source: string, table: *generics.Table, g: int, arguments: *[16]string, count: int, levels: int): string
+    begin
+        var key: string := (*table.names)[g]
+        var mangled: string := (*table.names)[g]
+        var i: int := 0
+        while i < count {
+            key := key + "<" + (*arguments)[i] + ">"
+            mangled := mangled + "__" + mangle((*arguments)[i])
+            i := i + 1
+        }
+        var k: int := 0
+        while k < table.instanceCount {
+            if (*table.instanceKeys)[k] = key { return mangled }
+            k := k + 1
+        }
+        if table.instanceCount >= 1024 {
+            diag.print(source, 0, "too many generic instances (limit 1024)")
+            table.failed := 1
+            return mangled
+        }
+        (*table.instanceKeys)[table.instanceCount] := key
+        table.instanceCount := table.instanceCount + 1
+        // the instance text: the declaration with its own name changed and the type parameters replaced
+        var parameters: string := (*table.params)[g]
+        var text: string := (*table.texts)[g]
+        var out: string := str.builder("")
+        var copied: int := 0
+        var position: int := 0
+        var line: int := 1
+        var before: [4]int := lexer.scan("", 0, 1)
+        var nameDone: int := 0
+        var running: int := 1
+        var first: [4]int := significant(text, 0, 1)
+        var headerKind: [4]int := first
+        position := first[2]
+        line := first[3]
+        out := str.append(out, str.slice(text, 0, first[2]))
+        copied := first[2]
+        // name (possibly dotted), then the `<...>` list
+        var nameStart: [4]int := significant(text, position, line)
+        var nameLast: [4]int := chainEnd(text, nameStart)
+        var open: [4]int := lexer.scan(text, nameLast[2], nameLast[3])
+        var starts: *[16]int := alloc(128)
+        var finishes: *[16]int := alloc(128)
+        var counted: *[1]int := alloc(16)
+        var close: int := parseArguments(text, open, starts, finishes, counted)
+        out := str.append(out, str.slice(text, copied, nameStart[1]) + mangled)
+        copied := close
+        position := close
+        line := open[3]
+        free(starts)
+        free(finishes)
+        free(counted)
+        var names: *[16]string := alloc(128)
+        var p: int := 0
+        var start: int := 0
+        var n: int := 0
+        while p <= str.length(parameters) {
+            if p = str.length(parameters) || str.char(parameters, p) = 44 {
+                (*names)[n] := str.slice(parameters, start, p)
+                n := n + 1
+                start := p + 1
+            }
+            p := p + 1
+        }
+        while running = 1 {
+            var item: [4]int := lexer.scan(text, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                if item[0] = token.nameKind() && before[0] != 46 {
+                    var word: string := str.slice(text, item[1], item[2])
+                    var m: int := 0
+                    while m < n {
+                        if (*names)[m] = word {
+                            out := str.append(out, str.slice(text, copied, item[1]) + (*arguments)[m])
+                            copied := item[2]
+                        }
+                        m := m + 1
+                    }
+                }
+                position := item[2]
+                line := item[3]
+                if item[0] != 10 { before := item }
+            }
+        }
+        out := str.append(out, str.slice(text, copied, str.length(text)))
+        free(names)
+        var finished: string := expand(out, table, levels + 1)
+        table.instances := str.append(table.instances, "\n" + finished + "\n")
+        return mangled
+    end
+
+    // Removes the generic declarations from the source (keeping its line count) and records them in the table.
+    fn collect(source: string, table: *generics.Table): string
+    begin
+        var out: string := str.builder("")
+        var copied: int := 0
+        var position: int := 0
+        var line: int := 1
+        var depth: int := 0
+        var lineStart: int := 1
+        var running: int := 1
+        while running = 1 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                if item[0] = 10 {
+                    lineStart := 1
+                    position := item[2]
+                    line := item[3]
+                }
+                else {
+                    var text: string := ""
+                    if item[0] = token.nameKind() { text := str.slice(source, item[1], item[2]) }
+                    var handled: int := 0
+                    if lineStart = 1 && depth = 0 && (text = "type" || text = "fn") {
+                        var nameStart: [4]int := significant(source, item[2], item[3])
+                        if nameStart[0] = token.nameKind() {
+                            var nameLast: [4]int := chainEnd(source, nameStart)
+                            var open: [4]int := lexer.scan(source, nameLast[2], nameLast[3])
+                            if open[0] = 60 {
+                                var finish: int := declare(source, table, item, nameStart, nameLast, open)
+                                if finish < 0 {
+                                    table.failed := 1
+                                    return source
+                                }
+                                out := str.append(out, str.slice(source, copied, item[1]) + desugar.blanked(str.slice(source, item[1], finish)))
+                                copied := finish
+                                position := finish
+                                handled := 1
+                            }
+                        }
+                    }
+                    if handled = 0 {
+                        lineStart := 0
+                        if text = "begin" { depth := depth + 1 }
+                        if text = "end" { depth := depth - 1 }
+                        position := item[2]
+                        line := item[3]
+                    }
+                    else { lineStart := 0 }
+                }
+            }
+        }
+        out := str.append(out, str.slice(source, copied, str.length(source)))
+        return out
+    end
+
+    // Records one generic declaration; returns the offset where it ends, or -1 after an error.
+    fn declare(source: string, table: *generics.Table, keyword: [4]int, nameStart: [4]int, nameLast: [4]int, open: [4]int): int
+    begin
+        var starts: *[16]int := alloc(128)
+        var finishes: *[16]int := alloc(128)
+        var counted: *[1]int := alloc(16)
+        var close: int := parseArguments(source, open, starts, finishes, counted)
+        if close = 0 {
+            diag.print(source, open[1], "could not read the type parameters after '" + str.slice(source, nameStart[1], nameLast[2]) + "'")
+            return -1
+        }
+        var parameters: string := ""
+        var i: int := 0
+        while i < (*counted)[0] {
+            var word: string := desugar.trim(str.slice(source, (*starts)[i], (*finishes)[i]))
+            if str.length(word) = 0 || lexer.letter(str.char(word, 0)) = 0 {
+                diag.print(source, (*starts)[i], "a type parameter must be a name")
+                return -1
+            }
+            if i > 0 { parameters := parameters + "," }
+            parameters := parameters + word
+            i := i + 1
+        }
+        var parameterCount: int := (*counted)[0]
+        free(starts)
+        free(finishes)
+        free(counted)
+        var name: string := str.slice(source, nameStart[1], nameLast[2])
+        if find(table, name) >= 0 {
+            diag.print(source, nameStart[1], "generic '" + name + "' is declared twice")
+            return -1
+        }
+        if table.count >= 256 {
+            diag.print(source, nameStart[1], "too many generic declarations (limit 256)")
+            return -1
+        }
+        // the declaration ends at the `end` of its block, or at the end of the line for a type alias
+        var isType: int := 0
+        if str.slice(source, keyword[1], keyword[2]) = "type" { isType := 1 }
+        var blockMode: int := 1
+        if isType = 1 {
+            var colon: [4]int := lexer.scan(source, close, open[3])
+            var after: [4]int := significant(source, colon[2], colon[3])
+            if str.slice(source, after[1], after[2]) != "record" { blockMode := 0 }
+        }
+        var item: [4]int := lexer.scan(source, close, open[3])
+        var finish: int := close
+        var depth: int := 0
+        var sawBlock: int := 0
+        var done: int := 0
+        while done = 0 && item[0] != token.endKind() {
+            var text: string := ""
+            if item[0] = token.nameKind() { text := str.slice(source, item[1], item[2]) }
+            if blockMode = 0 && item[0] = 10 { done := 1 }
+            else {
+                if text = "begin" {
+                    depth := depth + 1
+                    sawBlock := 1
+                }
+                if text = "end" {
+                    depth := depth - 1
+                    if depth = 0 && sawBlock = 1 {
+                        finish := item[2]
+                        done := 1
+                    }
+                }
+                if done = 0 {
+                    finish := item[2]
+                    item := lexer.scan(source, item[2], item[3])
+                }
+            }
+        }
+        if blockMode = 1 && sawBlock = 0 {
+            diag.print(source, keyword[1], "this generic declaration has no body")
+            return -1
+        }
+        var kind: int := 2
+        if isType = 1 { kind := 1 }
+        var index: int := table.count
+        (*table.kinds)[index] := kind
+        (*table.names)[index] := name
+        (*table.params)[index] := parameters
+        (*table.counts)[index] := parameterCount
+        (*table.texts)[index] := str.slice(source, keyword[1], finish)
+        table.count := index + 1
+        return finish
+    end
+
+    // The entry point: returns the program with generics expanded, or "" after an error.
+    fn run(source: string): string
+    begin
+        if needed(source) = 0 { return source }
+        var table: *generics.Table := alloc(128)
+        runtime.mem.set(table, 0, 128)
+        table.kinds := alloc(256 * 8)
+        table.names := alloc(256 * 8)
+        table.params := alloc(256 * 8)
+        table.counts := alloc(256 * 8)
+        table.texts := alloc(256 * 8)
+        table.instanceKeys := alloc(1024 * 8)
+        table.instances := str.builder("")
+        var stripped: string := collect(source, table)
+        if table.failed = 1 { return "" }
+        if table.count = 0 { return stripped }
+        var expanded: string := expand(stripped, table, 0)
+        if table.failed = 1 { return "" }
+        return expanded + table.instances
+    end
+end

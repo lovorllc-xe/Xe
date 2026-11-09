@@ -1,0 +1,61 @@
+// closure: a function pointer bundled with the data it works on.
+//
+//     type Counter: record
+//     begin
+//         total: int
+//     end
+//
+//     fn add(env: *Counter, amount: int): int      // the first parameter receives the closure's data
+//     begin
+//         env.total := env.total + amount
+//         return env.total
+//     end
+//
+//     var data: *Counter := alloc(8)
+//     var c: *closure.Closure := closure.make(&add, data)
+//     closure.call1(c, 5)
+//     closure.call1(c, 3)                          // data.total is now 8
+uses func
+
+module closure
+begin
+    type Closure: record
+    begin
+        code: *void
+        env: *void
+    end
+
+    // A closure that calls `code(env, ...)`.
+    fn make(code: *void, env: *void): *closure.Closure
+    begin
+        var c: *closure.Closure := alloc(16)
+        c.code := code
+        c.env := env
+        return c
+    end
+
+    fn call0(c: *closure.Closure): int
+    begin
+        return func.call1(c.code, cast.addr(c.env))
+    end
+
+    fn call1(c: *closure.Closure, a: int): int
+    begin
+        return func.call2(c.code, cast.addr(c.env), a)
+    end
+
+    fn call2(c: *closure.Closure, a: int, b: int): int
+    begin
+        return func.call3(c.code, cast.addr(c.env), a, b)
+    end
+
+    fn call3(c: *closure.Closure, a: int, b: int, d: int): int
+    begin
+        return func.call4(c.code, cast.addr(c.env), a, b, d)
+    end
+
+    fn release(c: *closure.Closure)
+    begin
+        free(c)
+    end
+end
