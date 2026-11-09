@@ -1,0 +1,57 @@
+// Audio generators, WAV files and (when the machine has one) the sound device.
+uses audio
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    var rate: int := 8000
+    var frames: int := audio.frames_of(rate, 100)
+    failed := failed + expect("frames", frames = 800)
+    var tone: *void := audio.tone(rate, 440, 100, 0.5)
+    var peak: int := 0
+    var i: int := 0
+    while i < frames {
+        var v: int := audio.get16(tone, i)
+        if v < 0 { v := 0 - v }
+        if v > peak { peak := v }
+        i := i + 1
+    }
+    failed := failed + expect("tone peak", peak > 15000 && peak <= 16384)
+    var square: *void := audio.square(rate, 100, 50, 0.25)
+    failed := failed + expect("square", audio.get16(square, 0) > 8000 && audio.get16(square, 50) < -8000)
+    var mixed: *void := audio.silence(rate, 100)
+    audio.mix(mixed, tone, frames, 0.5)
+    failed := failed + expect("mix", audio.get16(mixed, 5) = audio.get16(tone, 5) / 2 || audio.get16(mixed, 5) - audio.get16(tone, 5) / 2 < 2)
+    var noise: *void := audio.noise(rate, 50, 0.5)
+    failed := failed + expect("noise", audio.get16(noise, 3) != audio.get16(noise, 4) || audio.get16(noise, 4) != audio.get16(noise, 5))
+    // a WAV file round trip
+    var path: string := "/tmp/xe-audio-test.wav"
+    failed := failed + expect("save wav", audio.save_wav(path, tone, frames, rate, 1) = 0)
+    var back: *audio.Wav := audio.load_wav(path)
+    failed := failed + expect("load wav", @back != 0)
+    if @back != 0 {
+        failed := failed + expect("wav header", back.frames = frames && back.rate = rate && back.channels = 1)
+        failed := failed + expect("wav data", audio.get16(back.samples, 37) = audio.get16(tone, 37) && audio.get16(back.samples, 799) = audio.get16(tone, 799))
+        audio.release_wav(back)
+    }
+    syscall.io.close(syscall.io.open("/tmp/xe-audio-test.wav", 0, 0))
+    // the device: only checked when one exists; plays 30 ms of silence
+    var device: *audio.Audio := audio.open(rate, 1)
+    if @device != 0 {
+        failed := failed + expect("play", audio.play(device, audio.silence(rate, 30), audio.frames_of(rate, 30)) = 0)
+        audio.close(device)
+        writeln("sound device ok")
+    }
+    else { writeln("no sound device: playback skipped") }
+    if failed = 0 { writeln("audio ok") }
+    return failed
+end

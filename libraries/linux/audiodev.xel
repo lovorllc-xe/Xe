@@ -1,0 +1,60 @@
+// audiodev (Linux): sound output through ALSA. libasound is loaded at run time, so programs build and run on machines
+// without it (open returns 0). The platform half of `audio`.
+uses ffi
+
+module audiodev
+begin
+    // A device handle (the snd_pcm_t pointer), or 0.
+    fn open(rate: int, channels: int): int
+    begin
+        var library: int := ffi.library("libasound.so.2")
+        if library = 0 { return 0 }
+        var open_pcm: int := ffi.symbol(library, "snd_pcm_open")
+        var set_params: int := ffi.symbol(library, "snd_pcm_set_params")
+        if open_pcm = 0 || set_params = 0 { return 0 }
+        var out: *void := ffi.block(16)
+        var name: int := ffi.cstr("default")
+        var result: int := ffi.int32(ffi.call4(open_pcm, @out, name, 0, 0))
+        if result < 0 {
+            free(out)
+            return 0
+        }
+        var pcm: int := ffi.get64(out, 0)
+        free(out)
+        // signed 16-bit little endian, interleaved, resampling allowed, 100 ms of latency
+        result := ffi.int32(ffi.call8(set_params, pcm, 2, 3, channels, rate, 1, 100000, 0))
+        if result < 0 {
+            ffi.call1(ffi.symbol(library, "snd_pcm_close"), pcm)
+            return 0
+        }
+        return pcm
+    end
+
+    fn write(handle: int, samples: *void, frames: int, channels: int): int
+    begin
+        var library: int := ffi.library("libasound.so.2")
+        var write_frames: int := ffi.symbol(library, "snd_pcm_writei")
+        var recover: int := ffi.symbol(library, "snd_pcm_recover")
+        var done: int := 0
+        var tries: int := 0
+        while done < frames && tries < 8 {
+            var n: int := ffi.int32(ffi.call3(write_frames, handle, @samples + done * channels * 2, frames - done))
+            if n < 0 {
+                if ffi.int32(ffi.call3(recover, handle, n, 1)) < 0 { return -1 }
+                tries := tries + 1
+            }
+            else { done := done + n }
+        }
+        if done < frames { return -1 }
+        // a short sound may be below the start threshold: make sure the device is running (drain would wait forever)
+        if ffi.int32(ffi.call1(ffi.symbol(library, "snd_pcm_state"), handle)) = 2 { ffi.call1(ffi.symbol(library, "snd_pcm_start"), handle) }
+        return 0
+    end
+
+    fn close(handle: int)
+    begin
+        var library: int := ffi.library("libasound.so.2")
+        ffi.call1(ffi.symbol(library, "snd_pcm_drop"), handle)
+        ffi.call1(ffi.symbol(library, "snd_pcm_close"), handle)
+    end
+end

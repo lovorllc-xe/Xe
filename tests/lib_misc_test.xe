@@ -21,6 +21,7 @@ uses bench
 uses intervals
 uses geohash
 uses epoll
+uses os
 uses inotify
 uses kvstore
 uses ascii85
@@ -160,19 +161,23 @@ begin
     var back: [2]flt := geohash.decode(h)
     failed := failed + expect("geohash", h = "u4pruydqqvj" && mathx.abs(back[0] - 57.64911) < 0.00001)
     failed := failed + expect("haversine", mathx.abs(geohash.distance(0.0, 0.0, 0.0, 1.0) - 111194.9) < 100.0)
-    var ep: int := epoll.create()
-    var wake: int := epoll.eventfd()
-    epoll.add(ep, wake, epoll.readable())
-    failed := failed + expect("epoll idle", intlist.len(epoll.wait(ep, 4, 0)) = 0)
-    epoll.signal(wake)
-    var ready: *intlist.List := epoll.wait(ep, 4, 1000)
-    failed := failed + expect("epoll ready", intlist.len(ready) = 2 && intlist.get(ready, 0) = wake)
+    if os.name() = "linux" {
+        var ep: int := epoll.create()
+        var wake: int := epoll.eventfd()
+        epoll.add(ep, wake, epoll.readable())
+        failed := failed + expect("epoll idle", intlist.len(epoll.wait(ep, 4, 0)) = 0)
+        epoll.signal(wake)
+        var ready: *intlist.List := epoll.wait(ep, 4, 1000)
+        failed := failed + expect("epoll ready", intlist.len(ready) = 2 && intlist.get(ready, 0) = wake)
+    }
     var root: string := tempfile.directory("xe-misc-")
-    var notify: int := inotify.init()
-    inotify.watch(notify, root, inotify.create_event() | inotify.modify())
-    file.write(root + "/watched.txt", "x")
-    var events: *strlist.List := inotify.read_events(notify)
-    failed := failed + expect("inotify", strlist.len(events) >= 1 && inotify.name_of(strlist.get(events, 0)) = "watched.txt")
+    if os.name() = "linux" {
+        var notify: int := inotify.init()
+        inotify.watch(notify, root, inotify.create_event() | inotify.modify())
+        file.write(root + "/watched.txt", "x")
+        var events: *strlist.List := inotify.read_events(notify)
+        failed := failed + expect("inotify", strlist.len(events) >= 1 && inotify.name_of(strlist.get(events, 0)) = "watched.txt")
+    }
     var store: *kvstore.Store := kvstore.open(root + "/data.log")
     kvstore.set(store, "name", "xe lang")
     kvstore.set(store, "note", "line1\nline2")

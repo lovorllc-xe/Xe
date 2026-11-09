@@ -1,0 +1,88 @@
+// audiodev (Windows): sound output through winmm (waveOut). Each write waits until the data has been played.
+// Not tested on real Windows hardware.
+uses win32
+uses ffi
+
+module audiodev
+begin
+    type Device: record
+    begin
+        wave: int
+        channels: int
+        rate: int
+    end
+
+    fn call(address: int, a: int, b: int, c: int, d: int, e: int, f: int, count: int): int
+    begin
+        var args: *[16]int := alloc(128)
+        (*args)[0] := a
+        (*args)[1] := b
+        (*args)[2] := c
+        (*args)[3] := d
+        (*args)[4] := e
+        (*args)[5] := f
+        var result: int := win32.call(address, args, count)
+        free(args)
+        return result
+    end
+
+    fn open(rate: int, channels: int): int
+    begin
+        var open_wave: int := win32.proc("winmm.dll", "waveOutOpen")
+        if open_wave = 0 { return 0 }
+        var format: *void := ffi.block(24)
+        ffi.put32(format, 0, 1)
+        runtime.hw.write8(format + 2, channels)
+        ffi.put32(format, 4, rate)
+        ffi.put32(format, 8, rate * channels * 2)
+        runtime.hw.write8(format + 12, channels * 2)
+        runtime.hw.write8(format + 14, 16)
+        var out: *void := ffi.block(16)
+        // waveOutOpen(&handle, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL)
+        var result: int := call(open_wave, @out, 4294967295, @format, 0, 0, 0, 6) & 4294967295
+        var wave: int := ffi.get64(out, 0)
+        free(format)
+        free(out)
+        if result != 0 { return 0 }
+        var device: *audiodev.Device := alloc(32)
+        device.wave := wave
+        device.channels := channels
+        device.rate := rate
+        return cast.addr(device)
+    end
+
+    fn write(handle: int, samples: *void, frames: int, channels: int): int
+    begin
+        var device: *audiodev.Device := cast.ptr(handle)
+        var prepare: int := win32.proc("winmm.dll", "waveOutPrepareHeader")
+        var play: int := win32.proc("winmm.dll", "waveOutWrite")
+        var unprepare: int := win32.proc("winmm.dll", "waveOutUnprepareHeader")
+        var sleep: int := win32.proc("kernel32.dll", "Sleep")
+        var bytes: int := frames * channels * 2
+        var data: *void := alloc(bytes + 16)
+        runtime.mem.copy(data, samples, bytes)
+        var header: *void := ffi.block(64)
+        ffi.put64(header, 0, @data)
+        ffi.put32(header, 8, bytes)
+        call(prepare, device.wave, @header, 48, 0, 0, 0, 3)
+        var result: int := call(play, device.wave, @header, 48, 0, 0, 0, 3) & 4294967295
+        if result = 0 {
+            while (ffi.get32(header, 24) & 1) = 0 { call(sleep, 5, 0, 0, 0, 0, 0, 1) }
+        }
+        call(unprepare, device.wave, @header, 48, 0, 0, 0, 3)
+        free(header)
+        free(data)
+        if result != 0 { return -1 }
+        return 0
+    end
+
+    fn close(handle: int)
+    begin
+        var device: *audiodev.Device := cast.ptr(handle)
+        var reset: int := win32.proc("winmm.dll", "waveOutReset")
+        var close_wave: int := win32.proc("winmm.dll", "waveOutClose")
+        call(reset, device.wave, 0, 0, 0, 0, 0, 1)
+        call(close_wave, device.wave, 0, 0, 0, 0, 0, 1)
+        free(device)
+    end
+end

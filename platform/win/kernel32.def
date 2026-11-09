@@ -32,3 +32,14 @@ CreateThread
 WaitForSingleObject
 CreateProcessA
 GetExitCodeProcess
+GetFileAttributesExA
+GetFileAttributesA
+GetFileSizeEx
+FindFirstFileA
+FindNextFileA
+FindClose
+CreateFileMappingA
+MapViewOfFile
+UnmapViewOfFile
+GetComputerNameA
+GetSystemInfo

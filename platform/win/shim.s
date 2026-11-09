@@ -18,14 +18,16 @@ xe.syscall:
  push r8
  push r9
  push r10
- sub rsp, 192
+ push rdi
+ push rsi
+ sub rsp, 640
  and rsp, -16
- movups xmmword ptr [rsp+64], xmm0
- movups xmmword ptr [rsp+80], xmm1
- movups xmmword ptr [rsp+96], xmm2
- movups xmmword ptr [rsp+112], xmm3
- movups xmmword ptr [rsp+128], xmm4
- movups xmmword ptr [rsp+144], xmm5
+ movups xmmword ptr [rsp+400], xmm0
+ movups xmmword ptr [rsp+416], xmm1
+ movups xmmword ptr [rsp+432], xmm2
+ movups xmmword ptr [rsp+448], xmm3
+ movups xmmword ptr [rsp+464], xmm4
+ movups xmmword ptr [rsp+480], xmm5
  cmp rax, 1
  je .LwsWrite
  test rax, rax
@@ -72,6 +74,54 @@ xe.syscall:
  je .LwsGetcwd
  cmp rax, 80
  je .LwsChdir
+ cmp rax, 4
+ je .LwsStat
+ cmp rax, 6
+ je .LwsStat
+ cmp rax, 21
+ je .LwsAccess
+ cmp rax, 5
+ je .LwsFstat
+ cmp rax, 63
+ je .LwsUname
+ cmp rax, 102
+ je .LwsZero
+ cmp rax, 104
+ je .LwsZero
+ cmp rax, 110
+ je .LwsGetpid
+ cmp rax, 217
+ je .LwsGetdents
+ cmp rax, 41
+ je .LwsSocket
+ cmp rax, 42
+ je .LwsSock3Connect
+ cmp rax, 43
+ je .LwsSock3Accept
+ cmp rax, 49
+ je .LwsSock3Bind
+ cmp rax, 50
+ je .LwsSock2Listen
+ cmp rax, 44
+ je .LwsSendto
+ cmp rax, 45
+ je .LwsRecvfrom
+ cmp rax, 48
+ je .LwsSock2Shutdown
+ cmp rax, 51
+ je .LwsSock3Getsockname
+ cmp rax, 52
+ je .LwsSock3Getpeername
+ cmp rax, 54
+ je .LwsSetsockopt
+ cmp rax, 7
+ je .LwsPoll
+ cmp rax, 204
+ je .LwsAffinity
+ cmp rax, 13
+ je .LwsZero
+ cmp rax, 62
+ je .LwsKill
  mov rax, -38
  jmp .LwsDone
 
@@ -103,6 +153,9 @@ xe.syscall:
  ret
 
 .LwsWrite:
+ call .LwsIsSocket
+ test eax, eax
+ jnz .LwsSockWrite
  call .LwsHandle
  mov rcx, rax
  mov rdx, rsi
@@ -117,6 +170,9 @@ xe.syscall:
  jmp .LwsDone
 
 .LwsRead:
+ call .LwsIsSocket
+ test eax, eax
+ jnz .LwsSockRead
  call .LwsHandle
  mov rcx, rax
  mov rdx, rsi
@@ -149,6 +205,9 @@ xe.syscall:
  mov rcx, rsi
  mov rdx, qword ptr [rbp-16]
 .LwsOpenCommon:
+ test edx, 0x10000
+ jnz .LwsOpenDir
+ mov qword ptr [rsp+56], rdx
  mov r8d, 0x80000000
  mov eax, edx
  and eax, 3
@@ -158,9 +217,6 @@ xe.syscall:
  je .LwsAccessOk
  mov r8d, 0xC0000000
 .LwsAccessOk:
- test edx, 0x400
- jz .LwsNoAppend
- mov r8d, 0x00100004
 .LwsNoAppend:
  mov r9d, 3
  test edx, 0x40
@@ -177,22 +233,39 @@ xe.syscall:
  mov r9d, 5
 .LwsDisposition:
  mov rax, r9
- mov r9d, 0
- mov r10d, 3
- mov rdx, r10
+ mov rdx, r8
+ mov r8d, 7
+ xor r9d, r9d
  mov qword ptr [rsp+48], 0
  mov qword ptr [rsp+40], 0x80
  mov qword ptr [rsp+32], rax
- xor r9d, r9d
  call qword ptr [rip+__imp_CreateFileA]
  cmp rax, -1
- jne .LwsDone
+ jne .LwsOpened
  mov rax, -2
+ jmp .LwsDone
+.LwsOpened:
+ test dword ptr [rsp+56], 0x400
+ jz .LwsDone
+ mov qword ptr [rsp+64], rax
+ mov rcx, rax
+ xor edx, edx
+ xor r8d, r8d
+ mov r9d, 2
+ call qword ptr [rip+__imp_SetFilePointerEx]
+ mov rax, qword ptr [rsp+64]
  jmp .LwsDone
 
 .LwsClose:
  cmp rdi, 2
  jbe .LwsCloseOk
+ mov rax, rdi
+ sub rax, 0x7F000000
+ cmp rax, 16
+ jb .LwsCloseDir
+ call .LwsIsSocket
+ test eax, eax
+ jnz .LwsCloseSock
  mov rcx, rdi
  call qword ptr [rip+__imp_CloseHandle]
 .LwsCloseOk:
@@ -224,7 +297,7 @@ xe.syscall:
 # mmap(addr, length, prot, flags, fd, offset): anonymous memory only.
 .LwsMmap:
  cmp qword ptr [rbp-24], -1
- jne .LwsEnosys
+ jne .LwsMapFile
  mov rdx, rsi
  xor ecx, ecx
  mov r8d, 0x3000
@@ -259,9 +332,14 @@ xe.syscall:
 
 .LwsMunmap:
  mov rcx, rdi
+ call qword ptr [rip+__imp_UnmapViewOfFile]
+ test eax, eax
+ jnz .LwsMunmapDone
+ mov rcx, rdi
  xor edx, edx
  mov r8d, 0x8000
  call qword ptr [rip+__imp_VirtualFree]
+.LwsMunmapDone:
  xor eax, eax
  jmp .LwsDone
 
@@ -419,14 +497,655 @@ xe.syscall:
  xor eax, eax
  jmp .LwsDone
 
+.LwsZero:
+ xor eax, eax
+ jmp .LwsDone
+
+# access(path, mode)
+.LwsAccess:
+ mov rcx, rdi
+ call qword ptr [rip+__imp_GetFileAttributesA]
+ cmp eax, -1
+ mov rax, -2
+ je .LwsDone
+ xor eax, eax
+ jmp .LwsDone
+
+# FILETIME (100 ns since 1601) in rax -> Unix seconds in rax
+.LwsFt:
+ mov rcx, 116444736000000000
+ sub rax, rcx
+ xor edx, edx
+ mov rcx, 10000000
+ div rcx
+ ret
+
+# stat(path, buf) / lstat(path, buf): the fields Xe's stat library reads
+.LwsStat:
+ mov rbx, rsi
+ mov rcx, rdi
+ xor edx, edx
+ lea r8, [rsp+48]
+ call qword ptr [rip+__imp_GetFileAttributesExA]
+ test eax, eax
+ jz .LwsNoEnt
+ mov rdi, rbx
+ xor eax, eax
+ mov ecx, 18
+ rep stosq
+ mov eax, dword ptr [rsp+48]
+ mov ecx, 0x81A4
+ test eax, 0x10
+ jz .LwsStatMode
+ mov ecx, 0x41ED
+.LwsStatMode:
+ mov dword ptr [rbx+24], ecx
+ mov qword ptr [rbx+16], 1
+ mov eax, dword ptr [rsp+76]
+ shl rax, 32
+ mov ecx, dword ptr [rsp+80]
+ or rax, rcx
+ mov qword ptr [rbx+48], rax
+ mov rax, qword ptr [rsp+60]
+ call .LwsFt
+ mov qword ptr [rbx+72], rax
+ mov rax, qword ptr [rsp+68]
+ call .LwsFt
+ mov qword ptr [rbx+88], rax
+ mov rax, qword ptr [rsp+52]
+ call .LwsFt
+ mov qword ptr [rbx+104], rax
+ xor eax, eax
+ jmp .LwsDone
+.LwsNoEnt:
+ mov rax, -2
+ jmp .LwsDone
+
+# fstat(fd, buf): size and a regular-file mode
+.LwsFstat:
+ mov rbx, rsi
+ call .LwsHandle
+ mov rcx, rax
+ lea rdx, [rsp+48]
+ call qword ptr [rip+__imp_GetFileSizeEx]
+ test eax, eax
+ jz .LwsIoFail
+ mov rdi, rbx
+ xor eax, eax
+ mov ecx, 18
+ rep stosq
+ mov dword ptr [rbx+24], 0x81A4
+ mov qword ptr [rbx+16], 1
+ mov rax, qword ptr [rsp+48]
+ mov qword ptr [rbx+48], rax
+ xor eax, eax
+ jmp .LwsDone
+
+# uname(buf)
+.LwsUname:
+ mov rbx, rdi
+ xor eax, eax
+ mov ecx, 390
+ rep stosb
+ mov rax, 0x0073776F646E6957
+ mov qword ptr [rbx], rax
+ mov dword ptr [rsp+48], 64
+ lea rcx, [rbx+65]
+ lea rdx, [rsp+48]
+ call qword ptr [rip+__imp_GetComputerNameA]
+ mov rax, 0x0000000000003031
+ mov qword ptr [rbx+130], rax
+ mov rax, 0x000034365F363878
+ mov qword ptr [rbx+260], rax
+ xor eax, eax
+ jmp .LwsDone
+
+# mmap of a file (read-only): CreateFileMapping + MapViewOfFile
+.LwsMapFile:
+ mov rcx, qword ptr [rbp-24]
+ xor edx, edx
+ mov r8d, 2
+ xor r9d, r9d
+ mov qword ptr [rsp+32], 0
+ mov qword ptr [rsp+40], 0
+ call qword ptr [rip+__imp_CreateFileMappingA]
+ test rax, rax
+ jz .LwsNoMem
+ mov rbx, rax
+ mov rcx, rbx
+ mov edx, 4
+ xor r8d, r8d
+ xor r9d, r9d
+ mov qword ptr [rsp+32], 0
+ call qword ptr [rip+__imp_MapViewOfFile]
+ mov qword ptr [rsp+48], rax
+ mov rcx, rbx
+ call qword ptr [rip+__imp_CloseHandle]
+ mov rax, qword ptr [rsp+48]
+ test rax, rax
+ jnz .LwsDone
+ jmp .LwsNoMem
+
+# ---- directories: open(O_DIRECTORY) hands out a small fake descriptor, getdents64 walks it with FindFirstFile ----
+# slot (640 bytes): +0 find handle, +8 in use, +16 an entry is waiting, +24 search pattern, +304 WIN32_FIND_DATAA
+.LwsOpenDir:
+ mov rbx, rcx
+ call qword ptr [rip+__imp_GetFileAttributesA]
+ cmp eax, -1
+ je .LwsNoEnt
+ test eax, 0x10
+ jz .LwsNotDir
+ lea rsi, [rip+.LxeWinDirs]
+ xor ecx, ecx
+.LwsOdFind:
+ cmp qword ptr [rsi+8], 0
+ je .LwsOdFound
+ add rsi, 640
+ inc ecx
+ cmp ecx, 16
+ jb .LwsOdFind
+ mov rax, -24
+ jmp .LwsDone
+.LwsOdFound:
+ mov qword ptr [rsi+8], 1
+ mov qword ptr [rsi], 0
+ mov qword ptr [rsi+16], 0
+ lea rdi, [rsi+24]
+ xor ecx, ecx
+.LwsOdCopy:
+ mov al, byte ptr [rbx+rcx]
+ test al, al
+ jz .LwsOdCopied
+ mov byte ptr [rdi+rcx], al
+ inc ecx
+ cmp ecx, 259
+ jb .LwsOdCopy
+.LwsOdCopied:
+ mov byte ptr [rdi+rcx], 92
+ mov byte ptr [rdi+rcx+1], 42
+ mov byte ptr [rdi+rcx+2], 0
+ lea rax, [rip+.LxeWinDirs]
+ sub rsi, rax
+ mov rax, rsi
+ xor edx, edx
+ mov ecx, 640
+ div rcx
+ add rax, 0x7F000000
+ jmp .LwsDone
+.LwsNotDir:
+ mov rax, -20
+ jmp .LwsDone
+
+.LwsCloseDir:
+ imul rax, rax, 640
+ lea rbx, [rip+.LxeWinDirs]
+ add rbx, rax
+ mov rcx, qword ptr [rbx]
+ test rcx, rcx
+ jz .LwsCdSkip
+ call qword ptr [rip+__imp_FindClose]
+.LwsCdSkip:
+ mov qword ptr [rbx], 0
+ mov qword ptr [rbx+8], 0
+ xor eax, eax
+ jmp .LwsDone
+
+# getdents64(fd, buffer, size)
+.LwsGetdents:
+ mov rax, rdi
+ sub rax, 0x7F000000
+ cmp rax, 16
+ jae .LwsBadf
+ imul rax, rax, 640
+ lea rbx, [rip+.LxeWinDirs]
+ add rbx, rax
+ cmp qword ptr [rbx+8], 0
+ je .LwsBadf
+ mov qword ptr [rsp+48], rsi
+ mov rax, qword ptr [rbp-16]
+ mov qword ptr [rsp+56], rax
+ mov qword ptr [rsp+64], 0
+.LwsGdLoop:
+ cmp qword ptr [rbx+16], 0
+ jne .LwsGdHave
+ cmp qword ptr [rbx], 0
+ jne .LwsGdNext
+ lea rcx, [rbx+24]
+ lea rdx, [rbx+304]
+ call qword ptr [rip+__imp_FindFirstFileA]
+ cmp rax, -1
+ je .LwsGdDone
+ mov qword ptr [rbx], rax
+ jmp .LwsGdSet
+.LwsGdNext:
+ mov rcx, qword ptr [rbx]
+ lea rdx, [rbx+304]
+ call qword ptr [rip+__imp_FindNextFileA]
+ test eax, eax
+ jz .LwsGdDone
+.LwsGdSet:
+ mov qword ptr [rbx+16], 1
+.LwsGdHave:
+ lea rsi, [rbx+348]
+ xor ecx, ecx
+.LwsGdLen:
+ cmp byte ptr [rsi+rcx], 0
+ je .LwsGdSized
+ inc ecx
+ jmp .LwsGdLen
+.LwsGdSized:
+ lea eax, [rcx+27]
+ and eax, -8
+ mov rdx, qword ptr [rsp+64]
+ add rdx, rax
+ cmp rdx, qword ptr [rsp+56]
+ ja .LwsGdFull
+ mov rdi, qword ptr [rsp+48]
+ add rdi, qword ptr [rsp+64]
+ mov qword ptr [rdi], 1
+ mov qword ptr [rdi+8], rdx
+ mov word ptr [rdi+16], ax
+ mov edx, dword ptr [rbx+304]
+ mov r8d, 8
+ test edx, 0x10
+ jz .LwsGdType
+ mov r8d, 4
+.LwsGdType:
+ mov byte ptr [rdi+18], r8b
+ lea r9, [rdi+19]
+ xor edx, edx
+.LwsGdCopy:
+ mov r10b, byte ptr [rsi+rdx]
+ mov byte ptr [r9+rdx], r10b
+ inc edx
+ cmp edx, ecx
+ jbe .LwsGdCopy
+ mov qword ptr [rbx+16], 0
+ add qword ptr [rsp+64], rax
+ jmp .LwsGdLoop
+.LwsGdFull:
+ cmp qword ptr [rsp+64], 0
+ jne .LwsGdDone
+ mov rax, -22
+ jmp .LwsDone
+.LwsGdDone:
+ mov rax, qword ptr [rsp+64]
+ jmp .LwsDone
+.LwsBadf:
+ mov rax, -9
+ jmp .LwsDone
+
+# ---- sockets: Winsock, loaded on first use; Linux socket calls are translated ----
+# the Winsock functions needed, in table order
+.LwsWsInit:
+ cmp qword ptr [rip+.LxeWinWsReady], 0
+ jne .LwsWsInitDone
+ push rdi
+ push rsi
+ sub rsp, 40
+ lea rcx, [rip+.LxeWinWsDll]
+ call qword ptr [rip+__imp_LoadLibraryA]
+ test rax, rax
+ jz .LwsWsInitEnd
+ mov rbx, rax
+ lea rsi, [rip+.LxeWinWsNames]
+ xor edi, edi
+.LwsWsLoop:
+ mov rcx, rbx
+ mov rdx, rsi
+ call qword ptr [rip+__imp_GetProcAddress]
+ lea rcx, [rip+.LxeWinWs]
+ mov qword ptr [rcx+rdi*8], rax
+.LwsWsSkip:
+ cmp byte ptr [rsi], 0
+ je .LwsWsNext
+ inc rsi
+ jmp .LwsWsSkip
+.LwsWsNext:
+ inc rsi
+ inc edi
+ cmp edi, 18
+ jb .LwsWsLoop
+ mov ecx, 0x202
+ lea rdx, [rip+.LxeWinWsData]
+ call qword ptr [rip+.LxeWinWs]
+ mov qword ptr [rip+.LxeWinWsReady], 1
+.LwsWsInitEnd:
+ add rsp, 40
+ pop rsi
+ pop rdi
+.LwsWsInitDone:
+ ret
+
+# is descriptor rdi one of our sockets? -> eax
+.LwsIsSocket:
+ cmp rdi, 2
+ jbe .LwsIsNo
+ cmp qword ptr [rip+.LxeWinSocketCount], 0
+ je .LwsIsNo
+ lea rcx, [rip+.LxeWinSockets]
+ mov eax, 256
+.LwsIsLoop:
+ cmp qword ptr [rcx], rdi
+ je .LwsIsYes
+ add rcx, 8
+ dec eax
+ jnz .LwsIsLoop
+ ret
+.LwsIsNo:
+ xor eax, eax
+ ret
+.LwsIsYes:
+ mov eax, 1
+ ret
+
+.LwsSockAdd:
+ lea rcx, [rip+.LxeWinSockets]
+ xor edx, edx
+.LwsSaLoop:
+ cmp qword ptr [rcx+rdx*8], 0
+ je .LwsSaSet
+ inc edx
+ cmp edx, 256
+ jb .LwsSaLoop
+ ret
+.LwsSaSet:
+ mov qword ptr [rcx+rdx*8], rax
+ inc qword ptr [rip+.LxeWinSocketCount]
+ ret
+
+.LwsSockDel:
+ lea rcx, [rip+.LxeWinSockets]
+ xor edx, edx
+.LwsSdLoop:
+ cmp qword ptr [rcx+rdx*8], rdi
+ je .LwsSdSet
+ inc edx
+ cmp edx, 256
+ jb .LwsSdLoop
+ ret
+.LwsSdSet:
+ mov qword ptr [rcx+rdx*8], 0
+ dec qword ptr [rip+.LxeWinSocketCount]
+ ret
+
+.LwsSockWrite:
+ mov rcx, rdi
+ mov rdx, rsi
+ mov r8, qword ptr [rbp-16]
+ xor r9d, r9d
+ call qword ptr [rip+.LxeWinWs+48]
+ movsxd rax, eax
+ test rax, rax
+ jns .LwsDone
+ mov rax, -5
+ jmp .LwsDone
+
+.LwsSockRead:
+ mov rcx, rdi
+ mov rdx, rsi
+ mov r8, qword ptr [rbp-16]
+ xor r9d, r9d
+ call qword ptr [rip+.LxeWinWs+56]
+ movsxd rax, eax
+ test rax, rax
+ jns .LwsDone
+ mov rax, -5
+ jmp .LwsDone
+
+.LwsSocketClose:
+.LwsCloseSock:
+ call .LwsSockDel
+ mov rcx, rdi
+ call qword ptr [rip+.LxeWinWs+80]
+ xor eax, eax
+ jmp .LwsDone
+
+# socket(domain, type, protocol)
+.LwsSocket:
+ call .LwsWsInit
+ mov rcx, rdi
+ mov r8, qword ptr [rbp-16]
+ mov rdx, rsi
+ and edx, 15
+ call qword ptr [rip+.LxeWinWs+8]
+ cmp rax, -1
+ je .LwsSockFail
+ mov qword ptr [rsp+56], rax
+ call .LwsSockAdd
+ test esi, 0x800
+ jz .LwsSocketReady
+ mov dword ptr [rsp+48], 1
+ mov rcx, qword ptr [rsp+56]
+ mov edx, 0x8004667E
+ lea r8, [rsp+48]
+ call qword ptr [rip+.LxeWinWs+136]
+.LwsSocketReady:
+ mov rax, qword ptr [rsp+56]
+ jmp .LwsDone
+.LwsSockFail:
+ mov rax, -97
+ jmp .LwsDone
+
+# connect / accept / bind / getsockname / getpeername: (socket, pointer, pointer or length)
+.LwsSock3Connect:
+ mov dword ptr [rsp+48], 2
+ jmp .LwsSock3
+.LwsSock3Accept:
+ mov dword ptr [rsp+48], 3
+ jmp .LwsSock3
+.LwsSock3Bind:
+ mov dword ptr [rsp+48], 4
+ jmp .LwsSock3
+.LwsSock3Getsockname:
+ mov dword ptr [rsp+48], 11
+ jmp .LwsSock3
+.LwsSock3Getpeername:
+ mov dword ptr [rsp+48], 12
+ jmp .LwsSock3
+.LwsSock3:
+ call .LwsWsInit
+ mov r8, qword ptr [rbp-16]
+ mov rcx, rdi
+ mov rdx, rsi
+ mov eax, dword ptr [rsp+48]
+ lea r11, [rip+.LxeWinWs]
+ call qword ptr [r11+rax*8]
+ cmp dword ptr [rsp+48], 3
+ je .LwsSock3Accepted
+ movsxd rax, eax
+ jmp .LwsDone
+.LwsSock3Accepted:
+ cmp rax, -1
+ je .LwsDone
+ call .LwsSockAdd
+ jmp .LwsDone
+
+.LwsSock2Listen:
+ mov dword ptr [rsp+48], 5
+ jmp .LwsSock2
+.LwsSock2Shutdown:
+ mov dword ptr [rsp+48], 15
+.LwsSock2:
+ call .LwsWsInit
+ mov rcx, rdi
+ mov rdx, rsi
+ mov eax, dword ptr [rsp+48]
+ lea r11, [rip+.LxeWinWs]
+ call qword ptr [r11+rax*8]
+ movsxd rax, eax
+ jmp .LwsDone
+
+# sendto(fd, buf, len, flags, addr, addrlen) and recvfrom(fd, buf, len, flags, addr, addrlen)
+.LwsSendto:
+ mov dword ptr [rsp+48], 8
+ jmp .LwsSendRecv
+.LwsRecvfrom:
+ mov dword ptr [rsp+48], 9
+.LwsSendRecv:
+ call .LwsWsInit
+ mov rcx, rdi
+ mov rdx, rsi
+ mov r8, qword ptr [rbp-16]
+ xor r9d, r9d
+ mov rax, qword ptr [rbp-24]
+ mov qword ptr [rsp+32], rax
+ mov rax, qword ptr [rbp-32]
+ mov qword ptr [rsp+40], rax
+ mov eax, dword ptr [rsp+48]
+ lea r11, [rip+.LxeWinWs]
+ call qword ptr [r11+rax*8]
+ movsxd rax, eax
+ jmp .LwsDone
+
+# setsockopt(fd, level, option, value, length): SOL_SOCKET and its common options have other numbers on Windows
+.LwsSetsockopt:
+ call .LwsWsInit
+ mov rcx, rdi
+ mov rdx, rsi
+ mov r8, qword ptr [rbp-16]
+ cmp edx, 1
+ jne .LwsSoReady
+ mov edx, 0xFFFF
+ cmp r8d, 2
+ jne .LwsSo1
+ mov r8d, 4
+ jmp .LwsSoReady
+.LwsSo1:
+ cmp r8d, 9
+ jne .LwsSo2
+ mov r8d, 8
+ jmp .LwsSoReady
+.LwsSo2:
+ cmp r8d, 6
+ jne .LwsSo3
+ mov r8d, 0x20
+ jmp .LwsSoReady
+.LwsSo3:
+ cmp r8d, 7
+ jne .LwsSo4
+ mov r8d, 0x1001
+ jmp .LwsSoReady
+.LwsSo4:
+ cmp r8d, 8
+ jne .LwsSoReady
+ mov r8d, 0x1002
+.LwsSoReady:
+ mov r9, qword ptr [rbp-40]
+ mov rax, qword ptr [rbp-24]
+ mov qword ptr [rsp+32], rax
+ call qword ptr [rip+.LxeWinWs+104]
+ movsxd rax, eax
+ jmp .LwsDone
+
+# poll(fds, count, timeout): Linux struct pollfd (8 bytes) <-> WSAPOLLFD (16 bytes); sockets only
+.LwsPoll:
+ call .LwsWsInit
+ cmp rsi, 16
+ ja .LwsPollBad
+ xor ebx, ebx
+.LwsPollIn:
+ cmp rbx, rsi
+ jae .LwsPollGo
+ movsxd rax, dword ptr [rdi+rbx*8]
+ mov rcx, rbx
+ shl rcx, 4
+ mov qword ptr [rsp+80+rcx], rax
+ movzx eax, word ptr [rdi+rbx*8+4]
+ xor edx, edx
+ test eax, 1
+ jz .LwsPollNoIn
+ or edx, 0x100
+.LwsPollNoIn:
+ test eax, 4
+ jz .LwsPollNoOut
+ or edx, 0x10
+.LwsPollNoOut:
+ mov word ptr [rsp+88+rcx], dx
+ mov word ptr [rsp+90+rcx], 0
+ inc rbx
+ jmp .LwsPollIn
+.LwsPollGo:
+ lea rcx, [rsp+80]
+ mov rdx, rsi
+ mov r8, qword ptr [rbp-16]
+ movsxd r8, r8d
+ call qword ptr [rip+.LxeWinWs+128]
+ movsxd rax, eax
+ test rax, rax
+ js .LwsDone
+ xor ebx, ebx
+.LwsPollOut:
+ cmp rbx, rsi
+ jae .LwsDone
+ mov rcx, rbx
+ shl rcx, 4
+ movzx edx, word ptr [rsp+90+rcx]
+ xor r8d, r8d
+ test edx, 0x300
+ jz .LwsPollO1
+ or r8d, 1
+.LwsPollO1:
+ test edx, 0x10
+ jz .LwsPollO2
+ or r8d, 4
+.LwsPollO2:
+ test edx, 1
+ jz .LwsPollO3
+ or r8d, 8
+.LwsPollO3:
+ test edx, 2
+ jz .LwsPollO4
+ or r8d, 16
+.LwsPollO4:
+ test edx, 4
+ jz .LwsPollO5
+ or r8d, 32
+.LwsPollO5:
+ mov word ptr [rdi+rbx*8+6], r8w
+ inc rbx
+ jmp .LwsPollOut
+.LwsPollBad:
+ mov rax, -22
+ jmp .LwsDone
+
+# sched_getaffinity(pid, size, mask): all processors of the machine
+.LwsAffinity:
+ lea rcx, [rsp+48]
+ call qword ptr [rip+__imp_GetSystemInfo]
+ mov ecx, dword ptr [rsp+80]
+ mov eax, 1
+ shl rax, cl
+ dec rax
+ mov rdx, qword ptr [rbp-16]
+ cmp rcx, 64
+ jb .LwsAffOk
+ mov rax, -1
+.LwsAffOk:
+ mov qword ptr [rdx], rax
+ mov eax, 8
+ jmp .LwsDone
+
+# kill(pid, signal): only the "is it alive" check (signal 0) for our own process is supported
+.LwsKill:
+ mov ebx, edi
+ call qword ptr [rip+__imp_GetCurrentProcessId]
+ cmp eax, ebx
+ mov rax, -3
+ jne .LwsDone
+ xor eax, eax
+ jmp .LwsDone
+
 .LwsDone:
- movups xmm0, xmmword ptr [rsp+64]
- movups xmm1, xmmword ptr [rsp+80]
- movups xmm2, xmmword ptr [rsp+96]
- movups xmm3, xmmword ptr [rsp+112]
- movups xmm4, xmmword ptr [rsp+128]
- movups xmm5, xmmword ptr [rsp+144]
- lea rsp, [rbp-40]
+ movups xmm0, xmmword ptr [rsp+400]
+ movups xmm1, xmmword ptr [rsp+416]
+ movups xmm2, xmmword ptr [rsp+432]
+ movups xmm3, xmmword ptr [rsp+448]
+ movups xmm4, xmmword ptr [rsp+464]
+ movups xmm5, xmmword ptr [rsp+480]
+ lea rsp, [rbp-56]
+ pop rsi
+ pop rdi
  pop r10
  pop r9
  pop r8
@@ -800,6 +1519,39 @@ xeprocess.wait:
 
 .section .data
 .align 8
+.LxeWinSocketCount:
+.quad 0
+.LxeWinWsReady:
+.quad 0
+.LxeWinWs:
+.skip 160
+.LxeWinWsNames:
+.asciz "WSAStartup"
+.asciz "socket"
+.asciz "connect"
+.asciz "accept"
+.asciz "bind"
+.asciz "listen"
+.asciz "send"
+.asciz "recv"
+.asciz "sendto"
+.asciz "recvfrom"
+.asciz "closesocket"
+.asciz "getsockname"
+.asciz "getpeername"
+.asciz "setsockopt"
+.asciz "getsockopt"
+.asciz "shutdown"
+.asciz "WSAPoll"
+.asciz "ioctlsocket"
+.LxeWinWsDll:
+.asciz "ws2_32.dll"
+.LxeWinWsData:
+.skip 512
+.LxeWinSockets:
+.skip 2048
+.LxeWinDirs:
+.skip 10240
 .LxeWinRandom:
 .quad 0
 .LxeWinAdvapi:

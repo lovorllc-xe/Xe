@@ -1,0 +1,290 @@
+// audio: sound for programs and games, the same on every platform.
+//
+//     var a: *audio.Audio := audio.open(44100, 1)            // null when there is no sound device
+//     var beep: *void := audio.tone(44100, 440, 300, 0.4)     // 300 ms of a 440 Hz sine wave at 40% volume
+//     audio.play(a, beep, audio.frames_of(44100, 300))        // blocks until the sound has been queued/played
+//     audio.close(a)
+//
+// Samples are 16-bit signed little-endian, interleaved by channel, in raw memory (a `*void`). Besides playback
+// there are generators (tone, square, noise, silence), a mixer and WAV reading/writing, which work without any
+// sound device (handy for tests and for saving sounds to a file).
+//
+// Devices: Linux uses ALSA (libasound, loaded at run time), Windows uses winmm. macOS has no device backend yet, so
+// audio.open returns null there; everything else (generators, WAV files) works.
+uses audiodev
+uses syscall
+uses clock
+uses ffi
+uses mathx
+
+module audio
+begin
+    type Audio: record
+    begin
+        handle: int
+        rate: int
+        channels: int
+        dirty: int
+    end
+
+    // The device, or null (@a = 0) when none can be opened.
+    fn open(rate: int, channels: int): *audio.Audio
+    begin
+        var none: *audio.Audio
+        var handle: int := audiodev.open(rate, channels)
+        if handle = 0 { return none }
+        var a: *audio.Audio := alloc(24)
+        a.handle := handle
+        a.rate := rate
+        a.channels := channels
+        a.dirty := 0
+        return a
+    end
+
+    // Queues `frames` frames (one sample per channel each) and returns when they have been handed to the device
+    // (a sound longer than the device's buffer, about 100 ms, makes play wait). Use wait to hear the end of a sound.
+    fn play(a: *audio.Audio, samples: *void, frames: int): int
+    begin
+        a.dirty := 1
+        return audiodev.write(a.handle, samples, frames, a.channels)
+    end
+
+    // Returns when everything queued so far has been played.
+    fn wait(a: *audio.Audio)
+    begin
+        if a.dirty = 1 {
+            clock.sleep_ms(150)
+            a.dirty := 0
+        }
+    end
+
+    // Plays the rest of the queued sound, then releases the device.
+    fn close(a: *audio.Audio)
+    begin
+        wait(a)
+        audiodev.close(a.handle)
+        free(a)
+    end
+
+    // The number of frames in `milliseconds` ms at `rate` Hz.
+    fn frames_of(rate: int, milliseconds: int): int
+    begin
+        return rate * milliseconds / 1000
+    end
+
+    fn put16(samples: *void, index: int, value: int)
+    begin
+        var v: int := value
+        if v > 32767 { v := 32767 }
+        if v < -32768 { v := -32768 }
+        var raw: int := v & 65535
+        runtime.hw.write8(samples + index * 2, raw & 255)
+        runtime.hw.write8(samples + index * 2 + 1, raw >> 8)
+    end
+
+    // Sample number `index` as a signed value.
+    fn get16(samples: *void, index: int): int
+    begin
+        var raw: int := runtime.hw.read8(samples + index * 2) | (runtime.hw.read8(samples + index * 2 + 1) << 8)
+        if raw >= 32768 { return raw - 65536 }
+        return raw
+    end
+
+    fn silence(rate: int, milliseconds: int): *void
+    begin
+        var frames: int := frames_of(rate, milliseconds)
+        var buffer: *void := alloc(frames * 2 + 16)
+        runtime.mem.set(buffer, 0, frames * 2 + 16)
+        return buffer
+    end
+
+    // A mono sine wave; volume 0.0 .. 1.0.
+    fn tone(rate: int, hertz: int, milliseconds: int, volume: flt): *void
+    begin
+        var frames: int := frames_of(rate, milliseconds)
+        var buffer: *void := alloc(frames * 2 + 16)
+        var i: int := 0
+        var step: flt := 2.0 * 3.14159265358979 * hertz / rate
+        while i < frames {
+            put16(buffer, i, cast.int(mathx.sin(step * i) * volume * 32767.0))
+            i := i + 1
+        }
+        return buffer
+    end
+
+    // A mono square wave.
+    fn square(rate: int, hertz: int, milliseconds: int, volume: flt): *void
+    begin
+        var frames: int := frames_of(rate, milliseconds)
+        var buffer: *void := alloc(frames * 2 + 16)
+        var i: int := 0
+        var period: int := rate / hertz
+        if period < 2 { period := 2 }
+        var level: int := cast.int(volume * 32767.0)
+        while i < frames {
+            if (i % period) < period / 2 { put16(buffer, i, level) }
+            else { put16(buffer, i, 0 - level) }
+            i := i + 1
+        }
+        return buffer
+    end
+
+    // Mono white noise (a simple linear congruential generator, so it is repeatable).
+    fn noise(rate: int, milliseconds: int, volume: flt): *void
+    begin
+        var frames: int := frames_of(rate, milliseconds)
+        var buffer: *void := alloc(frames * 2 + 16)
+        var state: int := 12345
+        var level: int := cast.int(volume * 32767.0)
+        var i: int := 0
+        while i < frames {
+            state := (state * 1103515245 + 12345) & 2147483647
+            put16(buffer, i, (state % (level * 2 + 1)) - level)
+            i := i + 1
+        }
+        return buffer
+    end
+
+    // Adds `other` into `target` (both mono, `frames` long), scaled by `volume`, with clipping.
+    fn mix(target: *void, other: *void, frames: int, volume: flt)
+    begin
+        var i: int := 0
+        while i < frames {
+            put16(target, i, get16(target, i) + cast.int(get16(other, i) * volume))
+            i := i + 1
+        }
+    end
+
+    // ---- WAV files (16-bit PCM) ----
+
+    fn put32(buffer: *void, offset: int, value: int)
+    begin
+        runtime.hw.write32(buffer + offset, value & 4294967295)
+    end
+
+    fn text4(buffer: *void, offset: int, text: string)
+    begin
+        var i: int := 0
+        while i < 4 {
+            runtime.hw.write8(buffer + offset + i, str.char(text, i))
+            i := i + 1
+        }
+    end
+
+    // Writes `frames` frames to a .wav file. Returns 0 on success.
+    fn save_wav(path: string, samples: *void, frames: int, rate: int, channels: int): int
+    begin
+        var bytes: int := frames * channels * 2
+        var file_bytes: int := 44 + bytes
+        var buffer: *void := alloc(file_bytes + 16)
+        text4(buffer, 0, "RIFF")
+        put32(buffer, 4, file_bytes - 8)
+        text4(buffer, 8, "WAVE")
+        text4(buffer, 12, "fmt ")
+        put32(buffer, 16, 16)
+        runtime.hw.write8(buffer + 20, 1)
+        runtime.hw.write8(buffer + 21, 0)
+        runtime.hw.write8(buffer + 22, channels)
+        runtime.hw.write8(buffer + 23, 0)
+        put32(buffer, 24, rate)
+        put32(buffer, 28, rate * channels * 2)
+        runtime.hw.write8(buffer + 32, channels * 2)
+        runtime.hw.write8(buffer + 33, 0)
+        runtime.hw.write8(buffer + 34, 16)
+        runtime.hw.write8(buffer + 35, 0)
+        text4(buffer, 36, "data")
+        put32(buffer, 40, bytes)
+        runtime.mem.copy(buffer + 44, samples, bytes)
+        var fd: int := syscall.io.open(path, 577, 420)
+        if fd < 0 {
+            free(buffer)
+            return -1
+        }
+        var written: int := 0
+        var failed: int := 0
+        while written < file_bytes && failed = 0 {
+            var n: int := syscall.io.write(fd, buffer + written, file_bytes - written)
+            if n <= 0 { failed := 1 }
+            else { written := written + n }
+        }
+        syscall.io.close(fd)
+        free(buffer)
+        return failed
+    end
+
+    type Wav: record
+    begin
+        samples: *void
+        frames: int
+        rate: int
+        channels: int
+    end
+
+    fn get32(buffer: *void, offset: int): int
+    begin
+        return runtime.hw.read32(buffer + offset) & 4294967295
+    end
+
+    // Reads a 16-bit PCM .wav file; returns null when it is missing or not that format.
+    fn load_wav(path: string): *audio.Wav
+    begin
+        var none: *audio.Wav
+        var fd: int := syscall.io.open(path, 0, 0)
+        if fd < 0 { return none }
+        var capacity: int := 1048576
+        var data: *void := alloc(capacity)
+        var total: int := 0
+        var reading: int := 1
+        while reading = 1 {
+            if total = capacity {
+                var bigger: *void := alloc(capacity * 2)
+                runtime.mem.copy(bigger, data, total)
+                free(data)
+                data := bigger
+                capacity := capacity * 2
+            }
+            var n: int := syscall.io.read(fd, data + total, capacity - total)
+            if n <= 0 { reading := 0 }
+            else { total := total + n }
+        }
+        syscall.io.close(fd)
+        if total < 44 || get32(data, 0) != 1179011410 || get32(data, 8) != 1163280727 {
+            free(data)
+            return none
+        }
+        var channels: int := runtime.hw.read8(data + 22)
+        var rate: int := get32(data, 24)
+        var bits: int := runtime.hw.read8(data + 34)
+        // find the data chunk
+        var at: int := 12
+        var found: int := -1
+        var size: int := 0
+        while at + 8 <= total && found < 0 {
+            var length: int := get32(data, at + 4)
+            if get32(data, at) = 1635017060 {
+                found := at + 8
+                size := length
+            }
+            else { at := at + 8 + length + (length & 1) }
+        }
+        if found < 0 || bits != 16 || channels < 1 {
+            free(data)
+            return none
+        }
+        if found + size > total { size := total - found }
+        var wav: *audio.Wav := alloc(32)
+        wav.samples := alloc(size + 16)
+        runtime.mem.copy(wav.samples, data + found, size)
+        wav.frames := size / (channels * 2)
+        wav.rate := rate
+        wav.channels := channels
+        free(data)
+        return wav
+    end
+
+    fn release_wav(wav: *audio.Wav)
+    begin
+        free(wav.samples)
+        free(wav)
+    end
+end
