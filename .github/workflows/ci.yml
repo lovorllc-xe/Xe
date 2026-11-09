@@ -1,0 +1,17 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y binutils gzip
+      - name: Bootstrap the compiler (checks the self-hosting fixpoint)
+        run: scripts/bootstrap.sh
+      - name: Tests
+        run: XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh
+      - name: Formatting of the libraries
+        run: build/xe fmt --check std/*.xe libraries/*.xel libraries/*/*.xel tests/*.xe examples/*.xe
+        env:
+          XE_HOME: ${{ github.workspace }}

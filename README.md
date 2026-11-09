@@ -1,7 +1,8 @@
 # Xe
 
-**Xe 2.1.0** is a statically checked systems and application language that
-compiles straight to native Linux x86-64 executables. The compiler is written
+**Xe 2.2.0** is a statically checked systems and application language that
+compiles straight to native executables for Linux x86-64 (and cross-builds for
+Windows x86-64; macOS x86-64 builds but is untested). The compiler is written
 in Xe and **builds itself**: a checked-in assembly seed plus GNU `as` and `ld`
 are all you need — no C or C++ compiler.
 
@@ -36,18 +37,31 @@ point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-
 
 | | Linux | Windows | macOS |
 |---|---|---|---|
-| Console programs, files, memory, GC | yes | yes (tested under Wine: `tests/run_windows_tests.sh`) | builds; **not run on real hardware** |
-| Threads, sync, processes | yes | yes | no |
+| Console programs, files, memory, GC, threads | yes | yes | builds; **not run on real hardware**; no threads |
+| Sockets, HTTP, directories, stat, file mapping | yes | yes (Winsock, FindFirstFile, ...) | no |
+| Processes | `process`, `subprocess` | `process.run/spawn/wait` only (no pipes yet) | no |
+| epoll, inotify, signals | yes | no (signals: stubs) | no |
 | Windows/GUI (`window`) | X11 (default) or Wayland | Win32 | **no native backend yet** (`window.open` returns null) |
-| Sockets, epoll, inotify, file mmap, directory walking | yes | not yet | no |
-| Vulkan (compute, graphics, textures, swapchain) | yes (tested) | builds, **not run** | builds, **not run**; no window surface |
+| Audio (`audio`) | ALSA | winmm | generators and WAV files only |
+| Vulkan (compute, graphics, textures, swapchain) | yes (tested on an Intel Arc GPU) | builds, **not run** | builds, **not run**; no window surface |
+
+Honesty note: the Windows target was exercised during development under Wine (console programs, the garbage collector,
+threads, sockets, files, directories, one Win32 window with input events); it has not been tried on real Windows. The
+macOS target only produces a binary. `tests/run_windows_tests.sh` re-runs the test suite under Wine if you have it.
 
 ## What is new in 2.x
 
+- **Language features (2.2).** `else if`, `break`/`continue`, global variables and constants
+  (`global x: int := 0`, `global const N: int := 10`), `enum`, generics (`type Pair<A, B>`, `fn largest<T>`,
+  `largest<int>(a, b)`), casts (`cast.flt`, `cast.int`, `cast.ptr`, `cast.addr`), function pointers and closures
+  (`func`, `closure`), errors as values (`result`). None of the existing syntax changed. See
+  [The language in one screen](#the-language-in-one-screen).
+- **Tooling (2.2).** `xe fmt` (formatter), `xe lsp` (language server: diagnostics, formatting, go to definition, completion;
+  [docs/editors.md](docs/editors.md)), `xe pkg` (git dependencies in `xe.pkg`), `xe --build -g` (source line numbers for
+  gdb), `xe --build -p win|macos` (cross builds).
 - **Self-hosted bootstrap.** `scripts/bootstrap.sh` assembles
   `bootstrap/xe-seed.s.gz`, rebuilds the compiler twice and checks that both
-  generations emit byte-identical assembly. The old C++ bootstrap in `src/` is
-  legacy (kept for the macOS and Windows installer bundles).
+  generations emit byte-identical assembly. (The old C++ bootstrap was removed.)
 - **Real error messages.** Every diagnostic carries `file:line:col`, the source
   line and a caret, and says what was expected:
 
@@ -69,7 +83,7 @@ point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-
   meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
   `vulkan` (any GPU, any platform: compute, graphics, textures, swapchains), `vkwindow`, `vkscene` (GPU-lit 3D
   scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **170 libraries** covering containers, math, text, encodings, hashing and
+- **174 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -87,8 +101,8 @@ point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-
 ### From the release tarball (no compiler needed)
 
 ```sh
-tar xzf xe-2.1.0-linux-x86_64.tar.gz
-cd xe-2.1.0-linux-x86_64
+tar xzf xe-2.2.0-linux-x86_64.tar.gz
+cd xe-2.2.0-linux-x86_64
 ./install.sh                 # ~/.local     (or: sudo ./install.sh → /usr/local)
 xe --version
 ```
@@ -110,7 +124,12 @@ fixpoint, installs `xe` and the libraries, and runs the test suite.
 ```sh
 xe hello.xe              # builds ./hello
 xe --build hello.xe -o hello
+xe --run hello.xe        # build into a temporary file and run
 xe --check app.xe        # type-check only
+xe --build app.xe -g     # add source line numbers for gdb
+xe fmt src/*.xe          # re-indent source files (--check lists the ones that need it)
+xe pkg add name URL      # install a git dependency into .xe/packages (listed in xe.pkg)
+xe lsp                   # language server (see docs/editors.md)
 xe --emit-asm app.xe     # inspect the generated assembly
 xe --help
 ```
@@ -150,8 +169,13 @@ begin
 end
 ```
 
-- `:=` assigns, `=` compares; there is no `==`, `for`, `break` or `continue`.
-- `if … { } else { }` and `while … { }` for small blocks, `begin … end` for big ones.
+- `:=` assigns, `=` compares; there is no `==` or `for`. `while` is the only loop, with `break` and `continue`.
+- `if … { } else if … { } else { }` and `while … { }` for small blocks, `begin … end` for big ones.
+- `global counter: int := 0`, `global const LIMIT: int := 100`, `enum Color begin red green := 5 end` (`Color.green`).
+- Generics are explicit: `type Pair<A, B>: record ... end`, `fn largest<T>(a: T, b: T): T`, used as `Pair<int, string>` and
+  `largest<int>(3, 9)`.
+- Casts are functions (`cast.flt(i)`, `cast.int(f)`, `cast.ptr(address)`, `cast.addr(p)`); function pointers are `&name` with
+  `func.call1(ptr, x)`; `closure` pairs a function with data; `result` has `ok`/`fail`/`unwrap`/`panic`.
 - Types: `int`, `flt`, `string`, `*T`, `[N]T`, records, aliases.
 - `alloc`/`free`, `defer`, `gc.begin { } gc.end` regions, `thread.start`/`thread.join`.
 - Module functions named `new`, `delete`, `read`, `write` or `free` are shadowed
@@ -162,7 +186,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-170 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+174 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -220,7 +244,8 @@ end
   Khronos validation layer when installed. Verified here only on an Intel Arc GPU under Linux (compute, graphics,
   textures, uniforms, swapchain with resize, and the offscreen fallback); the Windows and macOS paths build but were
   not run, and other vendors' GPUs were not available to test.
-- Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Wayland keyboard input assumes a US layout, and GNOME gives Wayland windows no title bar. There is no audio library yet.
+- Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Wayland keyboard input assumes a US layout, and GNOME gives Wayland windows no title bar. 
+- **Audio:** `audio` plays 16-bit sound (`audio.open`, `audio.play`, tone/square/noise generators, a mixer) through ALSA on Linux and winmm on Windows, and reads/writes WAV files everywhere.
 
 ## Benchmarks
 
@@ -243,26 +268,32 @@ does **not** reach the fastest language.
 ## Tests
 
 ```sh
-XE=build/xe tests/run_tests.sh       # 15 programs, all must print "ok" / exit 0
+XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 20 programs; every one must build and exit 0
 ```
 
 ## Repository layout
 
 - `compiler/` — the self-hosted compiler (`SOURCES` lists the build order).
 - `bootstrap/xe-seed.s.gz` — assembly seed; refresh with `scripts/update-seed.sh`.
-- `std/`, `libraries/` — the automatic `io`/`mem` modules and 155 `.xel` libraries.
+- `std/`, `libraries/` — the automatic `io`/`mem` modules and the `.xel` libraries (`libraries/linux|win|macos/` hold the per-platform layers).
+- `platform/` — per-platform runtime layer (entry point and system-call emulation for Windows and macOS).
 - `tests/` — integration programs and the runner.
-- `apps/` — real applications written in Xe (`apps/sorter`: the SentryAI image sorter GUI).
 - `benchmarks/` — kernels, generator, runner and GUI.
 - `logo/` — `png/` source logo and `ascii/xe.ans` colored ASCII art.
 - `install/`, `scripts/` — installers, bootstrap, seed and release tooling.
-- `src/` — legacy C++ bootstrap (macOS/Windows bundles).
-- `vscode-xe/`, `zed-xe/` — editor support.
+- `docs/` — documentation, library index, editor setup.
+- `vscode-xe/`, `zed-xe/` — syntax highlighting for editors.
 
 ## Limits
 
-Linux x86-64 is the only complete executable target. macOS installs the compiler
-CLI but cannot produce native macOS programs yet; Windows PE output is a
-freestanding subset. HTTP is plain `http://` only (no TLS). The garbage
-collector is conservative and does not run while threads are active; free
-memory explicitly or use regions in threaded code.
+- **Targets:** Linux x86-64 is complete and tested. Windows x86-64 cross-builds and was exercised under Wine only (see the
+  Platforms table for what is missing there). macOS x86-64 builds a binary that has not been run, and has no window or
+  thread support. There is no ARM64 back end (on Apple Silicon the macOS binary would need Rosetta).
+- **Language:** generics are instantiated copies with explicit type arguments (top-level only); globals are reached
+  through a hidden pointer (slightly slower than locals); `break`/`continue` are not allowed in a loop containing `defer`
+  or `gc.begin`; function pointers carry int/pointer/string arguments only.
+- **Runtime:** HTTP is plain `http://` (no TLS). The garbage collector is conservative and does not run while threads are
+  active; free memory explicitly or use regions in threaded code.
+- **Graphics:** no macOS window backend; native Wayland windows cannot present Vulkan frames (they use the offscreen
+  fallback); Wayland keyboard input assumes a US layout.
+- **Debugging:** `-g` gives line-level gdb support, not variable descriptions.

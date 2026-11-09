@@ -1,29 +1,38 @@
 ---
 name: xe-lang
-description: Write, debug, and review code in the Xe programming language (.xe sources, .xel libraries) and work on the self-hosted Xe compiler. Use whenever a task involves Xe code, `xe --build`, the Xe standard libraries, or files under compiler/, std/, libraries/, tests/ of the Xe repo.
+description: Write, debug, and review code in the Xe programming language (.xe sources, .xel libraries) and work on the self-hosted Xe compiler. Use whenever a task involves Xe code, `xe --build`, the Xe standard libraries, GUI/graphics/Vulkan/audio programs in Xe, or files under compiler/, std/, libraries/, platform/, tests/ of the Xe repo.
 ---
 
 # Xe language
 
-Xe 2.1.0 is a small statically checked language. The self-hosted compiler (`compiler/*.xe`) compiles it to native Linux x86-64 executables and builds itself from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip`. The installed `xe` is a native binary at `<prefix>/bin/xe`; it finds `std/` and `libraries/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 155 libraries ship in `libraries/` (index: `docs/libraries.md`). Diagnostics print `file:line:col` with a source excerpt.
+Xe 2.2.0 is a statically checked language that compiles to native executables for Linux x86-64 (default), Windows x86-64 (`-p win`) and macOS x86-64 (`-p macos`, build only). The compiler is self-hosted (`compiler/*.xe`) and bootstraps from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip` (`scripts/bootstrap.sh`). The installed `xe` finds `std/`, `libraries/` and `platform/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 174 libraries are in `libraries/` (index: `docs/libraries.md`).
 
-**Trust the compiler, not the docs.** `docs/documentation.txt` is a useful API catalog, but some of its syntax claims are wrong for the self-hosted compiler (see "Gotchas"). When unsure, build a tiny probe program. That takes about 20 ms.
+**Trust the compiler.** When unsure, write a 10-line probe program and build it (about 20 ms). Diagnostics are precise: `file:line:col: error: message`, the source line and a caret.
 
-- Full syntax and semantics reference: [references/syntax.md](references/syntax.md)
-- Library and built-in API index: [references/api.md](references/api.md)
+- Syntax and semantics: [references/syntax.md](references/syntax.md)
+- Libraries and built-ins: [references/api.md](references/api.md)
 
-## Workflow
+## Command line
 
-1. Write the code with the canonical syntax below.
-2. Build it with `xe --build prog.xe -o prog.xee`, then run `./prog.xee`. `main`'s return value is the exit status. `xe --run` does not exist.
-3. The only error the compiler reports is **`source uses unsupported syntax or has an invalid structure`**. It gives no line number. To find the problem, bisect: comment out or delete halves of the code (or move pieces into a probe file) until the bad construct turns up. Check the Gotchas list first, because it covers almost every failure.
-4. Repo tests: `XE=xe bash tests/run_tests.sh`. It builds every `tests/*.xe` and expects exit code 0.
-5. Never claim a build passed unless you actually ran it.
+```
+xe --build prog.xe -o prog [-p linux|win|macos] [-g] [-q] [--keep-asm] [--library-path DIR]
+xe --run prog.xe [-- args...]        # build to a temp file and run (Linux)
+xe --check prog.xe                   # type-check only
+xe fmt [--check] [--stdout] files... # format (re-indent) sources
+xe pkg init|add|install|update|list  # git dependencies listed in xe.pkg, installed in .xe/packages
+xe lsp                               # language server on stdin/stdout (diagnostics, formatting, definition, completion)
+xe -v                                # logo and version
+```
+
+- `main` is `fn main(): int` (its result is the exit status). Extra files on the command line are combined into the build; `uses name` loads `name.xel` from beside the importing file, then from `--library-path`, `.xe/packages/*`, and the installed `libraries/` (a per-platform subfolder such as `libraries/win/` is searched first).
+- `-g` adds source line numbers for gdb (`gdb prog`, `break file.xe:LINE`, `bt`); debug builds are not optimized. Functions are named `xe` + their name in gdb (`xework` for `work`).
+- Cross builds need `llvm-mc`, `llvm-dlltool`, `lld-link` (Windows) or `llvm-mc`, `ld64.lld` (macOS). Run `--run` only for the platform you are on. Do not run Windows programs through Wine unless the user asks.
+- Repo tests: `XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh` (every `tests/*.xe` must build and exit 0). Never claim a build or test passed unless you ran it.
 
 ## Canonical shape
 
 ```xe
-uses math                      // top-level, one per line; io and mem are automatic
+uses math
 
 type Point: record
 begin
@@ -31,68 +40,74 @@ begin
     y: int
 end
 
+global const LIMIT: int := 3
+global tally: int := 0
+
+enum Color
+begin
+    red
+    green := 5
+end
+
 module geo
 begin
-    fn sq(v: int): int         // inside the module, call it as sq(...); outside, as geo.sq(...)
+    fn sq(v: int): int          // inside the module: sq(...); outside: geo.sq(...)
     begin
         return v * v
     end
 end
 
-fn dist2(a: Point, b: Point): int
+fn largest<T>(a: T, b: T): T    // generic: largest<int>(3, 9)
 begin
-    return geo.sq(a.x - b.x) + geo.sq(a.y - b.y)
+    if a > b { return a }
+    return b
 end
 
 fn main(): int
 begin
     var p: Point
     p.x := 3
-    var q: Point
-    q.y := 4
-    var d: int := dist2(p, q)
-    if d = 25 {
-        writeln("ok ", d, " ", math.sqrt(25.0))
-    } else {
-        writeln("bad")
-    }
     var i: int := 0
-    while i < 3 {
+    while i < 10 {
         i := i + 1
+        if i % 2 = 0 { continue }
+        if i > LIMIT * 2 { break }
+        tally := tally + geo.sq(i)
+    }
+    if tally > 20 {
+        writeln("big ", tally, " ", largest<int>(2, 7), " ", Color.green)
+    } else if tally > 5 {
+        writeln("medium")
+    } else {
+        writeln("small")
     }
     return 0
 end
 ```
 
-## Gotchas (all verified against the installed compiler)
+## Gotchas
 
-- `:=` assigns and `=` compares. **`==` is a lexer error**, even though the docs say it is accepted.
-- **There is no `else if`.** Write `} else { if cond { ... } }`. `else` may sit on the next line after `}`.
-- `if` and `while` conditions don't need parentheses: `if x > 0 { }` and `if (x > 0) { }` both work. Bodies must use `{ }`.
-- **There is no `for` loop, `break`, or `continue`.** Use `while` with a flag variable (`done := 1`) or an early `return`.
-- **A newline always ends a statement, even inside `( )`.** To split a long call, end the line with `;` (the line-continuation marker): `writeln("a", ;` and then `"b")` on the next line. The multi-line `writeln` examples in the docs don't compile.
-- **There are no global `var` or `const`.** Only `uses`, `type`, `module`, and `fn` may appear at top level. For constants, use zero-argument functions (as `token.xe` and `ast.xe` do: `fn endKind(): int`).
-- `var f: flt := 3` fails. Write `3.0`. Mixed arithmetic (`1.5 + 2`) and comparisons (`f > 2`) are fine.
-- **`"text" + 5` compiles but produces garbage** (pointer arithmetic). Use `"text" + str.number(5)`, or pass the values separately to `writeln("text", 5)`.
-- Strings compare by content with `=` and `!=`.
-- A pointer to a record needs an explicit dereference: `(*p).x := 4`. `p.x` on a `*Rec` fails.
-- There are no hex literals (`0xFF`) and no char literals (`'a'`). Use decimal byte values (`str.char(s, i) = 97`).
-- `true` and `false` exist and evaluate to 1 and 0. Conditions are ints.
-- Undeclared names, wrong argument counts, and type mismatches all produce the same generic error.
-- Out-of-bounds array indexing is caught **at runtime**: the program prints `array index out of bounds` and exits with code 1.
-- Exactly one `fn main(): int` is required, and it must be written in exactly that form.
-- `fn f(...)` with no result type is void, and `return` with no value is allowed there.
-- Inside a library module, the module's own types are written fully qualified: `*collections.Vector`.
+- `:=` assigns, `=` compares. `==` is a lexer error. `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>` exist.
+- Big blocks use `begin ... end` (functions, records, modules, `switch`, enums), small ones use `{ }` (`if`, `else`, `while`). `begin` and `end` are keywords (not usable as function names, and so are `fn`, `var`, `const`, `global`, `enum`, `type`, `module`, `uses`).
+- One loop: `while`. `break`/`continue` leave/restart the innermost `while`. They are rejected in a loop whose body contains `defer` or `gc.begin`.
+- A newline ends a statement. To continue a statement on the next line end the line with `;`.
+- `flt` literals need a decimal point (`3.0`); mixed int/flt arithmetic converts to flt, but assigning an int to a `flt` variable needs `cast.flt(i)`.
+- `"text" + 5` is wrong; use `"text" + str.number(5)` or `writeln("text", 5)`. Strings compare by content with `=`.
+- Pointers: `p.field` auto-dereferences; `*p`, `&x`, `@p` (address as int, so `@p = 0` is the null test); arrays through pointers: `(*arrPtr)[i]`.
+- Casts are functions: `cast.flt(int)`, `cast.int(flt)`, `cast.ptr(int)`, `cast.addr(ptr)`; chain `cast.ptr(cast.addr(p))` to reinterpret a pointer.
+- Function pointers: `&name` is the address; call with `func.call0..5(ptr, int/pointer args)` (`uses func`). Closures: `uses closure`, the function's first parameter receives the data pointer.
+- Globals: `global name: Type := init` (also inside a `module`), `global const NAME: T := expr` (macro-like: replaced by its value), `enum Name begin a b := 5 c end` -> `Name.a`... A global name must not be reused for a function, type or module name; a parameter or local with the same name hides the global inside that function.
+- Generics: `type Pair<A, B>: record ... end`, `fn largest<T>(...)`; type arguments are written explicitly (`Pair<int, string>`, `largest<int>(1, 2)`); top-level only.
+- `uses` resolves relative to the importing file first. Names that match built-ins (`new`, `delete`, `read`, `write`, `free`) must be called qualified when they are module functions.
+- Out-of-range array access prints `array index out of bounds` and exits with 1. `result.panic(msg)` prints `panic: msg` and exits with 2.
+- A global or heap pointer keeps memory alive; the GC is conservative mark-and-sweep and does not run while threads are active.
 
-## Imports and multi-file builds
+## Platform-specific code
 
-- `uses name` loads `name.xel`. Dotted names map to subdirectories (`uses a.b` → `a/b.xel`). Because the wrapper always sets a library path, **`uses mylocal` does not look beside your file**. When the library can't be found, the compiler aborts with a core dump.
-- To use your own modules, **pass them on the command line**: `xe --build main.xe helper.xel other.xe -o app.xee`. Any `.xe` or `.xel` file listed there is combined into one build. This works alongside `uses math` and the other standard libraries.
-- Passing `--library-path DIR` *replaces* the default path, so the standard libraries (`math`, `collections`, …) must also be in `DIR`. Avoid this option unless DIR holds a copy of `/usr/local/lib/xelang/libraries`. The repo's `libraries/` folder works.
+Write the same code for every platform. The compiler picks `libraries/<platform>/<name>.xel` before `libraries/<name>.xel`, so a library like `window` (neutral) uses `native`, `ffi` uses `ccall`, `audio` uses `audiodev`, `vulkan` uses `vkloader`/`vkplatform`, each implemented per platform under `libraries/linux|win|macos/`. Add a new platform piece the same way. Linux windows use X11 by default (`XE_BACKEND=wayland` or `window.open_wayland` for native Wayland); Windows uses Win32; macOS has no window backend yet. `platform/<name>/shim.s` supplies the entry point and Linux-syscall emulation for Windows/macOS.
 
 ## Compiler work (compiler/)
 
-- Build order: `token, lexer, ast, parser, checker, codegen, optimizer, runtime, main`. `install/install.sh` builds the C++ bootstrap (`src/`) with CMake, uses it to run `--build-bootstrap` on those files, and installs the result.
-- The compiler code style comes from the language's limits: tokens are `[4]int` (kind, start, finish, line), AST nodes are `[12]int` stored in a `*[524288]int` pool, and kind constants are functions. Errors propagate as sentinel values (`-1`, `-2`, `0`).
-- Keep the compiler self-hosted and native. Don't turn it into a transpiler to C or C++.
-- `zed-xe/grammars/xe/` contains copies of `compiler/ std/ tests/`. Edit the originals.
+- Source order is `compiler/SOURCES`. After changing the compiler: `scripts/bootstrap.sh` (checks the self-hosting fixpoint), then `scripts/update-seed.sh` so a fresh checkout can still bootstrap. Do not use new syntax in `compiler/*.xe` until the seed contains it.
+- The parser and code generators work on source text spans. New language features are mostly lowered before parsing: `desugar.xe` (globals, consts, enums), `generics.xe` (instantiation); `break`/`continue`/`else if` are native (parser, checker, `codegen.xe`; `fast.xe` falls back for them). `format.xe`, `lsp.xe` and the `pkg` command live in `main.xe`'s driver.
+- Keep the compiler self-hosted and native (no C or C++ in the toolchain).

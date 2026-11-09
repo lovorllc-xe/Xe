@@ -1,6 +1,6 @@
 # Xe library index
 
-170 importable libraries. Add one with `uses name` at the top of a source file.
+174 importable libraries. Add one with `uses name` at the top of a source file.
 
 ## Containers
 
@@ -223,6 +223,10 @@
 
 | Library | What it does |
 |---|---|
+| `audio` | sound for programs and games, the same on every platform. |
+| `closure` | a function pointer bundled with the data it works on. |
+| `func` | call a function through a pointer, the same way on every platform. |
+| `result` | errors as values, and panic for errors that cannot be handled. |
 | `vkwindow` | show Vulkan rendering in a `window`, the same way on every platform. |
 | `wayland` | a pure-Xe Wayland client. It speaks the Wayland wire protocol over the compositor's Unix |
 | `wevent` | the window event record and event kinds shared by every window backend (X11, Wayland, Win32, ...). |

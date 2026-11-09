@@ -1,11 +1,26 @@
-XE 2.1.0
+XE 2.2.0
+
+WHAT CHANGED IN 2.2.0 (language features, tooling, platforms)
+=====================
+Existing syntax is unchanged; these were added:
+
+ - else if; break and continue (innermost while; not in a loop containing defer or gc.begin).
+ - Global variables and constants: "global name: Type := value", "global const NAME: Type := expr" (also inside a
+   module), and "enum Name begin a  b := 5  c end" (Name.a ...). Lowered by compiler/desugar.xe.
+ - Generics: "type Pair<A, B>: record ... end", "fn largest<T>(a: T, b: T): T", used with explicit type arguments
+   (Pair<int, string>, largest<int>(1, 2)). Lowered by compiler/generics.xe.
+ - Casts as functions: cast.flt, cast.int, cast.ptr, cast.addr. Function pointers (&name) with the func library,
+   closures (closure), errors as values and panic (result).
+ - Tools: xe fmt, xe lsp, xe pkg, xe --build -g (gdb line info), xe --build -p linux|win|macos.
+ - Windows target: sockets, directories, stat, file mapping, threads, processes (run/spawn/wait).
+ - audio library (ALSA, winmm, WAV).
 
 WHAT CHANGED IN 2.0.0 AND 2.1.0 (graphics, GUI, Vulkan, apps)
 =====================
-Syntax is unchanged. The compiler, runtime and library set changed:
+The compiler, runtime and library set changed:
 
  - The compiler builds itself from bootstrap/xe-seed.s.gz using only as, ld
-   and gzip (scripts/bootstrap.sh). The C++ code in src/ is legacy.
+   and gzip (scripts/bootstrap.sh).
  - Diagnostics print file:line:col, the source line and a caret.
  - New allocator and conservative mark-and-sweep garbage collector:
    runtime.gc.collect(), runtime.gc.enable(flag), runtime.gc.stats(which); the
@@ -17,7 +32,7 @@ Syntax is unchanged. The compiler, runtime and library set changed:
    unqualified for module functions; call them as module.new().
  - xe --version / -v / -V prints the colored logo.
  - Platforms: xe --build prog.xe -o out -p linux|win|macos (see README, Platforms). Linux window backends: X11 (default), Wayland.
- - 170 libraries; see docs/libraries.md. New: canvas, image, window, wayland, x11, gui, gfx3d, game, ffi, vulkan,
+ - 174 libraries; see docs/libraries.md. New: canvas, image, window, wayland, x11, gui, gfx3d, game, ffi, vulkan,
    vkscene, vkwindow (2D/3D graphics, GUI widgets, games, Vulkan). ffi.library/ffi.symbol load shared libraries at
    run time on every platform (vulkan uses this). Libraries can still request shared objects at build time with a
    line comment "xe-link: NAME" at the start of a line (Linux).

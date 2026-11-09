@@ -88,7 +88,7 @@
     },
     "keywords": {
       "name": "keyword.control.xe",
-      "match": "\\b(begin|end|var|const|uses|if|else|while|switch|case|default|return|defer|gc)\\b"
+      "match": "\\b(begin|end|var|const|uses|if|else|while|switch|case|default|return|defer|gc|global|enum|break|continue)\\b"
     },
     "types": {
       "patterns": [
