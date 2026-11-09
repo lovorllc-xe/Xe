@@ -9,6 +9,7 @@ codegen.xe
 desugar.xe
 generics.xe
 format.xe
+lsp.xe
 fast.xe
 optimizer.xe
 runtime.xe

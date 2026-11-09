@@ -37,6 +37,8 @@ begin
         writeln("  xe --run <file.xe> [...] [-- args...]    build into a temporary file and run it")
         writeln("  xe --check <file.xe> [...]               check the program without building it")
         writeln("  xe fmt [--check] [--stdout] <file.xe> ... re-indent source files (--check lists files that need it)")
+        writeln("  xe pkg init | add <name> <git-url> [ref] | install | update | list    manage dependencies in xe.pkg")
+        writeln("  xe lsp                                   language server (diagnostics, formatting, go to definition) on stdin/stdout")
         writeln()
         writeln("Emit assembly:")
         writeln("  xe --emit-asm <file.xe> [...] -o <output.s>")
@@ -96,6 +98,12 @@ begin
     fn exists(path: string): int
     begin
         return str.length(file.read(path)) > 0
+    end
+
+    fn directoryExists(path: string): int
+    begin
+        if syscall.invoke3(21, path, 0, 0) = 0 { return 1 }
+        return 0
     end
 
     // Locates the directory that contains std/ and libraries/.
@@ -357,6 +365,129 @@ begin
         return command
     end
 
+    // ---- packages: `xe.pkg` in the project directory lists dependencies, one per line:
+    //        dep <name> <git-url> [<branch-or-tag>]
+    //      `xe pkg install` clones them into .xe/packages/<name>; every build adds those folders to the library path.
+    fn packageLine(text: string, index: int): string
+    begin
+        var parts: int := 0
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(text) {
+            if i = str.length(text) || str.char(text, i) = 32 || str.char(text, i) = 9 {
+                if i > start {
+                    if parts = index { return str.slice(text, start, i) }
+                    parts := parts + 1
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return ""
+    end
+
+    fn packageLines(): string
+    begin
+        return file.read("xe.pkg")
+    end
+
+    // The library path entries for the installed packages (".xe/packages/<name>" and its "libraries" folder).
+    fn packagePaths(): string
+    begin
+        var content: string := packageLines()
+        var paths: string := ""
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(content) {
+            if i = str.length(content) || str.char(content, i) = 10 {
+                var line: string := str.slice(content, start, i)
+                if packageLine(line, 0) = "dep" && str.length(packageLine(line, 1)) > 0 {
+                    var folder: string := ".xe/packages/" + packageLine(line, 1)
+                    if directoryExists(folder) = 1 {
+                        if str.length(paths) > 0 { paths := paths + ":" }
+                        paths := paths + folder + "/libraries:" + folder
+                    }
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return paths
+    end
+
+    fn packageCommand(count: int): int
+    begin
+        if count < 2 {
+            writeln("usage: xe pkg init | add <name> <git-url> [ref] | install | update | list")
+            return 2
+        }
+        var action: string := arg.get(1)
+        if action = "init" {
+            if exists("xe.pkg") = 1 { return err("error: xe.pkg already exists") }
+            file.write("xe.pkg", "# dependencies, one per line:  dep <name> <git-url> [<branch-or-tag>]\n")
+            process.run("mkdir -p .xe/packages")
+            writeln("created xe.pkg")
+            return 0
+        }
+        if action = "add" {
+            if count < 4 { return err("usage: xe pkg add <name> <git-url> [ref]") }
+            var line: string := "dep " + arg.get(2) + " " + arg.get(3)
+            if count > 4 { line := line + " " + arg.get(4) }
+            file.write("xe.pkg", packageLines() + line + "\n")
+            return packageCommand2("install")
+        }
+        return packageCommand2(action)
+    end
+
+    fn packageCommand2(action: string): int
+    begin
+        if action = "list" {
+            write(packageLines())
+            return 0
+        }
+        if action != "install" && action != "update" { return err("error: unknown 'xe pkg' command '" + action + "'") }
+        if exists("xe.pkg") = 0 { return err("error: no xe.pkg here (run 'xe pkg init')") }
+        process.run("mkdir -p .xe/packages")
+        var content: string := packageLines()
+        var failures: int := 0
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(content) {
+            if i = str.length(content) || str.char(content, i) = 10 {
+                var line: string := str.slice(content, start, i)
+                if packageLine(line, 0) = "dep" {
+                    var name: string := packageLine(line, 1)
+                    var url: string := packageLine(line, 2)
+                    var ref: string := packageLine(line, 3)
+                    var folder: string := ".xe/packages/" + name
+                    if str.length(name) = 0 || str.length(url) = 0 {
+                        err("error: bad line in xe.pkg: " + line)
+                        failures := failures + 1
+                    }
+                    else {
+                        if directoryExists(folder) = 1 {
+                            if action = "update" {
+                                writeln("updating " + name)
+                                if process.run("git -C " + quote(folder) + " pull --ff-only") != 0 { failures := failures + 1 }
+                            }
+                        }
+                        else {
+                            writeln("installing " + name + " from " + url)
+                            var command: string := "git clone --depth 1 "
+                            if str.length(ref) > 0 { command := command + "--branch " + quote(ref) + " " }
+                            command := command + quote(url) + " " + quote(folder)
+                            if process.run(command) != 0 { failures := failures + 1 }
+                        }
+                    }
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        if failures > 0 { return 1 }
+        return 0
+    end
+
     // xe fmt [--check] [--stdout] <file> ...: re-indent source files (see format.xe).
     fn formatCommand(count: int): int
     begin
@@ -410,6 +541,8 @@ begin
         }
         if mode = "--help" || mode = "-h" { return help() }
         if mode = "fmt" || mode = "--format" { return formatCommand(count) }
+        if mode = "pkg" { return packageCommand(count) }
+        if mode = "lsp" { return lsp.serve(executablePath(), home()) }
         var target: int := -1
         var emitOnly: int := 0
         var runAfter: int := 0
@@ -533,6 +666,11 @@ begin
         var started: int := nanoseconds()
         var xeHome: string := home()
         var libraries: string := userLibraries
+        var packagePath: string := packagePaths()
+        if str.length(packagePath) > 0 {
+            if str.length(libraries) > 0 { libraries := libraries + ":" }
+            libraries := libraries + packagePath
+        }
         if str.length(xeHome) > 0 {
             if str.length(libraries) > 0 { libraries := libraries + ":" }
             libraries := libraries + xeHome + "/libraries/" + platform + ":" + xeHome + "/libraries"

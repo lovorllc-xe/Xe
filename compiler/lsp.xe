@@ -1,0 +1,616 @@
+// lsp: `xe lsp` is a small language server (Language Server Protocol over standard input/output). It reports the
+// compiler's errors as diagnostics while you type, formats documents, completes keywords and names, and jumps to
+// definitions. Editors start it with the command `xe lsp` (see docs/editors.md).
+module lsp
+begin
+    type Server: record
+    begin
+        uris: *[64]string
+        texts: *[64]string
+        count: int
+        executable: string
+        home: string
+        running: int
+    end
+
+    // ---- reading and writing messages ----
+
+    fn stringAt(bytes: *void): string
+    begin
+        var cell: *int := alloc(8)
+        *cell := cast.addr(bytes)
+        var raw: *void := cell
+        var holder: *[1]string := raw
+        var text: string := (*holder)[0]
+        free(cell)
+        return text
+    end
+
+    // Reads exactly `count` bytes from standard input into a string ("" at end of input).
+    fn readBytes(count: int): string
+    begin
+        var buffer: *void := alloc(count + 8)
+        var got: int := 0
+        while got < count {
+            var n: int := syscall.invoke3(0, 0, buffer + got, count - got)
+            if n <= 0 { return "" }
+            got := got + n
+        }
+        runtime.hw.write8(buffer + count, 0)
+        return stringAt(buffer)
+    end
+
+    // Reads the headers of one message; returns its body length, or -1 at the end of input.
+    fn readHeader(): int
+    begin
+        var header: string := str.builder("")
+        var one: *void := alloc(8)
+        var length: int := -1
+        var reading: int := 1
+        while reading = 1 {
+            var n: int := syscall.invoke3(0, 0, one, 1)
+            if n <= 0 { return -1 }
+            header := str.append(header, str.fromchar(runtime.hw.read8(one)))
+            var size: int := str.length(header)
+            if size >= 4 && str.slice(header, size - 4, size) = "\r\n\r\n" { reading := 0 }
+        }
+        free(one)
+        var at: int := str.find(header, "Content-Length:")
+        if at >= 0 {
+            var i: int := at + 15
+            while i < str.length(header) && str.char(header, i) = 32 { i := i + 1 }
+            length := 0
+            while i < str.length(header) && str.char(header, i) >= 48 && str.char(header, i) <= 57 {
+                length := length * 10 + str.char(header, i) - 48
+                i := i + 1
+            }
+        }
+        return length
+    end
+
+    fn send(body: string)
+    begin
+        write("Content-Length: " + str.number(str.length(body)) + "\r\n\r\n" + body)
+    end
+
+    // ---- a little JSON ----
+
+    fn escape(text: string): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c = 34 { out := str.append(out, "\\\"") }
+            else {
+                if c = 92 { out := str.append(out, "\\\\") }
+                else {
+                    if c = 10 { out := str.append(out, "\\n") }
+                    else {
+                        if c = 13 { out := str.append(out, "\\r") }
+                        else {
+                            if c = 9 { out := str.append(out, "\\t") }
+                            else {
+                                if c < 32 { out := str.append(out, " ") }
+                                else { out := str.append(out, str.fromchar(c)) }
+                            }
+                        }
+                    }
+                }
+            }
+            i := i + 1
+        }
+        return out
+    end
+
+    fn hexValue(c: int): int
+    begin
+        if c >= 48 && c <= 57 { return c - 48 }
+        if c >= 97 && c <= 102 { return c - 87 }
+        if c >= 65 && c <= 70 { return c - 55 }
+        return 0
+    end
+
+    // The offset just after `"key":` in the text (searching from `from`), or -1.
+    fn after(text: string, key: string, from: int): int
+    begin
+        var pattern: string := "\"" + key + "\""
+        var rest: string := str.slice(text, from, str.length(text))
+        var at: int := str.find(rest, pattern)
+        if at < 0 { return -1 }
+        var i: int := from + at + str.length(pattern)
+        while i < str.length(text) && (str.char(text, i) = 32 || str.char(text, i) = 58 || str.char(text, i) = 10 || str.char(text, i) = 13) { i := i + 1 }
+        return i
+    end
+
+    // The string value of "key" (unescaped), or "".
+    fn stringValue(text: string, key: string, from: int): string
+    begin
+        var i: int := after(text, key, from)
+        if i < 0 || i >= str.length(text) || str.char(text, i) != 34 { return "" }
+        i := i + 1
+        var out: string := str.builder("")
+        while i < str.length(text) && str.char(text, i) != 34 {
+            var c: int := str.char(text, i)
+            if c = 92 && i + 1 < str.length(text) {
+                var d: int := str.char(text, i + 1)
+                if d = 110 { out := str.append(out, "\n") }
+                else {
+                    if d = 116 { out := str.append(out, "\t") }
+                    else {
+                        if d = 114 { out := str.append(out, "") }
+                        else {
+                            if d = 117 && i + 5 < str.length(text) {
+                                var code: int := hexValue(str.char(text, i + 2)) * 4096 + hexValue(str.char(text, i + 3)) * 256 + hexValue(str.char(text, i + 4)) * 16 + hexValue(str.char(text, i + 5))
+                                if code < 128 { out := str.append(out, str.fromchar(code)) }
+                                else { out := str.append(out, "?") }
+                                i := i + 4
+                            }
+                            else { out := str.append(out, str.fromchar(d)) }
+                        }
+                    }
+                }
+                i := i + 2
+            }
+            else {
+                out := str.append(out, str.fromchar(c))
+                i := i + 1
+            }
+        }
+        return out
+    end
+
+    fn intValue(text: string, key: string, from: int): int
+    begin
+        var i: int := after(text, key, from)
+        if i < 0 { return -1 }
+        var value: int := 0
+        var seen: int := 0
+        while i < str.length(text) && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+            value := value * 10 + str.char(text, i) - 48
+            seen := 1
+            i := i + 1
+        }
+        if seen = 0 { return -1 }
+        return value
+    end
+
+    // The raw JSON token of "id" (a number or a string), or "null".
+    fn rawId(text: string): string
+    begin
+        var i: int := after(text, "id", 0)
+        if i < 0 { return "null" }
+        var start: int := i
+        if i < str.length(text) && str.char(text, i) = 34 {
+            i := i + 1
+            while i < str.length(text) && str.char(text, i) != 34 { i := i + 1 }
+            return str.slice(text, start, i + 1)
+        }
+        while i < str.length(text) && str.char(text, i) != 44 && str.char(text, i) != 125 { i := i + 1 }
+        return str.slice(text, start, i)
+    end
+
+    fn reply(id: string, result: string)
+    begin
+        send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}")
+    end
+
+    // ---- documents ----
+
+    fn uriPath(uri: string): string
+    begin
+        var path: string := uri
+        if str.length(uri) > 7 && str.slice(uri, 0, 7) = "file://" { path := str.slice(uri, 7, str.length(uri)) }
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < str.length(path) {
+            var c: int := str.char(path, i)
+            if c = 37 && i + 2 < str.length(path) {
+                out := str.append(out, str.fromchar(hexValue(str.char(path, i + 1)) * 16 + hexValue(str.char(path, i + 2))))
+                i := i + 3
+            }
+            else {
+                out := str.append(out, str.fromchar(c))
+                i := i + 1
+            }
+        }
+        return out
+    end
+
+    fn findDocument(server: *lsp.Server, uri: string): int
+    begin
+        var i: int := 0
+        while i < server.count {
+            if (*server.uris)[i] = uri { return i }
+            i := i + 1
+        }
+        return -1
+    end
+
+    fn setDocument(server: *lsp.Server, uri: string, text: string)
+    begin
+        var index: int := findDocument(server, uri)
+        if index < 0 {
+            if server.count >= 64 { return }
+            index := server.count
+            server.count := index + 1
+            (*server.uris)[index] := uri
+        }
+        (*server.texts)[index] := text
+    end
+
+    fn dropDocument(server: *lsp.Server, uri: string)
+    begin
+        var index: int := findDocument(server, uri)
+        if index < 0 { return }
+        server.count := server.count - 1
+        (*server.uris)[index] := (*server.uris)[server.count]
+        (*server.texts)[index] := (*server.texts)[server.count]
+    end
+
+    fn directoryOfPath(path: string): string
+    begin
+        var i: int := str.length(path) - 1
+        while i >= 0 && str.char(path, i) != 47 { i := i - 1 }
+        if i <= 0 { return "." }
+        return str.slice(path, 0, i)
+    end
+
+    // ---- diagnostics: run the compiler's checker on a copy of the document ----
+
+    fn parseNumber(text: string, from: int, stop: int): int
+    begin
+        var value: int := 0
+        var i: int := from
+        while i < stop && str.char(text, i) >= 48 && str.char(text, i) <= 57 {
+            value := value * 10 + str.char(text, i) - 48
+            i := i + 1
+        }
+        return value
+    end
+
+    fn diagnostics(server: *lsp.Server, uri: string, text: string)
+    begin
+        var path: string := uriPath(uri)
+        var directory: string := directoryOfPath(path)
+        var temporary: string := directory + "/.xe-lsp-check.xe"
+        var report: string := "/tmp/xe-lsp-report-" + str.number(syscall.invoke3(39, 0, 0, 0)) + ".txt"
+        file.write(temporary, text)
+        var command: string := "'" + server.executable + "' --check '" + temporary + "' -q 2> '" + report + "' > /dev/null"
+        process.run("XE_HOME='" + server.home + "' " + command)
+        var output: string := file.read(report)
+        process.run("rm -f '" + temporary + "' '" + report + "'")
+        var items: string := str.builder("")
+        var first: int := 1
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(output) {
+            if i = str.length(output) || str.char(output, i) = 10 {
+                var line: string := str.slice(output, start, i)
+                // path:line:column: error: message
+                var marker: int := str.find(line, ".xe-lsp-check.xe:")
+                if marker >= 0 {
+                    var rest: string := str.slice(line, marker + 17, str.length(line))
+                    var colon1: int := str.find(rest, ":")
+                    if colon1 > 0 {
+                        var lineNumber: int := parseNumber(rest, 0, colon1)
+                        var rest2: string := str.slice(rest, colon1 + 1, str.length(rest))
+                        var colon2: int := str.find(rest2, ":")
+                        if colon2 > 0 && lineNumber > 0 {
+                            var column: int := parseNumber(rest2, 0, colon2)
+                            var message: string := str.slice(rest2, colon2 + 1, str.length(rest2))
+                            var severity: int := 1
+                            var kindAt: int := str.find(message, "error:")
+                            if kindAt >= 0 { message := str.slice(message, kindAt + 6, str.length(message)) }
+                            else {
+                                kindAt := str.find(message, "warning:")
+                                if kindAt >= 0 {
+                                    severity := 2
+                                    message := str.slice(message, kindAt + 8, str.length(message))
+                                }
+                                else {
+                                    kindAt := str.find(message, "note:")
+                                    if kindAt >= 0 {
+                                        severity := 3
+                                        message := str.slice(message, kindAt + 5, str.length(message))
+                                    }
+                                }
+                            }
+                            if column < 1 { column := 1 }
+                            if first = 0 { items := str.append(items, ",") }
+                            first := 0
+                            items := str.append(items, "{\"range\":{\"start\":{\"line\":" + str.number(lineNumber - 1) + ",\"character\":" + str.number(column - 1) + "},\"end\":{\"line\":" + str.number(lineNumber - 1) + ",\"character\":" + str.number(column + 7) + "}},\"severity\":" + str.number(severity) + ",\"source\":\"xe\",\"message\":\"" + escape(trimText(message)) + "\"}")
+                        }
+                    }
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        send("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"" + escape(uri) + "\",\"diagnostics\":[" + items + "]}}")
+    end
+
+    fn trimText(text: string): string
+    begin
+        var start: int := 0
+        var finish: int := str.length(text)
+        while start < finish && (str.char(text, start) = 32 || str.char(text, start) = 9) { start := start + 1 }
+        while finish > start && (str.char(text, finish - 1) = 32 || str.char(text, finish - 1) = 9 || str.char(text, finish - 1) = 13) { finish := finish - 1 }
+        return str.slice(text, start, finish)
+    end
+
+    // ---- formatting ----
+
+    fn lineCount(text: string): int
+    begin
+        var lines: int := 0
+        var i: int := 0
+        while i < str.length(text) {
+            if str.char(text, i) = 10 { lines := lines + 1 }
+            i := i + 1
+        }
+        return lines + 1
+    end
+
+    fn formatting(id: string, text: string)
+    begin
+        var formatted: string := format.text(text)
+        reply(id, "[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":" + str.number(lineCount(text)) + ",\"character\":0}},\"newText\":\"" + escape(formatted) + "\"}]")
+    end
+
+    // ---- definitions and completion ----
+
+    fn isNameChar(c: int): int
+    begin
+        if lexer.letter(c) = 1 || lexer.digit(c) = 1 { return 1 }
+        return 0
+    end
+
+    // The offset of line `line`, column `column` in the text.
+    fn offsetOf(text: string, line: int, column: int): int
+    begin
+        var current: int := 0
+        var i: int := 0
+        while i < str.length(text) && current < line {
+            if str.char(text, i) = 10 { current := current + 1 }
+            i := i + 1
+        }
+        return i + column
+    end
+
+    fn wordAround(text: string, offset: int): string
+    begin
+        var start: int := offset
+        var finish: int := offset
+        if start > str.length(text) { return "" }
+        while start > 0 && (isNameChar(str.char(text, start - 1)) = 1 || str.char(text, start - 1) = 46) { start := start - 1 }
+        while finish < str.length(text) && isNameChar(str.char(text, finish)) = 1 { finish := finish + 1 }
+        return str.slice(text, start, finish)
+    end
+
+    // Finds `fn name`, `type name`, `global name`, `var name` or `enum name` in a text; returns the offset or -1.
+    fn declarationOffset(text: string, name: string): int
+    begin
+        var kinds: *[6]string := alloc(48)
+        (*kinds)[0] := "fn "
+        (*kinds)[1] := "type "
+        (*kinds)[2] := "global "
+        (*kinds)[3] := "enum "
+        (*kinds)[4] := "module "
+        (*kinds)[5] := "var "
+        var best: int := -1
+        var k: int := 0
+        while k < 6 {
+            var pattern: string := (*kinds)[k] + name
+            var from: int := 0
+            var searching: int := 1
+            while searching = 1 {
+                var rest: string := str.slice(text, from, str.length(text))
+                var at: int := str.find(rest, pattern)
+                if at < 0 { searching := 0 }
+                else {
+                    var index: int := from + at
+                    var after: int := index + str.length(pattern)
+                    var boundary: int := 1
+                    if after < str.length(text) && isNameChar(str.char(text, after)) = 1 { boundary := 0 }
+                    var lead: int := index - 1
+                    while lead >= 0 && (str.char(text, lead) = 32 || str.char(text, lead) = 9) { lead := lead - 1 }
+                    if boundary = 1 && (lead < 0 || str.char(text, lead) = 10) {
+                        if best < 0 || index < best { best := index }
+                        searching := 0
+                    }
+                    else { from := index + 1 }
+                }
+            }
+            k := k + 1
+        }
+        free(kinds)
+        return best
+    end
+
+    fn position(text: string, offset: int): string
+    begin
+        var line: int := 0
+        var column: int := 0
+        var i: int := 0
+        while i < offset && i < str.length(text) {
+            if str.char(text, i) = 10 {
+                line := line + 1
+                column := 0
+            }
+            else { column := column + 1 }
+            i := i + 1
+        }
+        return "{\"line\":" + str.number(line) + ",\"character\":" + str.number(column) + "}"
+    end
+
+    fn location(uri: string, text: string, offset: int, length: int): string
+    begin
+        return "{\"uri\":\"" + escape(uri) + "\",\"range\":{\"start\":" + position(text, offset) + ",\"end\":" + position(text, offset + length) + "}}"
+    end
+
+    fn definition(server: *lsp.Server, id: string, uri: string, text: string, line: int, column: int)
+    begin
+        var word: string := wordAround(text, offsetOf(text, line, column))
+        if str.length(word) = 0 {
+            reply(id, "null")
+            return
+        }
+        var at: int := declarationOffset(text, word)
+        // module members: `m.f` -> look for `f` (functions in a module are declared by their short name)
+        var dot: int := str.length(word) - 1
+        while dot >= 0 && str.char(word, dot) != 46 { dot := dot - 1 }
+        var shortName: string := word
+        if dot >= 0 { shortName := str.slice(word, dot + 1, str.length(word)) }
+        if at < 0 { at := declarationOffset(text, shortName) }
+        if at >= 0 {
+            reply(id, location(uri, text, at, str.length(word)))
+            return
+        }
+        // look in the libraries: a file that declares it
+        var result: string := "/tmp/xe-lsp-find-" + str.number(syscall.invoke3(39, 0, 0, 0)) + ".txt"
+        process.run("grep -rEn -m1 '^[[:space:]]*(fn|type|global|enum) +" + shortName + "([^A-Za-z0-9_]|$)' '" + server.home + "/libraries' '" + server.home + "/std' '" + directoryOfPath(uriPath(uri)) + "' --include='*.xe' --include='*.xel' > '" + result + "' 2>/dev/null")
+        var found: string := file.read(result)
+        process.run("rm -f '" + result + "'")
+        if str.length(found) = 0 {
+            reply(id, "null")
+            return
+        }
+        // path:line:text
+        var first: int := str.find(found, ":")
+        if first <= 0 {
+            reply(id, "null")
+            return
+        }
+        var filePath: string := str.slice(found, 0, first)
+        var rest: string := str.slice(found, first + 1, str.length(found))
+        var second: int := str.find(rest, ":")
+        var lineNumber: int := parseNumber(rest, 0, second)
+        if lineNumber < 1 { lineNumber := 1 }
+        reply(id, "{\"uri\":\"file://" + escape(filePath) + "\",\"range\":{\"start\":{\"line\":" + str.number(lineNumber - 1) + ",\"character\":0},\"end\":{\"line\":" + str.number(lineNumber - 1) + ",\"character\":0}}}")
+    end
+
+    fn completion(id: string, text: string)
+    begin
+        var words: string := "fn type module uses var const global enum if else while switch case default return defer break continue begin end alloc free string int flt writeln write"
+        var items: string := str.builder("")
+        var first: int := 1
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(words) {
+            if i = str.length(words) || str.char(words, i) = 32 {
+                if first = 0 { items := str.append(items, ",") }
+                first := 0
+                items := str.append(items, "{\"label\":\"" + str.slice(words, start, i) + "\",\"kind\":14}")
+                start := i + 1
+            }
+            i := i + 1
+        }
+        // names declared in this document
+        var position: int := 0
+        var line: int := 1
+        var running: int := 1
+        while running = 1 {
+            var item: [4]int := lexer.scan(text, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                if item[0] = token.nameKind() {
+                    var word: string := str.slice(text, item[1], item[2])
+                    if word = "fn" || word = "type" || word = "global" || word = "enum" {
+                        var name: [4]int := lexer.scan(text, item[2], item[3])
+                        if name[0] = token.nameKind() {
+                            var kind: int := 3
+                            if word = "type" || word = "enum" { kind := 7 }
+                            if word = "global" { kind := 6 }
+                            items := str.append(items, ",{\"label\":\"" + str.slice(text, name[1], name[2]) + "\",\"kind\":" + str.number(kind) + "}")
+                        }
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        reply(id, "{\"isIncomplete\":false,\"items\":[" + items + "]}")
+    end
+
+    // ---- the message loop ----
+
+    fn handle(server: *lsp.Server, body: string)
+    begin
+        var method: string := stringValue(body, "method", 0)
+        var id: string := rawId(body)
+        if method = "initialize" {
+            reply(id, "{\"capabilities\":{\"textDocumentSync\":1,\"documentFormattingProvider\":true,\"definitionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]}},\"serverInfo\":{\"name\":\"xe\",\"version\":\"" + driver.version() + "\"}}")
+        }
+        if method = "shutdown" { reply(id, "null") }
+        if method = "exit" { server.running := 0 }
+        if method = "textDocument/didOpen" {
+            var uri: string := stringValue(body, "uri", 0)
+            var text: string := stringValue(body, "text", 0)
+            setDocument(server, uri, text)
+            diagnostics(server, uri, text)
+        }
+        if method = "textDocument/didChange" {
+            var uri: string := stringValue(body, "uri", 0)
+            var changes: int := after(body, "contentChanges", 0)
+            var text: string := ""
+            if changes >= 0 { text := stringValue(body, "text", changes) }
+            setDocument(server, uri, text)
+            diagnostics(server, uri, text)
+        }
+        if method = "textDocument/didSave" {
+            var uri: string := stringValue(body, "uri", 0)
+            var index: int := findDocument(server, uri)
+            if index >= 0 { diagnostics(server, uri, (*server.texts)[index]) }
+        }
+        if method = "textDocument/didClose" {
+            var uri: string := stringValue(body, "uri", 0)
+            dropDocument(server, uri)
+            send("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"" + escape(uri) + "\",\"diagnostics\":[]}}")
+        }
+        if method = "textDocument/formatting" {
+            var uri: string := stringValue(body, "uri", 0)
+            var index: int := findDocument(server, uri)
+            if index >= 0 { formatting(id, (*server.texts)[index]) }
+            else { reply(id, "null") }
+        }
+        if method = "textDocument/definition" {
+            var uri: string := stringValue(body, "uri", 0)
+            var index: int := findDocument(server, uri)
+            var positionAt: int := after(body, "position", 0)
+            if index >= 0 && positionAt >= 0 {
+                definition(server, id, uri, (*server.texts)[index], intValue(body, "line", positionAt), intValue(body, "character", positionAt))
+            }
+            else { reply(id, "null") }
+        }
+        if method = "textDocument/completion" {
+            var uri: string := stringValue(body, "uri", 0)
+            var index: int := findDocument(server, uri)
+            if index >= 0 { completion(id, (*server.texts)[index]) }
+            else { reply(id, "{\"isIncomplete\":false,\"items\":[]}") }
+        }
+        if str.length(method) > 0 && str.find(method, "$/") != 0 && method != "initialize" && method != "initialized" && method != "shutdown" && method != "exit" && str.find(method, "textDocument/") != 0 && str.find(method, "workspace/") != 0 {
+            if str.length(id) > 0 && id != "null" { send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":-32601,\"message\":\"method not supported\"}}") }
+        }
+    end
+
+    fn serve(executable: string, home: string): int
+    begin
+        var server: *lsp.Server := alloc(64)
+        runtime.mem.set(server, 0, 64)
+        server.uris := alloc(512)
+        server.texts := alloc(512)
+        server.executable := executable
+        server.home := home
+        server.running := 1
+        while server.running = 1 {
+            var length: int := readHeader()
+            if length < 0 { server.running := 0 }
+            else {
+                var body: string := readBytes(length)
+                if str.length(body) > 0 { handle(server, body) }
+            }
+        }
+        return 0
+    end
+end
