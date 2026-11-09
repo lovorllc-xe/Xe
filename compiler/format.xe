@@ -1,0 +1,201 @@
+// format: `xe fmt` re-indents Xe source. It only changes leading whitespace and trailing blanks:
+//   - four spaces per level; levels follow begin/end and { } (inside `switch`, `case` arms are one level in and
+//     their statements one more)
+//   - the line after one that ends in `;` (a continuation) is indented one more level
+//   - strings, comments and `asm { ... }` blocks (also when they span lines) are never touched
+//   - runs of blank lines shrink to one, and the file ends with exactly one newline
+module format
+begin
+    fn trimEnd(text: string): string
+    begin
+        var finish: int := str.length(text)
+        while finish > 0 && (str.char(text, finish - 1) = 32 || str.char(text, finish - 1) = 9 || str.char(text, finish - 1) = 13) { finish := finish - 1 }
+        return str.slice(text, 0, finish)
+    end
+
+    fn spaces(count: int): string
+    begin
+        var out: string := str.builder("")
+        var i: int := 0
+        while i < count {
+            out := str.append(out, " ")
+            i := i + 1
+        }
+        return out
+    end
+
+    // Does the code on this line (before any // comment) end with `;`?
+    fn continues(body: string): int
+    begin
+        var inString: int := 0
+        var escaped: int := 0
+        var code: int := str.length(body)
+        var i: int := 0
+        while i < str.length(body) && code = str.length(body) {
+            var c: int := str.char(body, i)
+            if inString = 1 {
+                if escaped = 1 { escaped := 0 }
+                else {
+                    if c = 92 { escaped := 1 }
+                    else { if c = 34 { inString := 0 } }
+                }
+            }
+            else {
+                if c = 34 { inString := 1 }
+                if c = 47 && i + 1 < str.length(body) && str.char(body, i + 1) = 47 { code := i }
+            }
+            i := i + 1
+        }
+        while code > 0 && (str.char(body, code - 1) = 32 || str.char(body, code - 1) = 9) { code := code - 1 }
+        if code > 0 && str.char(body, code - 1) = 59 { return 1 }
+        return 0
+    end
+
+    // Re-indents the whole text; returns the formatted text.
+    fn text(source: string): string
+    begin
+        var out: string := str.builder("")
+        var size: int := str.length(source)
+        var position: int := 0
+        var level: int := 0
+        var switches: *[256]int := alloc(2048)
+        var befores: *[256]int := alloc(2048)
+        var depth: int := 0
+        var continued: int := 0
+        var blank: int := 0
+        var wrote: int := 0
+        var rawEnd: int := 0
+        while position < size {
+            var finish: int := position
+            while finish < size && str.char(source, finish) != 10 { finish := finish + 1 }
+            var line: string := str.slice(source, position, finish)
+            var scanFrom: int := position
+            var verbatim: int := 0
+            if position < rawEnd {
+                // the line starts inside a string or asm block that began earlier
+                verbatim := 1
+                if rawEnd < finish { scanFrom := rawEnd }
+                else { scanFrom := finish }
+            }
+            var indentWidth: int := 0
+            while position + indentWidth < finish && (str.char(source, position + indentWidth) = 32 || str.char(source, position + indentWidth) = 9) { indentWidth := indentWidth + 1 }
+            var bodyStart: int := position + indentWidth
+            if verbatim = 0 { scanFrom := bodyStart }
+            var blankLine: int := 0
+            if verbatim = 0 && bodyStart >= finish { blankLine := 1 }
+            if blankLine = 1 {
+                if blank = 0 && wrote = 1 { out := str.append(out, "\n") }
+                blank := 1
+            }
+            else {
+                blank := 0
+                wrote := 1
+                // the tokens of this line (from scanFrom on): leading closers, the first word, openers and closers
+                var item: [4]int := lexer.scan(source, scanFrom, 1)
+                var leadingClosers: int := 0
+                var seenOther: int := 0
+                var previous: int := -1
+                var firstWord: string := ""
+                var tokenIndex: int := 0
+                var isSwitchLine: int := 0
+                var events: *[64]int := alloc(512)
+                var eventCount: int := 0
+                while item[0] != token.endKind() && item[1] < finish {
+                    if item[0] != 10 {
+                        var word: string := ""
+                        if item[0] = token.nameKind() { word := str.slice(source, item[1], item[2]) }
+                        if tokenIndex = 0 && verbatim = 0 {
+                            firstWord := word
+                            if word = "switch" { isSwitchLine := 1 }
+                        }
+                        var closes: int := 0
+                        var opens: int := 0
+                        if word = "end" && previous != 46 { closes := 1 }
+                        if item[0] = 125 { closes := 1 }
+                        if word = "begin" && previous != 46 { opens := 1 }
+                        if item[0] = 123 { opens := 1 }
+                        if closes = 1 {
+                            if seenOther = 0 && verbatim = 0 { leadingClosers := leadingClosers + 1 }
+                            else {
+                                if eventCount < 64 {
+                                    (*events)[eventCount] := 2
+                                    eventCount := eventCount + 1
+                                }
+                            }
+                        }
+                        else {
+                            seenOther := 1
+                            if opens = 1 && eventCount < 64 {
+                                if word = "begin" && isSwitchLine = 1 { (*events)[eventCount] := 3 }
+                                else { (*events)[eventCount] := 1 }
+                                eventCount := eventCount + 1
+                            }
+                        }
+                        previous := item[0]
+                        tokenIndex := tokenIndex + 1
+                        // a string or asm token that runs past the end of the line continues on the next lines
+                        if (item[0] = token.stringKind() || item[0] = token.assemblyKind()) && item[2] > finish { rawEnd := item[2] }
+                    }
+                    item := lexer.scan(source, item[2], item[3])
+                }
+                if verbatim = 1 {
+                    out := str.append(out, trimEnd(line) + "\n")
+                    if rawEnd > finish + 1 && position >= rawEnd { rawEnd := 0 }
+                }
+                else {
+                    var plevel: int := level
+                    var closersLeft: int := leadingClosers
+                    while closersLeft > 0 && depth > 0 {
+                        depth := depth - 1
+                        level := (*befores)[depth]
+                        closersLeft := closersLeft - 1
+                    }
+                    plevel := level
+                    var isArm: int := 0
+                    if (firstWord = "case" || firstWord = "default") && depth > 0 && (*switches)[depth - 1] = 1 { isArm := 1 }
+                    if isArm = 1 { plevel := (*befores)[depth - 1] + 1 }
+                    var extra: int := 0
+                    if continued = 1 { extra := 1 }
+                    var body: string := trimEnd(str.slice(source, bodyStart, finish))
+                    out := str.append(out, spaces((plevel + extra) * 4) + body + "\n")
+                    var e: int := 0
+                    while e < eventCount {
+                        var kind: int := (*events)[e]
+                        if kind = 2 {
+                            if depth > 0 {
+                                depth := depth - 1
+                                level := (*befores)[depth]
+                            }
+                        }
+                        else {
+                            if depth < 250 {
+                                (*befores)[depth] := level
+                                (*switches)[depth] := 0
+                                if kind = 3 { (*switches)[depth] := 1 }
+                                depth := depth + 1
+                                level := level + 1
+                            }
+                        }
+                        e := e + 1
+                    }
+                    if isArm = 1 { level := (*befores)[depth - 1] + 2 }
+                    continued := 0
+                    if continues(body) = 1 { continued := 1 }
+                    if rawEnd > finish { continued := 0 }
+                }
+                free(events)
+            }
+            if rawEnd > 0 && rawEnd <= finish + 1 && verbatim = 1 { rawEnd := 0 }
+            position := finish + 1
+        }
+        free(switches)
+        free(befores)
+        var result: string := out
+        var length: int := str.length(result)
+        while length > 1 && str.char(result, length - 1) = 10 && str.char(result, length - 2) = 10 {
+            result := str.slice(result, 0, length - 1)
+            length := length - 1
+        }
+        return result
+    end
+end

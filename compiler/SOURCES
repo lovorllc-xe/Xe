@@ -8,6 +8,7 @@ checker.xe
 codegen.xe
 desugar.xe
 generics.xe
+format.xe
 fast.xe
 optimizer.xe
 runtime.xe

@@ -4186,7 +4186,70 @@ begin
         return best
     end
 
+    fn debugEnabled(source: string): int
+    begin
+        if str.length(source) > 16 && str.slice(source, 0, 15) = "// xelang-debug" { return 1 }
+        return 0
+    end
+
+    // Debug builds (xe -g): the `.file` directives for every source file, and a table (in unused pool words) that
+    // maps the position of a file marker in the source to the file's number.
+    fn debugPrepare(source: string, pool: *[12582912]int): string
+    begin
+        if debugEnabled(source) = 0 { return "" }
+        var directives: string := str.builder("")
+        var paths: *[512]string := alloc(4096)
+        var count: int := 0
+        var position: int := 0
+        var size: int := str.length(source)
+        while position < size {
+            var finish: int := diag.lineFinish(source, position)
+            var marker: int := diag.markerAt(source, position)
+            if marker > 0 && count < 400 {
+                var path: string := str.slice(source, position + marker, finish)
+                var index: int := -1
+                var i: int := 0
+                while i < count {
+                    if (*paths)[i] = path { index := i }
+                    i := i + 1
+                }
+                if index < 0 {
+                    (*paths)[count] := path
+                    index := count
+                    count := count + 1
+                    directives := str.append(directives, ".file " + token.number(index + 1) + " \"" + path + "\"\n")
+                }
+                (*pool)[12580001 + (*pool)[12580000] * 2] := position
+                (*pool)[12580002 + (*pool)[12580000] * 2] := index + 1
+                (*pool)[12580000] := (*pool)[12580000] + 1
+            }
+            position := finish + 1
+        }
+        free(paths)
+        return directives
+    end
+
+    // `.loc file line column` for the source offset, or "".
+    fn debugLocation(source: string, pool: *[12582912]int, offset: int): string
+    begin
+        var where: [4]int := diag.position(source, offset)
+        if where[2] < 0 { return "" }
+        var i: int := 0
+        while i < (*pool)[12580000] {
+            if (*pool)[12580001 + i * 2] = where[2] { return " .loc " + token.number((*pool)[12580002 + i * 2]) + " " + token.number(where[0]) + " " + token.number(where[1]) + "\n" }
+            i := i + 1
+        }
+        return ""
+    end
+
     fn emitStatement(source: string, pool: *[12582912]int, functionId: int, statement: int): string
+    begin
+        var code: string := emitStatementCode(source, pool, functionId, statement)
+        if str.length(code) = 0 || debugEnabled(source) = 0 { return code }
+        return debugLocation(source, pool, ast.read(pool, statement, 1)) + code
+    end
+
+    fn emitStatementCode(source: string, pool: *[12582912]int, functionId: int, statement: int): string
     begin
         var kind: int := ast.read(pool, statement, 0)
         if kind = ast.breakKind() || kind = ast.continueKind() {
@@ -4475,7 +4538,7 @@ begin
                     var emptyLabel: string := functionLabel(qualifiedFunctionName(source, pool, functionId))
                     output := str.append(output, ".global " + emptyLabel + "\n.type " + emptyLabel + ", @function\n" + emptyLabel + ":\n xor eax, eax\n ret\n")
                 }
-                if statement >= 0 { quick := fast.compile(source, pool, functionId) }
+                if statement >= 0 && debugEnabled(source) = 0 { quick := fast.compile(source, pool, functionId) }
                 if str.length(quick) > 0 { output := str.append(output, quick) }
                 if statement >= 0 && str.length(quick) = 0 {
                     var label: string := functionLabel(qualifiedFunctionName(source, pool, functionId))
@@ -4615,6 +4678,7 @@ begin
         var separator: string := runtime.underscore()
         var output: string := str.builder(".intel" + separator + "syntax noprefix\n.section .rodata\n" + messages(source) + stringConstants(source) + floatConstants(source))
         output := str.append(output, ".section .text\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n mov qword ptr [rip+.LxeStackBase], rsp\n call main\n mov edi, eax\n mov eax, 231\n syscall\n")
+        if debugEnabled(source) = 1 { output := str.append(output, debugPrepare(source, pool)) }
         var localCount: int := integerLocalCount(source, pool, mainId)
         var stackSpace: int := 40 + (localCount + arrayTemporaryWords(source, pool, mainId)) * 8
         if stackSpace % 16 != 0 { stackSpace := stackSpace + 8 }

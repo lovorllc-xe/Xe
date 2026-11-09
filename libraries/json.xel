@@ -26,14 +26,14 @@ begin
             if byte = 34 { closed := 1 }
             else {
                 if byte < 32 {
-            *position := -1
-            return ""
-        }
+                    *position := -1
+                    return ""
+                }
                 if byte = 92 {
                     if *position >= str.length(source) {
-            *position := -1
-            return ""
-        }
+                        *position := -1
+                        return ""
+                    }
                     byte := str.char(source, *position)
                     *position := *position + 1
                     if byte = 34 || byte = 92 || byte = 47 { result := str.append(result, str.fromchar(byte)) }
@@ -48,9 +48,9 @@ begin
                                     else {
                                         if byte = 116 { result := str.append(result, str.fromchar(9)) }
                                         else {
-            *position := -1
-            return ""
-        }
+                                            *position := -1
+                                            return ""
+                                        }
                                     }
                                 }
                             }

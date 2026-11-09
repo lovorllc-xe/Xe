@@ -36,6 +36,7 @@ begin
         writeln("  xe --build <file.xe> [...] [-o <out>] [-p <platform>]   build a native executable")
         writeln("  xe --run <file.xe> [...] [-- args...]    build into a temporary file and run it")
         writeln("  xe --check <file.xe> [...]               check the program without building it")
+        writeln("  xe fmt [--check] [--stdout] <file.xe> ... re-indent source files (--check lists files that need it)")
         writeln()
         writeln("Emit assembly:")
         writeln("  xe --emit-asm <file.xe> [...] -o <output.s>")
@@ -55,6 +56,7 @@ begin
         writeln("                         win needs llvm-mc, llvm-dlltool and lld-link, macos needs llvm-mc and ld64.lld")
         writeln("  -q, --quiet            do not print the build summary")
         writeln("  --keep-asm             keep the generated .s and .o files")
+        writeln("  -g, --debug            add source line information for gdb (debug builds are not optimized)")
         writeln("  -h, --help             show this help")
         writeln("  -v, -V, --version      show the compiler version and logo")
         writeln()
@@ -355,6 +357,47 @@ begin
         return command
     end
 
+    // xe fmt [--check] [--stdout] <file> ...: re-indent source files (see format.xe).
+    fn formatCommand(count: int): int
+    begin
+        var check: int := 0
+        var toStdout: int := 0
+        var changed: int := 0
+        var files: int := 0
+        var index: int := 1
+        while index < count {
+            var option: string := arg.get(index)
+            if option = "--check" { check := 1 }
+            else {
+                if option = "--stdout" { toStdout := 1 }
+                else {
+                    files := files + 1
+                    if exists(option) = 0 { return err("error: cannot read '" + option + "'") }
+                    var original: string := file.read(option)
+                    var formatted: string := format.text(original)
+                    if toStdout = 1 { write(formatted) }
+                    else {
+                        if formatted != original {
+                            changed := changed + 1
+                            if check = 1 { writeln(option + ": needs formatting") }
+                            else {
+                                file.write(option, formatted)
+                                writeln("formatted " + option)
+                            }
+                        }
+                    }
+                }
+            }
+            index := index + 1
+        }
+        if files = 0 {
+            writeln("usage: xe fmt [--check] [--stdout] <file.xe> ...")
+            return 2
+        }
+        if check = 1 && changed > 0 { return 1 }
+        return 0
+    end
+
     fn run(): int
     begin
         var count: int := arg.count()
@@ -366,6 +409,7 @@ begin
             return 0
         }
         if mode = "--help" || mode = "-h" { return help() }
+        if mode = "fmt" || mode = "--format" { return formatCommand(count) }
         var target: int := -1
         var emitOnly: int := 0
         var runAfter: int := 0
@@ -406,6 +450,7 @@ begin
         var keep: int := 0
         var programArguments: string := ""
         var platform: string := "linux"
+        var debug: int := 0
         var index: int := first
         while index < count {
             var option: string := arg.get(index)
@@ -435,6 +480,11 @@ begin
                 if platform = "mac" || platform = "macosx" || platform = "darwin" || platform = "osx" { platform := "macos" }
                 if platform != "linux" && platform != "win" && platform != "macos" { return err("error: unknown platform '" + platform + "' (use linux, win or macos)") }
                 index := index + 2
+                handled := 1
+            }
+            if handled = 0 && (option = "-g" || option = "--debug") {
+                debug := 1
+                index := index + 1
                 handled := 1
             }
             if handled = 0 && option = "--no-std" {
@@ -505,6 +555,7 @@ begin
             }
         }
         var source: string := readSources(sources, sourceCount, libraries)
+        if debug = 1 { source := "// xelang-debug\n" + source }
         if str.find(source, token.character(1) + "xelang-missing-import") < 0 {
             source := generics.run(source)
             if str.length(source) = 0 { return 1 }
