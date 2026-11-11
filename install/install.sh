@@ -34,10 +34,16 @@ fi
 
 install -d "$bin_dir" "$lib_dir/std" "$lib_dir/compiler" "$lib_dir/libraries"
 rm -f "$lib_dir/libraries/"*.xel
+# Per-platform libraries (ccall, win32, ...) and cross-build support files.
+rm -rf -- "$lib_dir/libraries/linux" "$lib_dir/libraries/macos" "$lib_dir/libraries/win" "$lib_dir/platform"
 install -m 0755 "$work_dir/xe" "$bin_dir/xe"
 install -m 0644 "$project_dir"/std/*.xe "$lib_dir/std/"
 install -m 0644 "$project_dir"/compiler/*.xe "$project_dir/compiler/SOURCES" "$lib_dir/compiler/"
 install -m 0644 "$project_dir"/libraries/*.xel "$lib_dir/libraries/"
+for os_dir in "$project_dir"/libraries/*/; do
+    cp -r -- "${os_dir%/}" "$lib_dir/libraries/"
+done
+cp -r -- "$project_dir/platform" "$lib_dir/platform"
 # Remove files left behind by the old C++ bootstrap installer.
 rm -rf -- "$lib_dir/runtime" "$lib_dir/compiler/selfhosted-xe"
 
