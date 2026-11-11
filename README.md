@@ -123,8 +123,7 @@ xe --version
 ```
 
 `PREFIX=/opt/xe ./install.sh` installs elsewhere; `./uninstall.sh` removes it.
-Build the tarball yourself with `scripts/make-release.sh` (it lands in `dist/`), or build every platform's package at
-once with the release tool. It asks for the Xe root folder and writes `dist/xe-<version>-{linux-x86_64.tar.gz,
+Build the packages yourself with the release tool. It asks for the Xe root folder and writes `dist/xe-<version>-{linux-x86_64.tar.gz,
 windows-x86_64.zip, windows-arm64.zip, macos-arm64.tar.gz}`:
 
 ```sh
@@ -220,13 +219,6 @@ networking (`tcp`, `udp`, `dns`, `http`, `httpserver`) and more. Import with
 `uses name`. The index is [docs/libraries.md](docs/libraries.md).
 
 ## Graphics, GUI and games
-
-```sh
-xe examples/gui_demo.xe && ./examples/gui_demo        # widgets: buttons, sliders, text box, list
-xe examples/cube3d.xe && ./examples/cube3d            # software 3D, mouse orbit
-xe examples/pong.xe && ./examples/pong                # 2D game
-xe examples/vulkan_3d.xe && ./examples/vulkan_3d      # the same kind of scene rendered by the GPU through Vulkan
-```
 
 ```xe
 uses gui

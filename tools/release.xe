@@ -90,7 +90,7 @@ begin
     return out
 end
 
-// Fills a package folder: lib/xelang (what the compiler needs at run time), share/xe (docs, examples), readme files,
+// Fills a package folder: lib/xelang (what the compiler needs at run time), share/xe (docs, logo), readme files,
 // and for Linux install.sh / uninstall.sh.
 fn layout(root: string, stage: string, platform: string): int
 begin
@@ -99,7 +99,7 @@ begin
     if run("mkdir -p " + lib + " " + share) = 0 { return 0 }
     if run("cp -r " + quote(root + "/std") + " " + quote(root + "/compiler") + " " + quote(root + "/libraries") + " " + quote(root + "/platform") + " " + lib) = 0 { return 0 }
     run("rm -rf " + quote(stage + "/lib/xelang/compiler/selfhosted-xe"))
-    run("cp -r " + quote(root + "/docs") + " " + quote(root + "/examples") + " " + quote(root + "/logo") + " " + share)
+    run("cp -r " + quote(root + "/docs") + " " + quote(root + "/logo") + " " + share)
     run("cp " + quote(root + "/README.md") + " " + quote(stage + "/"))
     if platform = "linux" {
         run("cp " + quote(root + "/README-INSTALL-LINUX.txt") + " " + quote(stage + "/"))

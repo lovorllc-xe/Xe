@@ -31,9 +31,9 @@ The script assembles bootstrap/xe-seed.s.gz, compiles the compiler with itself
 twice, verifies that both generations produce byte-identical assembly (the
 self-hosting fixpoint), installs xe and the libraries, and runs tests/run_tests.sh.
 
-Make your own tarball:
+Make your own packages (Linux, Windows, macOS) in dist/:
 
-    scripts/make-release.sh        # writes dist/xe-2.3.0-linux-x86_64.tar.gz
+    xe --run tools/release.xe
 
 After changing compiler/*.xe, refresh the seed so fresh checkouts still build:
 
