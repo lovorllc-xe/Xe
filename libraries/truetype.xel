@@ -1,0 +1,779 @@
+// truetype: anti-aliased TrueType (.ttf) text of any pixel size, drawn onto a canvas.
+// Loads glyf-outline fonts and supports cmap formats 4 and 12 (all of Unicode), simple and composite glyphs, and caches every
+// rasterized glyph per size. Kerning and hinting are not applied; CFF-based .otf fonts are not supported.
+//
+//     var font: *truetype.Font := truetype.load_system(1)            // a monospace system font, or null
+//     truetype.draw(c, font, 20, 40, "Zdravo, svijete! čćžšđ", 18, canvas.rgb(230, 230, 230))
+//     var w: int := truetype.width(font, "text", 18)                 // advance width in pixels
+//
+// draw takes the baseline position; line_height(font, px) is the distance between baselines and
+// ascent(font, px) is how far glyphs reach above the baseline.
+uses bytes
+uses canvas
+uses math
+
+module truetype
+begin
+    type Font: record
+    begin
+        data: *bytes.Buffer
+        base: *void
+        size: int
+        cmap: int
+        cmap_format: int
+        loca: int
+        glyf: int
+        hmtx: int
+        metrics: int
+        long_loca: int
+        units: int
+        ascender: int
+        descender: int
+        line_gap: int
+        glyph_count: int
+        cache_keys: *[4096]int
+        cache_glyphs: *[4096]*truetype.Glyph
+    end
+
+    // A rasterized glyph: alpha coverage (0-255) of a width x height box whose top-left corner is
+    // (left, top) relative to the pen position on the baseline (y grows downwards).
+    type Glyph: record
+    begin
+        width: int
+        height: int
+        left: int
+        top: int
+        advance: flt
+        alpha: *[16777216]int
+    end
+
+    type Points: record
+    begin
+        x: *[65536]flt
+        y: *[65536]flt
+        on: *[65536]int
+        ends: *[4096]int
+        count: int
+        contours: int
+    end
+
+    // ---- reading the font file (big-endian) ----
+
+    fn u8(f: *truetype.Font, at: int): int
+    begin
+        if at < 0 || at >= f.size { return 0 }
+        return runtime.hw.read8(f.base + at)
+    end
+
+    fn u16(f: *truetype.Font, at: int): int
+    begin
+        return u8(f, at) * 256 + u8(f, at + 1)
+    end
+
+    fn s16(f: *truetype.Font, at: int): int
+    begin
+        var v: int := u16(f, at)
+        if v >= 32768 { return v - 65536 }
+        return v
+    end
+
+    fn u32(f: *truetype.Font, at: int): int
+    begin
+        return u16(f, at) * 65536 + u16(f, at + 2)
+    end
+
+    fn table(f: *truetype.Font, tag: string): int
+    begin
+        var want: int := str.char(tag, 0) * 16777216 + str.char(tag, 1) * 65536 + str.char(tag, 2) * 256 + str.char(tag, 3)
+        var count: int := u16(f, 4)
+        var i: int := 0
+        while i < count {
+            var record: int := 12 + i * 16
+            if u32(f, record) = want { return u32(f, record + 8) }
+            i := i + 1
+        }
+        return -1
+    end
+
+    // ---- loading ----
+
+    // Parses font data already in memory; null when it is not a TrueType font this module can use.
+    fn from_bytes(data: *bytes.Buffer): *truetype.Font
+    begin
+        if @data = 0 || data.size < 12 { return null }
+        var f: *truetype.Font := alloc(sizeof(truetype.Font))
+        f.data := data
+        f.base := data.data
+        f.size := data.size
+        var version: int := u32(f, 0)
+        if version != 65536 && version != 1953658213 { return null }
+        var head: int := table(f, "head")
+        var hhea: int := table(f, "hhea")
+        var maxp: int := table(f, "maxp")
+        f.loca := table(f, "loca")
+        f.glyf := table(f, "glyf")
+        f.hmtx := table(f, "hmtx")
+        var cmap: int := table(f, "cmap")
+        if head < 0 || hhea < 0 || maxp < 0 || f.loca < 0 || f.glyf < 0 || f.hmtx < 0 || cmap < 0 { return null }
+        f.units := u16(f, head + 18)
+        f.long_loca := s16(f, head + 50)
+        f.ascender := s16(f, hhea + 4)
+        f.descender := s16(f, hhea + 6)
+        f.line_gap := s16(f, hhea + 8)
+        f.metrics := u16(f, hhea + 34)
+        f.glyph_count := u16(f, maxp + 4)
+        if f.units <= 0 { return null }
+        // prefer a full-Unicode subtable (format 12), then the BMP one (format 4)
+        f.cmap := -1
+        var count: int := u16(f, cmap + 2)
+        var i: int := 0
+        while i < count {
+            var platform: int := u16(f, cmap + 4 + i * 8)
+            var encoding: int := u16(f, cmap + 6 + i * 8)
+            var sub: int := cmap + u32(f, cmap + 8 + i * 8)
+            var format: int := u16(f, sub)
+            if (platform = 3 && encoding = 10) || (platform = 0 && format = 12) {
+                if format = 12 {
+                    f.cmap := sub
+                    f.cmap_format := 12
+                }
+            }
+            if f.cmap_format != 12 && ((platform = 3 && encoding = 1) || platform = 0) && format = 4 {
+                f.cmap := sub
+                f.cmap_format := 4
+            }
+            i := i + 1
+        }
+        if f.cmap < 0 { return null }
+        f.cache_keys := alloc(4096 * 8)
+        f.cache_glyphs := alloc(4096 * 8)
+        return f
+    end
+
+    // Loads a .ttf file; null when it is missing or not usable.
+    fn load(path: string): *truetype.Font
+    begin
+        var data: *bytes.Buffer := bytes.read_file(path)
+        if @data = 0 { return null }
+        return from_bytes(data)
+    end
+
+    // Tries the usual system font locations (Linux, macOS, Windows); monospace = 1 for a code font.
+    fn load_system(monospace: int): *truetype.Font
+    begin
+        var paths: string := "/usr/share/fonts/TTF/DejaVuSans.ttf;/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf;/usr/share/fonts/dejavu/DejaVuSans.ttf;/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf;/usr/share/fonts/noto/NotoSans-Regular.ttf;/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf;/usr/share/fonts/liberation/LiberationSans-Regular.ttf;/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf;/Library/Fonts/Arial.ttf;/System/Library/Fonts/Supplemental/Arial.ttf;C:\\Windows\\Fonts\\segoeui.ttf;C:\\Windows\\Fonts\\arial.ttf;"
+        if monospace = 1 { paths := "/usr/share/fonts/TTF/DejaVuSansMono.ttf;/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf;/usr/share/fonts/dejavu/DejaVuSansMono.ttf;/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf;/usr/share/fonts/noto/NotoSansMono-Regular.ttf;/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf;/usr/share/fonts/liberation/LiberationMono-Regular.ttf;/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf;/System/Library/Fonts/Supplemental/Courier New.ttf;/Library/Fonts/Courier New.ttf;C:\\Windows\\Fonts\\consola.ttf;C:\\Windows\\Fonts\\cour.ttf;" }
+        var start: int := 0
+        var i: int := 0
+        while i < str.length(paths) {
+            if str.char(paths, i) = 59 {
+                var font: *truetype.Font := load(str.slice(paths, start, i))
+                if @font != 0 { return font }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return null
+    end
+
+    // ---- characters to glyphs ----
+
+    fn glyph_index(f: *truetype.Font, code: int): int
+    begin
+        var sub: int := f.cmap
+        if f.cmap_format = 12 {
+            var groups: int := u32(f, sub + 12)
+            var low: int := 0
+            var high: int := groups - 1
+            while low <= high {
+                var mid: int := (low + high) / 2
+                var g: int := sub + 16 + mid * 12
+                var first: int := u32(f, g)
+                var last: int := u32(f, g + 4)
+                if code < first { high := mid - 1 }
+                else {
+                    if code > last { low := mid + 1 }
+                    else { return u32(f, g + 8) + code - first }
+                }
+            }
+            return 0
+        }
+        if code > 65535 { return 0 }
+        var segments: int := u16(f, sub + 6) / 2
+        var ends: int := sub + 14
+        var starts: int := ends + segments * 2 + 2
+        var deltas: int := starts + segments * 2
+        var ranges: int := deltas + segments * 2
+        var low: int := 0
+        var high: int := segments - 1
+        while low <= high {
+            var mid: int := (low + high) / 2
+            if u16(f, ends + mid * 2) < code { low := mid + 1 }
+            else { high := mid - 1 }
+        }
+        if low >= segments { return 0 }
+        var first: int := u16(f, starts + low * 2)
+        if code < first { return 0 }
+        var delta: int := u16(f, deltas + low * 2)
+        var range: int := u16(f, ranges + low * 2)
+        if range = 0 { return (code + delta) % 65536 }
+        var glyph: int := u16(f, ranges + low * 2 + range + (code - first) * 2)
+        if glyph = 0 { return 0 }
+        return (glyph + delta) % 65536
+    end
+
+    fn glyph_offset(f: *truetype.Font, glyph: int): int
+    begin
+        if glyph < 0 || glyph >= f.glyph_count { return -1 }
+        var start: int := 0
+        var finish: int := 0
+        if f.long_loca = 0 {
+            start := u16(f, f.loca + glyph * 2) * 2
+            finish := u16(f, f.loca + glyph * 2 + 2) * 2
+        }
+        else {
+            start := u32(f, f.loca + glyph * 4)
+            finish := u32(f, f.loca + glyph * 4 + 4)
+        }
+        if start = finish { return -1 }
+        return f.glyf + start
+    end
+
+    fn advance_units(f: *truetype.Font, glyph: int): int
+    begin
+        if f.metrics = 0 { return 0 }
+        if glyph < f.metrics { return u16(f, f.hmtx + glyph * 4) }
+        return u16(f, f.hmtx + (f.metrics - 1) * 4)
+    end
+
+    // ---- outlines ----
+
+    fn add_point(p: *truetype.Points, x: flt, y: flt, on: int)
+    begin
+        if p.count >= 65536 { return }
+        (*p.x)[p.count] := x
+        (*p.y)[p.count] := y
+        (*p.on)[p.count] := on
+        p.count := p.count + 1
+    end
+
+    fn outline(f: *truetype.Font, glyph: int, p: *truetype.Points, depth: int)
+    begin
+        var g: int := glyph_offset(f, glyph)
+        if g < 0 || depth > 8 { return }
+        var contours: int := s16(f, g)
+        if contours >= 0 {
+            var endsAt: int := g + 10
+            var total: int := u16(f, endsAt + (contours - 1) * 2) + 1
+            if contours = 0 { total := 0 }
+            if p.count + total > 65536 || p.contours + contours > 4096 { return }
+            var flagsAt: int := endsAt + contours * 2 + 2 + u16(f, endsAt + contours * 2)
+            var flags: *[65536]int := alloc(total * 8 + 8)
+            var i: int := 0
+            var at: int := flagsAt
+            while i < total {
+                var flag: int := u8(f, at)
+                at := at + 1
+                (*flags)[i] := flag
+                i := i + 1
+                if (flag & 8) != 0 {
+                    var repeat: int := u8(f, at)
+                    at := at + 1
+                    while repeat > 0 && i < total {
+                        (*flags)[i] := flag
+                        i := i + 1
+                        repeat := repeat - 1
+                    }
+                }
+            }
+            var first: int := p.count
+            var x: int := 0
+            i := 0
+            while i < total {
+                var flag: int := (*flags)[i]
+                if (flag & 2) != 0 {
+                    var dx: int := u8(f, at)
+                    at := at + 1
+                    if (flag & 16) != 0 { x := x + dx }
+                    else { x := x - dx }
+                }
+                else {
+                    if (flag & 16) = 0 {
+                        x := x + s16(f, at)
+                        at := at + 2
+                    }
+                }
+                add_point(p, cast.flt(x), 0.0, flag & 1)
+                i := i + 1
+            }
+            var y: int := 0
+            i := 0
+            while i < total {
+                var flag: int := (*flags)[i]
+                if (flag & 4) != 0 {
+                    var dy: int := u8(f, at)
+                    at := at + 1
+                    if (flag & 32) != 0 { y := y + dy }
+                    else { y := y - dy }
+                }
+                else {
+                    if (flag & 32) = 0 {
+                        y := y + s16(f, at)
+                        at := at + 2
+                    }
+                }
+                (*p.y)[first + i] := cast.flt(y)
+                i := i + 1
+            }
+            free(flags)
+            i := 0
+            while i < contours {
+                (*p.ends)[p.contours] := first + u16(f, endsAt + i * 2)
+                p.contours := p.contours + 1
+                i := i + 1
+            }
+            return
+        }
+        // composite glyph: components with offsets and an optional 2x2 transform
+        var at: int := g + 10
+        var more: int := 1
+        while more = 1 {
+            var flag: int := u16(f, at)
+            var component: int := u16(f, at + 2)
+            at := at + 4
+            var dx: flt := 0.0
+            var dy: flt := 0.0
+            if (flag & 1) != 0 {
+                dx := cast.flt(s16(f, at))
+                dy := cast.flt(s16(f, at + 2))
+                at := at + 4
+            }
+            else {
+                var bx: int := u8(f, at)
+                var by: int := u8(f, at + 1)
+                if bx >= 128 { bx := bx - 256 }
+                if by >= 128 { by := by - 256 }
+                dx := cast.flt(bx)
+                dy := cast.flt(by)
+                at := at + 2
+            }
+            if (flag & 2) = 0 {
+                dx := 0.0
+                dy := 0.0
+            }
+            var a: flt := 1.0
+            var b: flt := 0.0
+            var c: flt := 0.0
+            var d: flt := 1.0
+            if (flag & 8) != 0 {
+                a := cast.flt(s16(f, at)) / 16384.0
+                d := a
+                at := at + 2
+            }
+            else {
+                if (flag & 64) != 0 {
+                    a := cast.flt(s16(f, at)) / 16384.0
+                    d := cast.flt(s16(f, at + 2)) / 16384.0
+                    at := at + 4
+                }
+                else {
+                    if (flag & 128) != 0 {
+                        a := cast.flt(s16(f, at)) / 16384.0
+                        b := cast.flt(s16(f, at + 2)) / 16384.0
+                        c := cast.flt(s16(f, at + 4)) / 16384.0
+                        d := cast.flt(s16(f, at + 6)) / 16384.0
+                        at := at + 8
+                    }
+                }
+            }
+            var from: int := p.count
+            outline(f, component, p, depth + 1)
+            var k: int := from
+            while k < p.count {
+                var px: flt := (*p.x)[k]
+                var py: flt := (*p.y)[k]
+                (*p.x)[k] := a * px + c * py + dx
+                (*p.y)[k] := b * px + d * py + dy
+                k := k + 1
+            }
+            if (flag & 32) = 0 { more := 0 }
+        }
+    end
+
+    // ---- rasterizing (signed-area accumulation, as in font-rs) ----
+
+    fn floor_int(v: flt): int
+    begin
+        var t: int := cast.int(v)
+        if cast.flt(t) > v { return t - 1 }
+        return t
+    end
+
+    fn ceil_int(v: flt): int
+    begin
+        var t: int := cast.int(v)
+        if cast.flt(t) < v { return t + 1 }
+        return t
+    end
+
+    fn add(acc: *[16777216]flt, index: int, limit: int, value: flt)
+    begin
+        if index >= 0 && index < limit { (*acc)[index] := (*acc)[index] + value }
+    end
+
+    fn line(acc: *[16777216]flt, w: int, h: int, x0: flt, y0: flt, x1: flt, y1: flt)
+    begin
+        if y0 = y1 { return }
+        var dir: flt := 1.0
+        var ax: flt := x0
+        var ay: flt := y0
+        var bx: flt := x1
+        var by: flt := y1
+        if y0 > y1 {
+            dir := -1.0
+            ax := x1
+            ay := y1
+            bx := x0
+            by := y0
+        }
+        var limit: int := w * h + 2
+        var dxdy: flt := (bx - ax) / (by - ay)
+        var x: flt := ax
+        var row: int := floor_int(ay)
+        if ay < 0.0 {
+            x := x - ay * dxdy
+            row := 0
+        }
+        var last: int := ceil_int(by)
+        if last > h { last := h }
+        while row < last {
+            var top: flt := cast.flt(row)
+            if ay > top { top := ay }
+            var bottom: flt := cast.flt(row + 1)
+            if by < bottom { bottom := by }
+            var dy: flt := bottom - top
+            var xnext: flt := x + dxdy * dy
+            var d: flt := dy * dir
+            var left: flt := x
+            var right: flt := xnext
+            if xnext < x {
+                left := xnext
+                right := x
+            }
+            var leftFloor: flt := cast.flt(floor_int(left))
+            var li: int := floor_int(left)
+            var ri: int := ceil_int(right)
+            var start: int := row * w
+            if ri <= li + 1 {
+                var middle: flt := 0.5 * (x + xnext) - leftFloor
+                add(acc, start + li, limit, d - d * middle)
+                add(acc, start + li + 1, limit, d * middle)
+            }
+            else {
+                var s: flt := 1.0 / (right - left)
+                var lf: flt := left - leftFloor
+                var a0: flt := 0.5 * s * (1.0 - lf) * (1.0 - lf)
+                var rf: flt := right - cast.flt(ri) + 1.0
+                var am: flt := 0.5 * s * rf * rf
+                add(acc, start + li, limit, d * a0)
+                if ri = li + 2 { add(acc, start + li + 1, limit, d * (1.0 - a0 - am)) }
+                else {
+                    var a1: flt := s * (1.5 - lf)
+                    add(acc, start + li + 1, limit, d * (a1 - a0))
+                    var xi: int := li + 2
+                    while xi < ri - 1 {
+                        add(acc, start + xi, limit, d * s)
+                        xi := xi + 1
+                    }
+                    var a2: flt := a1 + cast.flt(ri - li - 3) * s
+                    add(acc, start + ri - 1, limit, d * (1.0 - a2 - am))
+                }
+                add(acc, start + ri, limit, d * am)
+            }
+            x := xnext
+            row := row + 1
+        }
+    end
+
+    fn curve(acc: *[16777216]flt, w: int, h: int, x0: flt, y0: flt, cx: flt, cy: flt, x1: flt, y1: flt)
+    begin
+        var devx: flt := x0 - 2.0 * cx + x1
+        var devy: flt := y0 - 2.0 * cy + y1
+        var dev: flt := devx * devx + devy * devy
+        if dev < 0.333 {
+            line(acc, w, h, x0, y0, x1, y1)
+            return
+        }
+        var n: int := 1 + floor_int(math.sqrt(math.sqrt(3.0 * dev)))
+        var px: flt := x0
+        var py: flt := y0
+        var i: int := 1
+        while i <= n {
+            var t: flt := cast.flt(i) / cast.flt(n)
+            var u: flt := 1.0 - t
+            var qx: flt := u * u * x0 + 2.0 * u * t * cx + t * t * x1
+            var qy: flt := u * u * y0 + 2.0 * u * t * cy + t * t * y1
+            line(acc, w, h, px, py, qx, qy)
+            px := qx
+            py := qy
+            i := i + 1
+        }
+    end
+
+    fn rasterize(f: *truetype.Font, glyph: int, px: int): *truetype.Glyph
+    begin
+        var out: *truetype.Glyph := alloc(sizeof(truetype.Glyph))
+        var scale: flt := cast.flt(px) / cast.flt(f.units)
+        out.advance := cast.flt(advance_units(f, glyph)) * scale
+        out.width := 0
+        out.height := 0
+        var g: int := glyph_offset(f, glyph)
+        if g < 0 { return out }
+        var p: *truetype.Points := alloc(sizeof(truetype.Points))
+        p.x := alloc(65536 * 8)
+        p.y := alloc(65536 * 8)
+        p.on := alloc(65536 * 8)
+        p.ends := alloc(4096 * 8)
+        outline(f, glyph, p, 0)
+        if p.count = 0 {
+            free(p.x)
+            free(p.y)
+            free(p.on)
+            free(p.ends)
+            free(p)
+            return out
+        }
+        var minX: flt := (*p.x)[0]
+        var maxX: flt := minX
+        var minY: flt := (*p.y)[0]
+        var maxY: flt := minY
+        var k: int := 1
+        while k < p.count {
+            if (*p.x)[k] < minX { minX := (*p.x)[k] }
+            if (*p.x)[k] > maxX { maxX := (*p.x)[k] }
+            if (*p.y)[k] < minY { minY := (*p.y)[k] }
+            if (*p.y)[k] > maxY { maxY := (*p.y)[k] }
+            k := k + 1
+        }
+        var left: int := floor_int(minX * scale)
+        var top: int := floor_int(0.0 - maxY * scale)
+        var w: int := ceil_int(maxX * scale) - left + 2
+        var h: int := ceil_int(0.0 - minY * scale) - top + 1
+        out.left := left
+        out.top := top
+        out.width := w
+        out.height := h
+        var acc: *[16777216]flt := alloc((w * h + 4) * 8)
+        var ox: flt := cast.flt(left)
+        var oy: flt := cast.flt(top)
+        var contour: int := 0
+        var begin_at: int := 0
+        while contour < p.contours {
+            var end_at: int := (*p.ends)[contour]
+            var n: int := end_at - begin_at + 1
+            if n >= 2 {
+                // start on an on-curve point (or the midpoint of two off-curve points)
+                var sx: flt := 0.0
+                var sy: flt := 0.0
+                var first: int := 0
+                if (*p.on)[begin_at] = 1 {
+                    sx := (*p.x)[begin_at]
+                    sy := (*p.y)[begin_at]
+                    first := 1
+                }
+                else {
+                    if (*p.on)[end_at] = 1 {
+                        sx := (*p.x)[end_at]
+                        sy := (*p.y)[end_at]
+                    }
+                    else {
+                        sx := ((*p.x)[begin_at] + (*p.x)[end_at]) * 0.5
+                        sy := ((*p.y)[begin_at] + (*p.y)[end_at]) * 0.5
+                    }
+                }
+                var penX: flt := sx
+                var penY: flt := sy
+                var hasControl: int := 0
+                var cx: flt := 0.0
+                var cy: flt := 0.0
+                var step: int := first
+                while step <= n {
+                    var index: int := begin_at + step % n
+                    var qx: flt := (*p.x)[index]
+                    var qy: flt := (*p.y)[index]
+                    var onCurve: int := (*p.on)[index]
+                    if step = n {
+                        qx := sx
+                        qy := sy
+                        onCurve := 1
+                    }
+                    if onCurve = 1 {
+                        if hasControl = 1 { curve(acc, w, h, penX * scale - ox, 0.0 - penY * scale - oy, cx * scale - ox, 0.0 - cy * scale - oy, qx * scale - ox, 0.0 - qy * scale - oy) }
+                        else { line(acc, w, h, penX * scale - ox, 0.0 - penY * scale - oy, qx * scale - ox, 0.0 - qy * scale - oy) }
+                        penX := qx
+                        penY := qy
+                        hasControl := 0
+                    }
+                    else {
+                        if hasControl = 1 {
+                            var mx: flt := (cx + qx) * 0.5
+                            var my: flt := (cy + qy) * 0.5
+                            curve(acc, w, h, penX * scale - ox, 0.0 - penY * scale - oy, cx * scale - ox, 0.0 - cy * scale - oy, mx * scale - ox, 0.0 - my * scale - oy)
+                            penX := mx
+                            penY := my
+                        }
+                        cx := qx
+                        cy := qy
+                        hasControl := 1
+                    }
+                    step := step + 1
+                }
+            }
+            begin_at := end_at + 1
+            contour := contour + 1
+        }
+        out.alpha := alloc(w * h * 8 + 8)
+        var sum: flt := 0.0
+        var i: int := 0
+        while i < w * h {
+            sum := sum + (*acc)[i]
+            var cover: flt := sum
+            if cover < 0.0 { cover := 0.0 - cover }
+            if cover > 1.0 { cover := 1.0 }
+            (*out.alpha)[i] := cast.int(cover * 255.0 + 0.5)
+            i := i + 1
+        }
+        free(acc)
+        free(p.x)
+        free(p.y)
+        free(p.on)
+        free(p.ends)
+        free(p)
+        return out
+    end
+
+    // The rasterized glyph for a character at a pixel size (cached).
+    fn glyph(f: *truetype.Font, code: int, px: int): *truetype.Glyph
+    begin
+        var index: int := glyph_index(f, code)
+        var key: int := index * 4096 + px + 1
+        var slot: int := (index * 31 + px * 7) % 4096
+        if (*f.cache_keys)[slot] = key { return (*f.cache_glyphs)[slot] }
+        var made: *truetype.Glyph := rasterize(f, index, px)
+        var old: *truetype.Glyph := (*f.cache_glyphs)[slot]
+        if @old != 0 {
+            if old.width > 0 { free(old.alpha) }
+            free(old)
+        }
+        (*f.cache_keys)[slot] := key
+        (*f.cache_glyphs)[slot] := made
+        return made
+    end
+
+    // ---- text ----
+
+    // Decodes the UTF-8 character at byte i; out[0] = code point, out[1] = byte length.
+    fn decode(text: string, i: int, out: *[2]int)
+    begin
+        var c: int := str.char(text, i)
+        var size: int := str.length(text)
+        (*out)[0] := c
+        (*out)[1] := 1
+        if c < 128 { return }
+        var count: int := 0
+        var value: int := 0
+        if c >= 240 {
+            count := 3
+            value := c & 7
+        }
+        else {
+            if c >= 224 {
+                count := 2
+                value := c & 15
+            }
+            else {
+                if c >= 192 {
+                    count := 1
+                    value := c & 31
+                }
+                else { return }
+            }
+        }
+        if i + count >= size { return }
+        var k: int := 1
+        while k <= count {
+            var next: int := str.char(text, i + k)
+            if (next & 192) != 128 { return }
+            value := value * 64 + (next & 63)
+            k := k + 1
+        }
+        (*out)[0] := value
+        (*out)[1] := count + 1
+    end
+
+    // Draws text with its baseline at y, starting at x; returns the x after the last character.
+    fn draw(c: *canvas.Canvas, f: *truetype.Font, x: int, y: int, text: string, px: int, color: int): int
+    begin
+        if @f = 0 { return x }
+        var pen: flt := cast.flt(x)
+        var cell: *[2]int := alloc(16)
+        var i: int := 0
+        while i < str.length(text) {
+            decode(text, i, cell)
+            i := i + (*cell)[1]
+            var g: *truetype.Glyph := glyph(f, (*cell)[0], px)
+            var gx: int := floor_int(pen + 0.5) + g.left
+            var gy: int := y + g.top
+            var row: int := 0
+            while row < g.height {
+                var col: int := 0
+                var line_at: int := row * g.width
+                while col < g.width {
+                    var a: int := (*g.alpha)[line_at + col]
+                    if a > 0 {
+                        if a >= 255 { canvas.set(c, gx + col, gy + row, color) }
+                        else { canvas.blend(c, gx + col, gy + row, color, a) }
+                    }
+                    col := col + 1
+                }
+                row := row + 1
+            }
+            pen := pen + g.advance
+        }
+        free(cell)
+        return floor_int(pen + 0.5)
+    end
+
+    // The advance width of text in pixels.
+    fn width(f: *truetype.Font, text: string, px: int): int
+    begin
+        if @f = 0 { return 0 }
+        var pen: flt := 0.0
+        var scale: flt := cast.flt(px) / cast.flt(f.units)
+        var cell: *[2]int := alloc(16)
+        var i: int := 0
+        while i < str.length(text) {
+            decode(text, i, cell)
+            i := i + (*cell)[1]
+            pen := pen + cast.flt(advance_units(f, glyph_index(f, (*cell)[0]))) * scale
+        }
+        free(cell)
+        return floor_int(pen + 0.5)
+    end
+
+    fn ascent(f: *truetype.Font, px: int): int
+    begin
+        return ceil_int(cast.flt(f.ascender * px) / cast.flt(f.units))
+    end
+
+    fn descent(f: *truetype.Font, px: int): int
+    begin
+        return ceil_int(cast.flt(0 - f.descender * px) / cast.flt(f.units))
+    end
+
+    // Distance between two baselines.
+    fn line_height(f: *truetype.Font, px: int): int
+    begin
+        return ceil_int(cast.flt((f.ascender - f.descender + f.line_gap) * px) / cast.flt(f.units))
+    end
+end

@@ -1,11 +1,11 @@
-Xe 2.2.0 for Linux x86-64
+Xe 2.3.0 for Linux x86-64
 =========================
 
 Option 1: prebuilt release tarball (recommended)
 ------------------------------------------------
 
-    tar xzf xe-2.2.0-linux-x86_64.tar.gz
-    cd xe-2.2.0-linux-x86_64
+    tar xzf xe-2.3.0-linux-x86_64.tar.gz
+    cd xe-2.3.0-linux-x86_64
     ./install.sh
 
 Run as a normal user to install into ~/.local, or with sudo to install into
@@ -33,7 +33,7 @@ self-hosting fixpoint), installs xe and the libraries, and runs tests/run_tests.
 
 Make your own tarball:
 
-    scripts/make-release.sh        # writes dist/xe-2.2.0-linux-x86_64.tar.gz
+    scripts/make-release.sh        # writes dist/xe-2.3.0-linux-x86_64.tar.gz
 
 After changing compiler/*.xe, refresh the seed so fresh checkouts still build:
 
@@ -42,7 +42,7 @@ After changing compiler/*.xe, refresh the seed so fresh checkouts still build:
 Verify
 ------
 
-    xe --version        # prints the colored logo and "Xe 2.2.0"
+    xe --version        # prints the colored logo and "Xe 2.3.0"
     xe --build hello.xe -o hello
     ./hello
 

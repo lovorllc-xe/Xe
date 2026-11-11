@@ -1,13 +1,15 @@
-# Xe syntax reference (self-hosted compiler, 2.2.0)
+# Xe syntax reference (self-hosted compiler, 2.3.0)
 
 The source of truth is `compiler/lexer.xe`, `compiler/parser.xe`, and `compiler/checker.xe`. Generics, globals/enums and the rest of the lowered features are implemented in `compiler/generics.xe` and `compiler/desugar.xe`.
 
 ## Lexical rules
 - Identifiers use `[A-Za-z_][A-Za-z0-9_]*`. Names can be dotted (`a.b.c`) for module paths, multi-part function names (`fn vector.get.string`), and field access.
-- Numbers are decimal integers (`42`) and decimal floats (`3.14`). There is no exponent, hex, or `_` separator. Negative values use unary `-`.
+- Numbers: decimal `42`, hex `0xFF`, binary `0b1010`, `_` separators anywhere after the first digit (`1_000_000`, `0xFFFF_FFFF`), floats `3.14`, exponents `1e9`, `2.5e-3` (a `flt`). Negative values use unary `-`.
+- Character literals `'a'`, `'\n'`, `'\t'`, `'\0'`, `'\\'`, `'\''` are ints (byte values): `str.char(s, i) = 'a'`.
+- `null` is the null pointer (`p := null`, `return null`, `if p = null`, `@p = 0` still works). `sizeof(T)` is the size in bytes of a type (`alloc(sizeof(Point))`).
 - Strings use `"..."` with the escapes `\n \t \r \\ \"`. Strings are byte strings ending in a zero byte, and `str.length` counts bytes.
 - `//` starts a line comment, including at the end of a line. There are no block comments.
-- `;` is a **line continuation**: it swallows the next newline. It is never a statement terminator.
+- A newline ends a statement, except inside `( )` or `[ ]`: a call or index may span lines. `;` at the end of a line is still a **line continuation** for other expressions; it is never a statement terminator.
 - `asm { ... }` is lexed as one raw token. Its contents go straight to the assembler.
 - Operator tokens are `:= = != < <= > >= << >> + - * / % & | ^ && || ! ~ @ #`. `==` is an **error**.
 
@@ -84,6 +86,8 @@ end
 - Function addresses come from `&name` (a `*void`). Use them with `thread.start`/`threading.create_thread` (worker: `fn w(arg: *void): int`) or call them with `func.call0..5(ptr, args...)`; `closure.make(&fn, data)` pairs a function with data (`uses func`, `uses closure`). Function pointers carry int, pointer or string arguments only.
 - Recursion works.
 - Inside `module m begin ... end`, sibling functions are called unqualified. From outside the module, call them as `m.f()`.
+- A module may declare functions named like built-ins (`read`, `write`, `free`, `new`, `delete`, `alloc`, `writeln`, `readln`); inside the module the unqualified name calls the module's function, elsewhere write `m.read(...)`. A top-level function with such a name is an error.
+- Inside a module, its own types may be written unqualified or qualified (`Lib` or `cx.Lib`).
 
 ## Statements (inside begin/end)
 ```xe
@@ -110,9 +114,15 @@ else {
     ...
 }
 
-while cond { ... }        // the only loop (no `for`)
-break                     // leave the innermost while
-continue                  // jump to its condition (not allowed in a loop whose body has defer or gc.begin)
+while cond { ... }
+for i := 0 to n - 1 { ... }       // i is a new int that belongs to the loop; bounds are inclusive
+for i := 10 downto 0 step 2 { ... } // `step` (default 1) must be positive; the final value is re-evaluated each pass
+break                     // leave the innermost while/for (runs the loop body's pending defers, closes its gc regions)
+continue                  // next iteration (a for loop runs its step first; same cleanup)
+
+retry:                    // a label: a name and ':' alone on a line
+    ...
+    goto retry            // jump to a label in the same function (not allowed in functions with defer or gc.begin)
 
 switch value begin
     case 1
@@ -142,8 +152,8 @@ Precedence, from low to high:
 
 - Comparisons and logical operators return the int `1` or `0`. `true` and `false` are also `1` and `0`.
 - `int / int` is integer division, and `%` truncates the way C does (`-7 % 3 = -1`). If either operand is `flt`, the result is `flt`.
-- Assigning an int literal to a `flt` variable fails, so write `3.0`.
-- `string + string` concatenates. **`string + int` doesn't convert the int**, so use `str.number`.
+- An int value converts to `flt` when assigned or used to initialize a `flt` (`var f: flt := 3`); `cast.int`/`flt.toint` go the other way.
+- `string + string` concatenates. `string + int` is a compile error (use `str.number(n)` or `writeln("text", n)`).
 - `string = string` compares content.
 - Postfix operators: `a[i]`, slices `a[lo:hi]` (half-open; `[:hi]` and `[lo:]` are allowed and the result is a fixed array), field access `.f`, and calls `f(args)`.
 - Unary operators: `*p` dereferences, `&x` takes an address, `@p` turns a pointer into an int address, `#p` does a raw hardware read, `!` is logical not, and `~` is bitwise not.
@@ -156,7 +166,8 @@ Precedence, from low to high:
 ## Memory
 - `alloc(n)` / `new(n)` and `free(p)` / `delete(p)` manage raw memory. `aligned_alloc(size, align)` and `alloc.aligned(size, align)` return aligned blocks.
 - `mem.allocate` and `mem.release` are wrappers in std.
-- Inside a `gc.begin { } gc.end` region, allocations are freed in bulk when the region closes. Don't let those pointers escape the region. It is not a tracing GC.
+- Inside a `gc.begin { } gc.end` region, allocations are freed in bulk when the region closes. Don't let those pointers escape the region. Regions belong to the thread that opened them (Linux).
+- The conservative mark-and-sweep collector also runs while threads are alive (Linux: other threads are paused with a signal for the collection). On Windows it still waits until no worker thread is running.
 - Use `defer` for cleanup.
 
 ## Output targets

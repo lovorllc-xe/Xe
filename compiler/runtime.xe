@@ -94,7 +94,187 @@ begin
 
     fn threadAssembly(): string
     begin
-        return ".section .bss\n.align 8\n.LxeThreadLock:\n.quad 0\n.LxeThreadRecords:\n.skip 16384\n.section .text\nxe.thread.start:\n push rbp\n mov rbp, rsp\n sub rsp, 64\n lock inc qword ptr [rip+.LxeThreadsActive]\n mov qword ptr [rbp-8], rdi\n mov qword ptr [rbp-16], rsi\n mov edi, 32\n call xe.alloc\n test rax, rax\n jz .LxeThreadStartFail\n mov qword ptr [rbp-24], rax\n mov qword ptr [rax], 0\n mov qword ptr [rax+8], 0\n mov qword ptr [rax+16], 0\n mov qword ptr [rax+24], 0\n mov edi, 1048576\n call xe.alloc\n test rax, rax\n jz .LxeThreadStartFreeRecord\n mov qword ptr [rbp-32], rax\n mov rdx, qword ptr [rbp-24]\n mov qword ptr [rdx+8], rax\n lea rsi, [rax+1048576]\n and rsi, -16\n mov rax, qword ptr [rbp-8]\n mov qword ptr [rsi-24], rax\n mov rax, qword ptr [rbp-16]\n mov qword ptr [rsi-16], rax\n mov rax, qword ptr [rbp-24]\n mov qword ptr [rsi-8], rax\n lea r10, [rax+24]\n mov edi, 0x1350f00\n lea rdx, [rax+24]\n xor r8d, r8d\n mov eax, 56\n syscall\n test rax, rax\n js .LxeThreadStartCloneFail\n jz .LxeThreadChild\n mov qword ptr [rbp-40], rax\n mov rdx, qword ptr [rbp-24]\n mov qword ptr [rdx], rax\n.LxeThreadTableLock:\n cmp qword ptr [rip+.LxeThreadLock], 0\n je .LxeThreadTableTryLock\n pause\n jmp .LxeThreadTableLock\n.LxeThreadTableTryLock:\n mov eax, 1\n xchg qword ptr [rip+.LxeThreadLock], rax\n test rax, rax\n jnz .LxeThreadTableLock\n lea r8, [rip+.LxeThreadRecords]\n mov ecx, 1024\n.LxeThreadFindSlot:\n cmp qword ptr [r8], 0\n je .LxeThreadStoreSlot\n add r8, 16\n dec ecx\n jnz .LxeThreadFindSlot\n mov qword ptr [rip+.LxeThreadLock], 0\n mov rax, qword ptr [rbp-24]\n lea rdi, [rax+24]\n.LxeThreadWaitCancelled:\n mov edx, dword ptr [rdi]\n test edx, edx\n jz .LxeThreadCancelDone\n xor esi, esi\n xor r10d, r10d\n mov eax, 202\n syscall\n jmp .LxeThreadWaitCancelled\n.LxeThreadCancelDone:\n mov rdi, qword ptr [rbp-32]\n call xe.free\n mov rdi, qword ptr [rbp-24]\n call xe.free\n lock dec qword ptr [rip+.LxeThreadsActive]\n mov rax, -1\n leave\n ret\n.LxeThreadStoreSlot:\n mov rax, qword ptr [rbp-40]\n mov qword ptr [r8], rax\n mov rax, qword ptr [rbp-24]\n mov qword ptr [r8+8], rax\n mov qword ptr [rip+.LxeThreadLock], 0\n mov rax, qword ptr [rbp-40]\n leave\n ret\n.LxeThreadChild:\n mov r12, qword ptr [rsp-8]\n mov rdi, qword ptr [rsp-16]\n mov rax, qword ptr [rsp-24]\n call rax\n mov r8, r12\n mov qword ptr [r8+16], rax\n xor edi, edi\n mov eax, 60\n syscall\n ud2\n.LxeThreadStartCloneFail:\n mov rdi, qword ptr [rbp-32]\n call xe.free\n.LxeThreadStartFreeRecord:\n mov rdi, qword ptr [rbp-24]\n call xe.free\n.LxeThreadStartFail:\n lock dec qword ptr [rip+.LxeThreadsActive]\n mov rax, -1\n leave\n ret\nxe.thread.join:\n push rbp\n mov rbp, rsp\n sub rsp, 32\n mov qword ptr [rbp-8], rdi\n.LxeThreadJoinLock:\n cmp qword ptr [rip+.LxeThreadLock], 0\n je .LxeThreadJoinTryLock\n pause\n jmp .LxeThreadJoinLock\n.LxeThreadJoinTryLock:\n mov eax, 1\n xchg qword ptr [rip+.LxeThreadLock], rax\n test rax, rax\n jnz .LxeThreadJoinLock\n lea r8, [rip+.LxeThreadRecords]\n mov ecx, 1024\n.LxeThreadJoinFind:\n cmp qword ptr [r8], rdi\n je .LxeThreadJoinFound\n add r8, 16\n dec ecx\n jnz .LxeThreadJoinFind\n mov qword ptr [rip+.LxeThreadLock], 0\n mov rax, -1\n leave\n ret\n.LxeThreadJoinFound:\n mov rax, qword ptr [r8+8]\n mov qword ptr [rbp-16], rax\n mov qword ptr [r8], 0\n mov qword ptr [r8+8], 0\n mov qword ptr [rip+.LxeThreadLock], 0\n mov r8, qword ptr [rbp-16]\n lea rdi, [r8+24]\n.LxeThreadJoinWait:\n mov edx, dword ptr [rdi]\n test edx, edx\n jz .LxeThreadJoinDone\n xor esi, esi\n xor r10d, r10d\n mov eax, 202\n syscall\n jmp .LxeThreadJoinWait\n.LxeThreadJoinDone:\n mov rax, qword ptr [r8+16]\n mov qword ptr [rbp-24], rax\n mov rdi, qword ptr [r8+8]\n call xe.free\n mov rdi, qword ptr [rbp-16]\n call xe.free\n lock dec qword ptr [rip+.LxeThreadsActive]\n mov rax, qword ptr [rbp-24]\n leave\n ret\n"
+        return ".section .bss
+.align 8
+.LxeThreadLock:
+.quad 0
+.LxeThreadRecords:
+.skip 16384
+.section .text
+.LxeThreadLockTake:
+ mov eax, 1
+ xchg qword ptr [rip+.LxeThreadLock], rax
+ test rax, rax
+ jz .LxeThreadLockTaken
+ pause
+ jmp .LxeThreadLockTake
+.LxeThreadLockTaken:
+ ret
+xe.thread.start:
+ push rbp
+ mov rbp, rsp
+ sub rsp, 64
+ mov qword ptr [rbp-8], rdi
+ mov qword ptr [rbp-16], rsi
+ cmp qword ptr [rip+.LxeGcSignalReady], 0
+ jne .LxeThreadSignalReady
+ call .LxeGcInstallSignal
+.LxeThreadSignalReady:
+ lock inc qword ptr [rip+.LxeThreadsActive]
+ mov edi, 4160
+ call .LxeAllocGlobal
+ test rax, rax
+ jz .LxeThreadStartFail
+ mov qword ptr [rbp-24], rax
+ mov rdi, rax
+ mov ecx, 520
+ xor eax, eax
+ rep stosq
+ mov edi, 2097152
+ call .LxeAllocGlobal
+ test rax, rax
+ jz .LxeThreadStartFreeRecord
+ mov rdx, qword ptr [rbp-24]
+ mov qword ptr [rdx+8], rax
+ lea rcx, [rax+1048575]
+ and rcx, -1048576
+ mov qword ptr [rcx], rdx
+ mov rax, 6369527427473155172
+ mov qword ptr [rcx+8], rax
+ lea rsi, [rcx+1048576]
+ mov rax, qword ptr [rbp-8]
+ mov qword ptr [rsi-24], rax
+ mov rax, qword ptr [rbp-16]
+ mov qword ptr [rsi-16], rax
+ mov qword ptr [rsi-8], rdx
+ mov qword ptr [rbp-32], rsi
+ call .LxeThreadLockTake
+ lea r8, [rip+.LxeThreadRecords]
+ mov ecx, 1024
+.LxeThreadFindSlot:
+ cmp qword ptr [r8+8], 0
+ je .LxeThreadStoreSlot
+ add r8, 16
+ dec ecx
+ jnz .LxeThreadFindSlot
+ mov qword ptr [rip+.LxeThreadLock], 0
+ jmp .LxeThreadStartFreeStack
+.LxeThreadStoreSlot:
+ mov qword ptr [r8], 0
+ mov rdx, qword ptr [rbp-24]
+ mov qword ptr [r8+8], rdx
+ mov qword ptr [rbp-40], r8
+ mov rsi, qword ptr [rbp-32]
+ lea rdx, [rdx+24]
+ mov r10, rdx
+ mov edi, 0x1350f00
+ xor r8d, r8d
+ mov eax, 56
+ syscall
+ test rax, rax
+ js .LxeThreadStartCloneFail
+ jz .LxeThreadChild
+ mov r8, qword ptr [rbp-40]
+ mov qword ptr [r8], rax
+ mov rdx, qword ptr [rbp-24]
+ mov qword ptr [rdx], rax
+ mov qword ptr [rip+.LxeThreadLock], 0
+ leave
+ ret
+.LxeThreadChild:
+ mov r12, qword ptr [rsp-8]
+ mov rdi, qword ptr [rsp-16]
+ mov rax, qword ptr [rsp-24]
+ call rax
+ mov qword ptr [r12+16], rax
+ push 536870912
+ xor edi, edi
+ mov rsi, rsp
+ xor edx, edx
+ mov r10d, 8
+ mov eax, 14
+ syscall
+ mov qword ptr [r12+32], 1
+ xor edi, edi
+ mov eax, 60
+ syscall
+ ud2
+.LxeThreadStartCloneFail:
+ mov r8, qword ptr [rbp-40]
+ mov qword ptr [r8+8], 0
+ mov qword ptr [rip+.LxeThreadLock], 0
+.LxeThreadStartFreeStack:
+ mov rdx, qword ptr [rbp-24]
+ mov rdi, qword ptr [rdx+8]
+ call xe.free
+.LxeThreadStartFreeRecord:
+ mov rdi, qword ptr [rbp-24]
+ call xe.free
+.LxeThreadStartFail:
+ lock dec qword ptr [rip+.LxeThreadsActive]
+ mov rax, -1
+ leave
+ ret
+xe.thread.join:
+ push rbp
+ mov rbp, rsp
+ sub rsp, 32
+ mov qword ptr [rbp-8], rdi
+ test rdi, rdi
+ jle .LxeThreadJoinMissing
+ call .LxeThreadLockTake
+ mov rdi, qword ptr [rbp-8]
+ lea r8, [rip+.LxeThreadRecords]
+ mov ecx, 1024
+.LxeThreadJoinFind:
+ cmp qword ptr [r8], rdi
+ jne .LxeThreadJoinNext
+ cmp qword ptr [r8+8], 0
+ jne .LxeThreadJoinFound
+.LxeThreadJoinNext:
+ add r8, 16
+ dec ecx
+ jnz .LxeThreadJoinFind
+ mov qword ptr [rip+.LxeThreadLock], 0
+.LxeThreadJoinMissing:
+ mov rax, -1
+ leave
+ ret
+.LxeThreadJoinFound:
+ mov qword ptr [rbp-24], r8
+ mov rax, qword ptr [r8+8]
+ mov qword ptr [rbp-16], rax
+ mov qword ptr [r8], -1
+ mov qword ptr [rip+.LxeThreadLock], 0
+ mov r8, qword ptr [rbp-16]
+ lea rdi, [r8+24]
+.LxeThreadJoinWait:
+ mov edx, dword ptr [rdi]
+ test edx, edx
+ jz .LxeThreadJoinDone
+ xor esi, esi
+ xor r10d, r10d
+ mov eax, 202
+ syscall
+ jmp .LxeThreadJoinWait
+.LxeThreadJoinDone:
+ call .LxeThreadLockTake
+ mov r8, qword ptr [rbp-24]
+ mov qword ptr [r8], 0
+ mov qword ptr [r8+8], 0
+ mov qword ptr [rip+.LxeThreadLock], 0
+ mov r8, qword ptr [rbp-16]
+ mov rax, qword ptr [r8+16]
+ mov qword ptr [rbp-32], rax
+ mov rdi, qword ptr [r8+8]
+ call xe.free
+ mov rdi, qword ptr [rbp-16]
+ call xe.free
+ lock dec qword ptr [rip+.LxeThreadsActive]
+ mov rax, qword ptr [rbp-32]
+ leave
+ ret
+"
     end
 
     fn fileReadAssembly(): string

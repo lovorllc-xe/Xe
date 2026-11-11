@@ -15,7 +15,7 @@ begin
         var word: string := str.slice(source, first[1], first[2])
         var mode: int := 0
         if word = "gc" || word = "switch" { mode := 1 }
-        if word = "if" || word = "while" { mode := 2 }
+        if word = "if" || word = "while" || word = "for" { mode := 2 }
         if first[0] = token.assemblyKind() { mode := 3 }
         var position: int := first[2]
         var row: int := first[3]
@@ -31,9 +31,10 @@ begin
         if word = "defer" { kind := ast.deferKind() }
         if word = "gc" { kind := ast.gcKind() }
         if word = "if" { kind := ast.branchKind() }
-        if word = "while" { kind := ast.loopKind() }
+        if word = "while" || word = "for" { kind := ast.loopKind() }
         if word = "switch" { kind := ast.switchKind() }
         if word = "break" && first[0] = token.nameKind() { kind := ast.breakKind() }
+        if word = "goto" && first[0] = token.nameKind() { kind := ast.gotoKind() }
         if word = "continue" && first[0] = token.nameKind() { kind := ast.continueKind() }
         if first[0] = token.assemblyKind() {
             kind := ast.assemblyKind()
@@ -92,7 +93,9 @@ begin
                         }
                     }
                     else {
-                        if item[0] = 10 { done := 1 }
+                        if item[0] = 10 {
+                            if round <= 0 && square <= 0 { done := 1 }
+                        }
                         else {
                             if item[0] = 40 { round := round + 1 }
                             if item[0] = 41 { round := round - 1 }
@@ -100,7 +103,7 @@ begin
                             if item[0] = 93 { square := square - 1 }
                             if item[0] = 123 { curly := curly + 1 }
                             if item[0] = 125 { curly := curly - 1 }
-                            if item[0] = token.assignKind() && kind != ast.variableKind() { kind := ast.assignKind() }
+                            if item[0] = token.assignKind() && kind != ast.variableKind() && kind != ast.loopKind() { kind := ast.assignKind() }
                         }
                     }
                 }
@@ -143,10 +146,18 @@ begin
         return 0
     end
 
+    // The next token, skipping newlines that lie inside the statement (a call or index split over lines).
+    fn scanWithin(source: string, position: int, line: int, limit: int): [4]int
+    begin
+        var item: [4]int := lexer.scan(source, position, line)
+        while item[0] = 10 && item[1] < limit { item := lexer.scan(source, item[2], item[3]) }
+        return item
+    end
+
     fn expressionPrimary(source: string, pool: *[12582912]int, count: *int, position: *int, line: *int, limit: int, owner: int): int
     begin
         if *position >= limit { return diag.noteExpression(pool, *position) }
-        var item: [4]int := lexer.scan(source, *position, *line)
+        var item: [4]int := scanWithin(source, *position, *line, limit)
         if item[0] = token.endKind() || item[0] = 10 || item[0] = token.errorKind() { return diag.noteExpression(pool, item[1]) }
         var first: int := item[1]
         var result: int := -1
@@ -163,7 +174,7 @@ begin
             *line := item[3]
             var nested: int := expression(source, pool, count, position, line, limit, owner, 1)
             if nested < 0 { return -1 }
-            var closing: [4]int := lexer.scan(source, *position, *line)
+            var closing: [4]int := scanWithin(source, *position, *line, limit)
             if closing[0] != 41 { return diag.noteExpression(pool, closing[1]) }
             var nestedKind: int := ast.read(pool, nested, 0)
             if nestedKind = ast.binaryKind() || nestedKind = ast.unaryKind() {
@@ -183,9 +194,9 @@ begin
         else {
             if item[0] = token.nameKind() {
                 var finish: int := item[2]
-                var next: [4]int := lexer.scan(source, finish, item[3])
+                var next: [4]int := scanWithin(source, finish, item[3], limit)
                 while next[0] = 46 {
-                    var part: [4]int := lexer.scan(source, next[2], next[3])
+                    var part: [4]int := scanWithin(source, next[2], next[3], limit)
                     if part[0] != token.nameKind() { return diag.noteExpression(pool, part[1]) }
                     finish := part[2]
                     next := lexer.scan(source, finish, part[3])
@@ -199,18 +210,18 @@ begin
                     *line := next[3]
                     var firstArgument: int := -1
                     var lastArgument: int := -1
-                    var closing: [4]int := lexer.scan(source, *position, *line)
+                    var closing: [4]int := scanWithin(source, *position, *line, limit)
                     while closing[0] != 41 {
                         var argument: int := expression(source, pool, count, position, line, limit, owner, 1)
                         if argument < 0 { return -1 }
                         if firstArgument < 0 { firstArgument := argument }
                         else { ast.write(pool, lastArgument, 5, argument) }
                         lastArgument := argument
-                        closing := lexer.scan(source, *position, *line)
+                        closing := scanWithin(source, *position, *line, limit)
                         if closing[0] = 44 {
                             *position := closing[2]
                             *line := closing[3]
-                            closing := lexer.scan(source, *position, *line)
+                            closing := scanWithin(source, *position, *line, limit)
                         }
                         else { if closing[0] != 41 { return diag.noteExpression(pool, closing[1]) } }
                     }
@@ -224,9 +235,9 @@ begin
         if result < 0 { return diag.noteExpression(pool, item[1]) }
         var postfix: int := 1
         while postfix = 1 && *position < limit {
-            var opening: [4]int := lexer.scan(source, *position, *line)
+            var opening: [4]int := scanWithin(source, *position, *line, limit)
             if opening[0] = 46 {
-                var field: [4]int := lexer.scan(source, opening[2], opening[3])
+                var field: [4]int := scanWithin(source, opening[2], opening[3], limit)
                 if field[0] != token.nameKind() { return diag.noteExpression(pool, field[1]) }
                 var member: [12]int := ast.make(ast.memberKind(), ast.read(pool, result, 1), field[2], result, -1, -1, -1, field[1], field[2], owner, 0, 0)
                 result := ast.store(pool, count, member)
@@ -234,41 +245,41 @@ begin
                 *line := field[3]
             }
             else {
-            if opening[0] = 91 {
-                *position := opening[2]
-                *line := opening[3]
-                var separator: [4]int := lexer.scan(source, *position, *line)
-                var first: int := -1
-                if separator[0] != 58 {
-                    first := expression(source, pool, count, position, line, limit, owner, 1)
-                    if first < 0 { return -1 }
-                    separator := lexer.scan(source, *position, *line)
-                }
-                if separator[0] = 58 {
-                    *position := separator[2]
-                    *line := separator[3]
-                    var finish: int := -1
-                    var next: [4]int := lexer.scan(source, *position, *line)
-                    if next[0] != 93 {
-                        finish := expression(source, pool, count, position, line, limit, owner, 1)
-                        if finish < 0 { return -1 }
-                        next := lexer.scan(source, *position, *line)
+                if opening[0] = 91 {
+                    *position := opening[2]
+                    *line := opening[3]
+                    var separator: [4]int := scanWithin(source, *position, *line, limit)
+                    var first: int := -1
+                    if separator[0] != 58 {
+                        first := expression(source, pool, count, position, line, limit, owner, 1)
+                        if first < 0 { return -1 }
+                        separator := scanWithin(source, *position, *line, limit)
                     }
-                    if next[0] != 93 { return diag.noteExpression(pool, next[1]) }
-                    var sliced: [12]int := ast.make(ast.sliceKind(), ast.read(pool, result, 1), next[2], result, first, -1, finish, 0, 0, owner, 0, 0)
-                    result := ast.store(pool, count, sliced)
-                    *position := next[2]
-                    *line := next[3]
+                    if separator[0] = 58 {
+                        *position := separator[2]
+                        *line := separator[3]
+                        var finish: int := -1
+                        var next: [4]int := scanWithin(source, *position, *line, limit)
+                        if next[0] != 93 {
+                            finish := expression(source, pool, count, position, line, limit, owner, 1)
+                            if finish < 0 { return -1 }
+                            next := scanWithin(source, *position, *line, limit)
+                        }
+                        if next[0] != 93 { return diag.noteExpression(pool, next[1]) }
+                        var sliced: [12]int := ast.make(ast.sliceKind(), ast.read(pool, result, 1), next[2], result, first, -1, finish, 0, 0, owner, 0, 0)
+                        result := ast.store(pool, count, sliced)
+                        *position := next[2]
+                        *line := next[3]
+                    }
+                    else {
+                        if first < 0 || separator[0] != 93 { return diag.noteExpression(pool, separator[1]) }
+                        var indexed: [12]int := ast.make(ast.indexKind(), ast.read(pool, result, 1), separator[2], result, first, -1, -1, 0, 0, owner, 0, 0)
+                        result := ast.store(pool, count, indexed)
+                        *position := separator[2]
+                        *line := separator[3]
+                    }
                 }
-                else {
-                    if first < 0 || separator[0] != 93 { return diag.noteExpression(pool, separator[1]) }
-                    var indexed: [12]int := ast.make(ast.indexKind(), ast.read(pool, result, 1), separator[2], result, first, -1, -1, 0, 0, owner, 0, 0)
-                    result := ast.store(pool, count, indexed)
-                    *position := separator[2]
-                    *line := separator[3]
-                }
-            }
-            else { postfix := 0 }
+                else { postfix := 0 }
             }
         }
         return result
@@ -280,7 +291,7 @@ begin
         if left < 0 { return -1 }
         var finished: int := 0
         while *position < limit && finished = 0 {
-            var operation: [4]int := lexer.scan(source, *position, *line)
+            var operation: [4]int := scanWithin(source, *position, *line, limit)
             var priority: int := expressionPrecedence(operation[0])
             if priority < minimum { finished := 1 }
             else {
@@ -397,6 +408,91 @@ begin
         return id
     end
 
+    // for var NAME: TYPE := A to|downto B step S { body }   (desugar.forLoops adds `var`, the type and `step 1`)
+    // The loop node holds the declaration (field 4), the condition NAME <= B or NAME >= B (field 3), the body
+    // (field 6) and the step assignment NAME := NAME + S or NAME - S (field 7); continue jumps to the step.
+    fn forLoop(source: string, pool: *[12582912]int, count: *int, owner: int, id: int, item: [4]int, limit: int): int
+    begin
+        var keyword: [4]int := lexer.scan(source, item[1], item[3])
+        var bounds: [5]int := curlyBounds(source, keyword[2], limit, keyword[3])
+        if bounds[2] = 0 { return statementFailure(source, pool, keyword[2], "expected '{' to open the body of 'for'") }
+        var header: int := bounds[0] - 1
+        var varWord: [4]int := significant(source, keyword[2], keyword[3])
+        var name: [4]int := significant(source, varWord[2], varWord[3])
+        var colon: [4]int := significant(source, name[2], name[3])
+        if str.slice(source, varWord[1], varWord[2]) != "var" || name[0] != token.nameKind() || colon[0] != 58 { return statementFailure(source, pool, keyword[2], "expected 'for name := start to finish { ... }'") }
+        // the ':=' after the type, then 'to'/'downto' and 'step' at bracket depth 0
+        var assign: [4]int := significant(source, colon[2], colon[3])
+        while assign[0] != token.assignKind() && assign[0] != token.endKind() && assign[1] < header { assign := significant(source, assign[2], assign[3]) }
+        if assign[0] != token.assignKind() || assign[1] >= header { return statementFailure(source, pool, name[2], "expected ':=' and a start value after the loop variable") }
+        var walker: [4]int := significant(source, assign[2], assign[3])
+        var depth: int := 0
+        var direction: [4]int := walker
+        var stepWord: [4]int := walker
+        var foundDirection: int := 0
+        var foundStep: int := 0
+        while walker[1] < header && walker[0] != token.endKind() {
+            if walker[0] = 40 || walker[0] = 91 { depth := depth + 1 }
+            if walker[0] = 41 || walker[0] = 93 { depth := depth - 1 }
+            if walker[0] = token.nameKind() && depth = 0 {
+                var word: string := str.slice(source, walker[1], walker[2])
+                if foundDirection = 0 && (word = "to" || word = "downto") {
+                    direction := walker
+                    foundDirection := 1
+                }
+                if foundDirection = 1 && word = "step" {
+                    stepWord := walker
+                    foundStep := 1
+                }
+            }
+            walker := significant(source, walker[2], walker[3])
+        }
+        if foundDirection = 0 { return statementFailure(source, pool, assign[2], "expected 'to' or 'downto' in the for loop (for i := 0 to n - 1 { ... })") }
+        if foundStep = 0 { return statementFailure(source, pool, direction[2], "expected 'step' in the for loop") }
+        var declaration: [12]int := ast.make(ast.variableKind(), varWord[1], direction[1], -1, -1, -1, -1, 0, 0, owner, 0, 0)
+        var declarationId: int := ast.store(pool, count, declaration)
+        if declarationId < 0 { return statementFailure(source, pool, item[1], "program is too large: the compiler node pool is full") }
+        ast.write(pool, declarationId, 3, name[1])
+        ast.write(pool, declarationId, 4, name[2])
+        ast.write(pool, declarationId, 7, colon[2])
+        ast.write(pool, declarationId, 8, assign[1])
+        var position: int := assign[2]
+        var line: int := assign[3]
+        var start: int := expression(source, pool, count, &position, &line, direction[1], owner, 1)
+        if start < 0 { return statementFailure(source, pool, diag.expressionOffset(pool, assign[2]), "expected the start value of the for loop") }
+        ast.write(pool, declarationId, 6, start)
+        position := direction[2]
+        line := direction[3]
+        var finish: int := expression(source, pool, count, &position, &line, stepWord[1], owner, 1)
+        if finish < 0 { return statementFailure(source, pool, diag.expressionOffset(pool, direction[2]), "expected the final value after " + diag.quoted(source, direction[1], direction[2])) }
+        position := stepWord[2]
+        line := stepWord[3]
+        var amount: int := expression(source, pool, count, &position, &line, header, owner, 1)
+        if amount < 0 { return statementFailure(source, pool, diag.expressionOffset(pool, stepWord[2]), "expected the step value after 'step'") }
+        var down: int := 0
+        if str.slice(source, direction[1], direction[2]) = "downto" { down := 1 }
+        var compare: int := token.lessEqualKind()
+        var arithmetic: int := 43
+        if down = 1 {
+            compare := token.greaterEqualKind()
+            arithmetic := 45
+        }
+        var conditionName: int := ast.store(pool, count, ast.make(ast.nameKind(), name[1], name[2], -1, -1, -1, -1, 0, 0, owner, 0, 0))
+        var condition: int := ast.store(pool, count, ast.make(ast.binaryKind(), name[1], ast.read(pool, finish, 2), conditionName, finish, -1, -1, 0, 0, owner, compare, 0))
+        var stepName: int := ast.store(pool, count, ast.make(ast.nameKind(), name[1], name[2], -1, -1, -1, -1, 0, 0, owner, 0, 0))
+        var stepTarget: int := ast.store(pool, count, ast.make(ast.nameKind(), name[1], name[2], -1, -1, -1, -1, 0, 0, owner, 0, 0))
+        var stepValue: int := ast.store(pool, count, ast.make(ast.binaryKind(), name[1], ast.read(pool, amount, 2), stepName, amount, -1, -1, 0, 0, owner, arithmetic, 0))
+        var step: int := ast.store(pool, count, ast.make(ast.assignKind(), stepWord[1], header, stepTarget, stepValue, -1, -1, 0, 0, owner, 0, 0))
+        if conditionName < 0 || condition < 0 || stepName < 0 || stepTarget < 0 || stepValue < 0 || step < 0 { return statementFailure(source, pool, item[1], "program is too large: the compiler node pool is full") }
+        var body: int := blockBody(source, pool, count, owner, bounds[0], bounds[1], bounds[3])
+        if body < 0 { return -1 }
+        ast.write(pool, id, 3, condition)
+        ast.write(pool, id, 4, declarationId)
+        ast.write(pool, id, 6, body)
+        ast.write(pool, id, 7, step)
+        return 0
+    end
+
     fn statementList(source: string, pool: *[12582912]int, count: *int, owner: int, start: int, finish: int, line: int): int
     begin
         var first: int := -1
@@ -410,16 +506,39 @@ begin
                 var leading: string := str.slice(source, item[1], item[2])
                 var afterLeading: [4]int := lexer.scan(source, item[2], item[3])
                 if afterLeading[0] = token.nameKind() {
-                    if leading = "for" || leading = "foreach" { return statementFailure(source, pool, item[1], "Xe has no '" + leading + "' loop; use 'while condition { ... }'") }
+                    if leading = "foreach" { return statementFailure(source, pool, item[1], "Xe has no 'foreach' loop; use 'for i := 0 to n - 1 { ... }' or 'while condition { ... }'") }
                     if leading = "let" || leading = "auto" { return statementFailure(source, pool, item[1], "declare variables with 'var name: type := value'") }
                 }
                 if leading = "else" && afterLeading[0] != token.assignKind() { return statementFailure(source, pool, item[1], "'else' must follow the closing '}' of an if block") }
+                var isLabel: int := 0
+                if item[0] = token.nameKind() && afterLeading[0] = 58 && leading != "case" && leading != "default" {
+                    var afterColon: [4]int := lexer.scan(source, afterLeading[2], afterLeading[3])
+                    if afterColon[0] = 10 || afterColon[0] = token.endKind() || afterColon[1] >= finish { isLabel := 1 }
+                }
                 var span: [4]int := statementSpan(source, item[1], item[3], finish)
+                if isLabel = 1 {
+                    span[0] := afterLeading[2]
+                    span[1] := afterLeading[3]
+                    span[2] := ast.labelKind()
+                    span[3] := 1
+                }
                 if span[3] = 0 || span[0] <= item[1] { return statementFailure(source, pool, item[1], "could not parse this statement") }
                 var node: [12]int := ast.make(span[2], item[1], span[0], -1, -1, -1, -1, 0, 0, owner, 0, 0)
                 var id: int := ast.store(pool, count, node)
                 if id < 0 { return statementFailure(source, pool, item[1], "program is too large: the compiler node pool is full") }
                 diag.clearExpression(pool)
+                if span[2] = ast.labelKind() {
+                    ast.write(pool, id, 3, item[1])
+                    ast.write(pool, id, 4, item[2])
+                }
+                if span[2] = ast.gotoKind() {
+                    var target: [4]int := lexer.scan(source, item[2], item[3])
+                    if target[0] != token.nameKind() { return statementFailure(source, pool, target[1], "expected a label name after 'goto'") }
+                    var afterTarget: [4]int := lexer.scan(source, target[2], target[3])
+                    if afterTarget[0] != 10 && afterTarget[0] != token.endKind() && afterTarget[1] < span[0] && afterTarget[1] < finish { return statementFailure(source, pool, afterTarget[1], "unexpected " + diag.quoted(source, afterTarget[1], afterTarget[2]) + " after the label name") }
+                    ast.write(pool, id, 3, target[1])
+                    ast.write(pool, id, 4, target[2])
+                }
                 if span[2] = ast.variableKind() {
                     var name: [4]int := significant(source, item[2], item[3])
                     var colon: [4]int := significant(source, name[2], name[3])
@@ -457,7 +576,7 @@ begin
                         if value >= 0 { ast.write(pool, id, 6, value) }
                     }
                     else {
-                        if span[2] = ast.branchKind() || span[2] = ast.loopKind() {
+                        if (span[2] = ast.branchKind() || span[2] = ast.loopKind()) && leading != "for" {
                             var keyword: [4]int := lexer.scan(source, item[1], item[3])
                             var bounds: [5]int := curlyBounds(source, keyword[2], span[0], keyword[3])
                             if bounds[2] = 0 { return statementFailure(source, pool, keyword[2], "expected '{' to open the body of " + diag.quoted(source, keyword[1], keyword[2]) + " (bodies of if and while use { })") }
@@ -549,6 +668,9 @@ begin
                             }
                         }
                     }
+                }
+                if span[2] = ast.loopKind() && leading = "for" {
+                    if forLoop(source, pool, count, owner, id, item, span[0]) < 0 { return -2 }
                 }
                 if first < 0 { first := id } else { ast.write(pool, last, 5, id) }
                 last := id

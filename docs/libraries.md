@@ -1,6 +1,6 @@
 # Xe library index
 
-174 importable libraries. Add one with `uses name` at the top of a source file.
+176 importable libraries. Add one with `uses name` at the top of a source file.
 
 ## Containers
 
@@ -227,6 +227,8 @@
 | `closure` | a function pointer bundled with the data it works on. |
 | `func` | call a function through a pointer, the same way on every platform. |
 | `result` | errors as values, and panic for errors that cannot be handled. |
+| `truetype` | anti-aliased TrueType (.ttf) text of any pixel size, drawn onto a canvas. |
 | `vkwindow` | show Vulkan rendering in a `window`, the same way on every platform. |
 | `wayland` | a pure-Xe Wayland client. It speaks the Wayland wire protocol over the compositor's Unix |
 | `wevent` | the window event record and event kinds shared by every window backend (X11, Wayland, Win32, ...). |
+| `xkbmap` | keyboard layouts - maps key codes to characters using an XKB keymap (AltGr, several layouts). |

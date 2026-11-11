@@ -186,6 +186,12 @@ begin
         return 0
     end
 
+    // Xe functions already follow the C calling convention here: the address itself is the callback.
+    fn callback(target: int): int
+    begin
+        return target
+    end
+
     fn convention(): string
     begin
         return "sysv"

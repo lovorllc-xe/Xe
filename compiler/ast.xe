@@ -89,6 +89,16 @@ begin
         return 27
     end
 
+    fn labelKind(): int
+    begin
+        return 28
+    end
+
+    fn gotoKind(): int
+    begin
+        return 29
+    end
+
     fn deferKind(): int
     begin
         return 25

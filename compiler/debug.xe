@@ -1,0 +1,369 @@
+// debug: DWARF 4 descriptions of functions, parameters, locals and record types for `xe --build -g`, so gdb can
+// print variables (`print total`, `print p->x`, `info locals`) and not only map addresses to source lines (the line
+// table comes from the .loc directives that codegen emits). Frame base is rbp; locals are at negative offsets,
+// register-allocated locals are reported in their register.
+module debug
+begin
+    type Types: record
+    begin
+        names: *[4096]string
+        count: int
+    end
+
+    fn find(t: *debug.Types, text: string): int
+    begin
+        var i: int := 0
+        while i < t.count {
+            if (*t.names)[i] = text { return i }
+            i := i + 1
+        }
+        return -1
+    end
+
+    fn normalize(text: string): string
+    begin
+        if text = "str" { return "string" }
+        if str.length(text) = 0 { return "int" }
+        return text
+    end
+
+    // The index of the DIE for a type (adding it, and the types it is made of, when missing).
+    fn need(source: string, t: *debug.Types, raw: string): int
+    begin
+        var text: string := normalize(raw)
+        var existing: int := find(t, text)
+        if existing >= 0 { return existing }
+        if t.count >= 4096 { return 0 }
+        var index: int := t.count
+        (*t.names)[index] := text
+        t.count := index + 1
+        var first: int := str.char(text, 0)
+        if first = 42 {
+            if text != "*void" { need(source, t, str.slice(text, 1, str.length(text))) }
+            return index
+        }
+        if first = 91 {
+            var closing: int := str.find(text, "]")
+            if closing > 0 { need(source, t, str.slice(text, closing + 1, str.length(text))) }
+            return index
+        }
+        if text = "int" || text = "flt" || text = "string" || text = "char" || text = "void" { return index }
+        if codegen.recordWordCount(source, text) > 0 {
+            fieldTypes(source, t, text)
+            return index
+        }
+        var target: string := codegen.resolveAliasType(source, text, 0, "")
+        if str.length(target) > 0 && target != text { need(source, t, target) }
+        return index
+    end
+
+    // Registers the field types of a record (so their DIEs exist before the members refer to them).
+    fn fieldTypes(source: string, t: *debug.Types, record: string)
+    begin
+        var position: int := 0
+        var line: int := 1
+        var done: int := 0
+        while position <= str.length(source) && done = 0 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { done := 1 }
+            else {
+                if item[0] = token.nameKind() && str.slice(source, item[1], item[2]) = "type" {
+                    var name: [4]int := lexer.scan(source, item[2], item[3])
+                    var colon: [4]int := lexer.scan(source, name[2], name[3])
+                    var marker: [4]int := lexer.scan(source, colon[2], colon[3])
+                    if name[0] = token.nameKind() && codegen.recordNameMatches(source, name, item[1], record) = 1 && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
+                        var opening: [4]int := lexer.scan(source, marker[2], marker[3])
+                        while opening[0] != token.endKind() && str.slice(source, opening[1], opening[2]) != "begin" { opening := lexer.scan(source, opening[2], opening[3]) }
+                        var field: [4]int := lexer.scan(source, opening[2], opening[3])
+                        while field[0] != token.endKind() && str.slice(source, field[1], field[2]) != "end" {
+                            if field[0] = 10 { field := lexer.scan(source, field[2], field[3]) }
+                            else {
+                                var separator: [4]int := lexer.scan(source, field[2], field[3])
+                                var typeStart: [4]int := lexer.scan(source, separator[2], separator[3])
+                                var typeFinish: [4]int := typeStart
+                                while typeFinish[0] != 10 && typeFinish[0] != token.endKind() { typeFinish := lexer.scan(source, typeFinish[2], typeFinish[3]) }
+                                if separator[0] = 58 { need(source, t, codegen.typeText(source, typeStart[1], typeFinish[1], typeStart[3])) }
+                                field := typeFinish
+                            }
+                        }
+                        done := 1
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+    end
+
+    fn ref(index: int): string
+    begin
+        return " .long .Lty" + str.number(index) + " - .Ldebug_info0\n"
+    end
+
+    fn text(value: string): string
+    begin
+        var out: string := str.builder(" .asciz \"")
+        var i: int := 0
+        while i < str.length(value) {
+            var c: int := str.char(value, i)
+            if c = 34 || c = 92 { out := str.append(out, "\\") }
+            out := str.append(out, str.fromchar(c))
+            i := i + 1
+        }
+        return str.append(out, "\"\n")
+    end
+
+    // DW_OP_fbreg with a signed LEB128 offset, as an exprloc.
+    fn fbreg(offset: int): string
+    begin
+        var bytes: string := str.builder("")
+        var count: int := 1
+        var value: int := offset
+        var more: int := 1
+        while more = 1 {
+            var byte: int := value & 127
+            value := value >> 7
+            if (value = 0 && (byte & 64) = 0) || (value = -1 && (byte & 64) != 0) { more := 0 }
+            else { byte := byte | 128 }
+            bytes := str.append(bytes, ", " + str.number(byte))
+            count := count + 1
+        }
+        return " .uleb128 " + str.number(count) + "\n .byte 145" + bytes + "\n"
+    end
+
+    fn inRegister(index: int): string
+    begin
+        var number: int := 3
+        if index = 1 { number := 12 }
+        if index = 2 { number := 13 }
+        if index = 3 { number := 14 }
+        if index = 4 { number := 15 }
+        return " .uleb128 1\n .byte " + str.number(80 + number) + "\n"
+    end
+
+    fn abbreviations(): string
+    begin
+        var out: string := str.builder(".section .debug_abbrev,\"\",@progbits\n.Ldebug_abbrev0:\n")
+        out := str.append(out, " .uleb128 1\n .uleb128 17\n .byte 1\n .uleb128 37\n .uleb128 8\n .uleb128 19\n .uleb128 11\n .uleb128 3\n .uleb128 8\n .uleb128 27\n .uleb128 8\n .uleb128 17\n .uleb128 1\n .uleb128 18\n .uleb128 7\n .uleb128 16\n .uleb128 23\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 2\n .uleb128 36\n .byte 0\n .uleb128 3\n .uleb128 8\n .uleb128 62\n .uleb128 11\n .uleb128 11\n .uleb128 11\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 3\n .uleb128 15\n .byte 0\n .uleb128 11\n .uleb128 11\n .uleb128 73\n .uleb128 19\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 4\n .uleb128 46\n .byte 1\n .uleb128 3\n .uleb128 8\n .uleb128 17\n .uleb128 1\n .uleb128 18\n .uleb128 7\n .uleb128 64\n .uleb128 24\n .uleb128 73\n .uleb128 19\n .uleb128 63\n .uleb128 25\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 5\n .uleb128 5\n .byte 0\n .uleb128 3\n .uleb128 8\n .uleb128 73\n .uleb128 19\n .uleb128 2\n .uleb128 24\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 6\n .uleb128 52\n .byte 0\n .uleb128 3\n .uleb128 8\n .uleb128 73\n .uleb128 19\n .uleb128 2\n .uleb128 24\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 7\n .uleb128 19\n .byte 1\n .uleb128 3\n .uleb128 8\n .uleb128 11\n .uleb128 6\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 8\n .uleb128 13\n .byte 0\n .uleb128 3\n .uleb128 8\n .uleb128 73\n .uleb128 19\n .uleb128 56\n .uleb128 6\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 9\n .uleb128 1\n .byte 1\n .uleb128 73\n .uleb128 19\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 10\n .uleb128 33\n .byte 0\n .uleb128 73\n .uleb128 19\n .uleb128 55\n .uleb128 6\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 11\n .uleb128 15\n .byte 0\n .uleb128 11\n .uleb128 11\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 12\n .uleb128 46\n .byte 1\n .uleb128 3\n .uleb128 8\n .uleb128 17\n .uleb128 1\n .uleb128 18\n .uleb128 7\n .uleb128 64\n .uleb128 24\n .uleb128 63\n .uleb128 25\n .byte 0\n .byte 0\n")
+        out := str.append(out, " .uleb128 13\n .uleb128 22\n .byte 0\n .uleb128 3\n .uleb128 8\n .uleb128 73\n .uleb128 19\n .byte 0\n .byte 0\n")
+        return str.append(out, " .byte 0\n")
+    end
+
+    fn typeEntry(source: string, t: *debug.Types, index: int): string
+    begin
+        var name: string := (*t.names)[index]
+        var out: string := str.builder(".Lty" + str.number(index) + ":\n")
+        if name = "int" { return str.append(out, " .uleb128 2\n" + text("int") + " .byte 5\n .byte 8\n") }
+        if name = "flt" { return str.append(out, " .uleb128 2\n" + text("flt") + " .byte 4\n .byte 8\n") }
+        if name = "char" { return str.append(out, " .uleb128 2\n" + text("char") + " .byte 6\n .byte 1\n") }
+        if name = "void" { return str.append(out, " .uleb128 2\n" + text("void") + " .byte 5\n .byte 8\n") }
+        if name = "string" { return str.append(out, " .uleb128 3\n .byte 8\n" + ref(need(source, t, "char"))) }
+        if name = "*void" { return str.append(out, " .uleb128 11\n .byte 8\n") }
+        var first: int := str.char(name, 0)
+        if first = 42 { return str.append(out, " .uleb128 3\n .byte 8\n" + ref(need(source, t, str.slice(name, 1, str.length(name))))) }
+        if first = 91 {
+            var closing: int := str.find(name, "]")
+            var count: int := 0
+            var k: int := 1
+            while k < closing {
+                count := count * 10 + str.char(name, k) - 48
+                k := k + 1
+            }
+            out := str.append(out, " .uleb128 9\n" + ref(need(source, t, str.slice(name, closing + 1, str.length(name)))))
+            out := str.append(out, " .uleb128 10\n" + ref(need(source, t, "int")) + " .long " + str.number(count) + "\n")
+            return str.append(out, " .byte 0\n")
+        }
+        var words: int := codegen.recordWordCount(source, name)
+        if words > 0 {
+            out := str.append(out, " .uleb128 7\n" + text(name) + " .long " + str.number(words * 8) + "\n")
+            out := str.append(out, members(source, t, name))
+            return str.append(out, " .byte 0\n")
+        }
+        var target: string := codegen.resolveAliasType(source, name, 0, "")
+        if str.length(target) > 0 && target != name { return str.append(out, " .uleb128 13\n" + text(name) + ref(need(source, t, target))) }
+        return str.append(out, " .uleb128 2\n" + text(name) + " .byte 5\n .byte 8\n")
+    end
+
+    fn members(source: string, t: *debug.Types, record: string): string
+    begin
+        var out: string := str.builder("")
+        var position: int := 0
+        var line: int := 1
+        var done: int := 0
+        while position <= str.length(source) && done = 0 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { done := 1 }
+            else {
+                if item[0] = token.nameKind() && str.slice(source, item[1], item[2]) = "type" {
+                    var name: [4]int := lexer.scan(source, item[2], item[3])
+                    var colon: [4]int := lexer.scan(source, name[2], name[3])
+                    var marker: [4]int := lexer.scan(source, colon[2], colon[3])
+                    if name[0] = token.nameKind() && codegen.recordNameMatches(source, name, item[1], record) = 1 && colon[0] = 58 && str.slice(source, marker[1], marker[2]) = "record" {
+                        var opening: [4]int := lexer.scan(source, marker[2], marker[3])
+                        while opening[0] != token.endKind() && str.slice(source, opening[1], opening[2]) != "begin" { opening := lexer.scan(source, opening[2], opening[3]) }
+                        var field: [4]int := lexer.scan(source, opening[2], opening[3])
+                        var words: int := 0
+                        while field[0] != token.endKind() && str.slice(source, field[1], field[2]) != "end" {
+                            if field[0] = 10 { field := lexer.scan(source, field[2], field[3]) }
+                            else {
+                                var separator: [4]int := lexer.scan(source, field[2], field[3])
+                                var typeStart: [4]int := lexer.scan(source, separator[2], separator[3])
+                                var typeFinish: [4]int := typeStart
+                                while typeFinish[0] != 10 && typeFinish[0] != token.endKind() { typeFinish := lexer.scan(source, typeFinish[2], typeFinish[3]) }
+                                if separator[0] = 58 {
+                                    var fieldType: string := codegen.typeText(source, typeStart[1], typeFinish[1], typeStart[3])
+                                    out := str.append(out, " .uleb128 8\n" + text(str.slice(source, field[1], field[2])) + ref(need(source, t, fieldType)) + " .long " + str.number(words * 8) + "\n")
+                                    words := words + codegen.typeWords(source, fieldType)
+                                }
+                                field := typeFinish
+                            }
+                        }
+                        done := 1
+                    }
+                }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        return out
+    end
+
+    fn describesStorage(type: string): int
+    begin
+        if str.length(type) = 0 { return 0 }
+        if str.char(type, 0) = 91 { return 1 }
+        return 1
+    end
+
+    fn subprogram(source: string, pool: *[12582912]int, t: *debug.Types, functionId: int, label: string, isMain: int): string
+    begin
+        var out: string := str.builder("")
+        var qualified: string := codegen.qualifiedFunctionName(source, pool, functionId)
+        if isMain = 1 { qualified := "main" }
+        var resultType: string := codegen.functionResultTypeAt(source, pool, functionId)
+        if isMain = 1 { resultType := "int" }
+        if str.length(resultType) = 0 || resultType = "void" { out := str.append(out, " .uleb128 12\n" + text(qualified)) }
+        else { out := str.append(out, " .uleb128 4\n" + text(qualified)) }
+        out := str.append(out, " .quad " + label + "\n .quad .LxeFnEnd" + str.number(functionId) + " - " + label + "\n .uleb128 1\n .byte 86\n")
+        if str.length(resultType) > 0 && resultType != "void" { out := str.append(out, ref(need(source, t, resultType))) }
+        // parameters: slot (index + hidden + 1) * 8 below rbp
+        if isMain = 0 {
+            var hidden: int := 0
+            if codegen.indirectResult(source, resultType) = 1 { hidden := 1 }
+            var opening: [4]int := parser.significant(source, ast.read(pool, functionId, 4), 1)
+            var item: [4]int := parser.significant(source, opening[2], opening[3])
+            var index: int := 0
+            while item[0] != 41 && item[0] != token.endKind() && index < 32 {
+                if item[0] = token.nameKind() {
+                    var parameterName: string := str.slice(source, item[1], item[2])
+                    var parameterType: string := codegen.functionParameterTypeAt(source, pool, functionId, index)
+                    if str.length(parameterType) > 0 && codegen.recordWordCount(source, parameterType) < 0 && str.char(parameterType, 0) != 91 {
+                        out := str.append(out, " .uleb128 5\n" + text(parameterName) + ref(need(source, t, parameterType)) + fbreg(0 - (index + hidden + 1) * 8))
+                    }
+                    index := index + 1
+                }
+                // skip to the next ',' at depth 0
+                var depth: int := 0
+                var moving: int := 1
+                while moving = 1 {
+                    item := parser.significant(source, item[2], item[3])
+                    if item[0] = token.endKind() { moving := 0 }
+                    else {
+                        if item[0] = 40 || item[0] = 91 { depth := depth + 1 }
+                        if item[0] = 41 || item[0] = 93 {
+                            if depth = 0 { moving := 0 }
+                            else { depth := depth - 1 }
+                        }
+                        if item[0] = 44 && depth = 0 {
+                            item := parser.significant(source, item[2], item[3])
+                            moving := 0
+                        }
+                    }
+                }
+            }
+        }
+        // locals: every var/const statement of the function
+        var bodyStart: int := ast.read(pool, functionId, 7)
+        var bodyFinish: int := ast.read(pool, functionId, 8)
+        var limit: int := ast.read(pool, functionId, 11)
+        var id: int := functionId
+        while id < limit {
+            if ast.read(pool, id, 9) = functionId && ast.read(pool, id, 0) = ast.variableKind() {
+                var name: string := str.slice(source, ast.read(pool, id, 3), ast.read(pool, id, 4))
+                var type: string := codegen.typeTextForFunction(source, pool, functionId, ast.read(pool, id, 7), ast.read(pool, id, 8), 1)
+                var offset: int := ast.read(pool, id, 11)
+                var register: int := optimizer.registerIndex(source, bodyStart, bodyFinish, name, ast.read(pool, id, 3))
+                if str.length(type) > 0 {
+                    if register >= 0 { out := str.append(out, " .uleb128 6\n" + text(name) + ref(need(source, t, type)) + inRegister(register)) }
+                    else {
+                        if offset > 0 { out := str.append(out, " .uleb128 6\n" + text(name) + ref(need(source, t, type)) + fbreg(0 - offset)) }
+                    }
+                }
+            }
+            id := id + 1
+        }
+        return str.append(out, " .byte 0\n")
+    end
+
+    fn firstFile(source: string): string
+    begin
+        var at: int := str.find(source, "// xelang-file:")
+        if at < 0 { return "program.xe" }
+        var finish: int := at + 15
+        while finish < str.length(source) && str.char(source, finish) != 10 { finish := finish + 1 }
+        return str.slice(source, at + 15, finish)
+    end
+
+    // The .debug_info and .debug_abbrev sections, and the label that ties the line table to the unit.
+    fn sections(source: string, pool: *[12582912]int, program: [4]int): string
+    begin
+        var t: *debug.Types := alloc(16)
+        t.names := alloc(4096 * 8)
+        t.count := 0
+        need(source, t, "int")
+        need(source, t, "flt")
+        need(source, t, "char")
+        need(source, t, "string")
+        need(source, t, "*void")
+        var body: string := str.builder("")
+        var mainId: int := program[3]
+        body := str.append(body, subprogram(source, pool, t, mainId, "main", 1))
+        var functionId: int := program[1]
+        var visited: int := 0
+        while functionId >= 0 && visited < program[2] {
+            var name: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
+            if name != "main" && ast.read(pool, functionId, 6) >= 0 {
+                body := str.append(body, subprogram(source, pool, t, functionId, codegen.functionLabel(codegen.qualifiedFunctionName(source, pool, functionId)), 0))
+            }
+            functionId := ast.read(pool, functionId, 5)
+            visited := visited + 1
+        }
+        var types: string := str.builder("")
+        var i: int := 0
+        while i < t.count {
+            types := str.append(types, typeEntry(source, t, i))
+            i := i + 1
+        }
+        var out: string := str.builder(abbreviations())
+        out := str.append(out, ".section .debug_info,\"\",@progbits\n.Ldebug_info0:\n .long .Ldebug_info_end - .Ldebug_info_start\n.Ldebug_info_start:\n .short 4\n .long .Ldebug_abbrev0\n .byte 8\n")
+        out := str.append(out, " .uleb128 1\n" + text("Xe " + driver.version()) + " .byte 12\n" + text(firstFile(source)) + text(env.get("PWD")) + " .quad .Ltext0\n .quad .Letext0 - .Ltext0\n .long .Ldebug_line0\n")
+        out := str.append(out, types)
+        out := str.append(out, body)
+        out := str.append(out, " .byte 0\n.Ldebug_info_end:\n")
+        out := str.append(out, ".section .debug_line,\"\",@progbits\n.Ldebug_line0:\n")
+        free(t.names)
+        free(t)
+        return out
+    end
+end

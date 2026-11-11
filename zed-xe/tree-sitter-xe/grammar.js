@@ -220,6 +220,9 @@ module.exports = grammar({
         $.defer_statement,
         $.if_statement,
         $.while_statement,
+        $.for_statement,
+        $.goto_statement,
+        $.label_statement,
         $.switch_statement,
         $.gc_statement,
         $.asm_statement,
@@ -264,12 +267,28 @@ module.exports = grammar({
       ),
 
     while_statement: ($) =>
+      seq('while', field('condition', $._expression), repeat($._nl), field('body', $.block)),
+
+    // for i := 0 to n - 1 { }   for i := n downto 0 step 2 { }   (also: for var i: int := ...)
+    for_statement: ($) =>
       seq(
-        choice('while', 'for'),
-        field('condition', $._expression),
+        'for',
+        optional('var'),
+        field('variable', $.identifier),
+        optional(seq(':', field('type', $._type))),
+        ':=',
+        field('start', $._expression),
+        choice('to', 'downto'),
+        field('finish', $._expression),
+        optional(seq('step', field('step', $._expression))),
         repeat($._nl),
         field('body', $.block),
       ),
+
+    goto_statement: ($) => seq('goto', field('label', $.identifier)),
+
+    // a label is a name and ':' alone on a line
+    label_statement: ($) => prec(2, seq(field('name', $.identifier), ':', $._nl)),
 
     switch_statement: ($) =>
       seq(
@@ -315,6 +334,7 @@ module.exports = grammar({
       choice(
         $.identifier,
         $.number,
+        $.char,
         $.string,
         $.parenthesized_expression,
         $.call_expression,
@@ -403,7 +423,10 @@ module.exports = grammar({
 
     identifier: (_) => /[A-Za-z_][A-Za-z0-9_]*/,
 
-    number: (_) => /[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?/,
+    number: (_) =>
+      token(choice(/0[xX][0-9A-Fa-f_]+/, /0[bB][01_]+/, /[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?/)),
+
+    char: (_) => token(seq("'", choice(/[^'\\]/, /\\./), "'")),
 
     string: ($) =>
       seq(

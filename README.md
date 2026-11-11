@@ -1,6 +1,6 @@
 # Xe
 
-**Xe 2.2.0** is a statically checked systems and application language that
+**Xe 2.3.0** is a statically checked systems and application language that
 compiles straight to native executables for Linux x86-64 (and cross-builds for
 Windows x86-64; macOS x86-64 builds but is untested). The compiler is written
 in Xe and **builds itself**: a checked-in assembly seed plus GNU `as` and `ld`
@@ -51,6 +51,21 @@ macOS target only produces a binary. `tests/run_windows_tests.sh` re-runs the te
 
 ## What is new in 2.x
 
+- **2.3.** Fixes from real use:
+  - **rbx corruption fixed** (the generated global accessor zeroed the caller's `rbx`).
+  - **Literals:** `0xFF`, `0b1010`, `1_000_000`, `1e9`, `'a'`, `null` and `sizeof(T)`.
+  - **Control flow and calls:** `for i := 0 to n - 1 { }` (also `downto` and `step`), `goto`, calls that span lines inside `( )`, and `break`/`continue` in loops with `defer` or `gc.begin`.
+  - **Conversions and access:** `var f: flt := 3` converts the int. `call().field`, `&` of a `flt` local as an argument, and `return null` work.
+  - **Module functions** may be named `read`/`write`/`free`/`new`/`delete`.
+  - **Errors** name the construct that can't be compiled.
+  - **gdb (`-g`)** shows arguments, locals and record fields.
+  - **The GC runs while threads are alive** (Linux), and `gc.begin` regions are per thread.
+  - **FFI callbacks:** `ffi.callback`, for example to connect GTK signals or pass a qsort comparator.
+  - **`truetype`:** anti-aliased fonts of any size.
+  - **Wayland keyboard layouts:** `xkbmap`, with AltGr and several layouts.
+  - **New calls:** `bytes.read_file`/`write_file`, and `vulkan.buffer_device` + `buffer_upload`. `math.sqrt` is now one instruction.
+  - **Faster allocator bitmaps.**
+  - **`tools/release.xe`** builds every release package.
 - **Language features (2.2).** `else if`, `break`/`continue`, global variables and constants
   (`global x: int := 0`, `global const N: int := 10`), `enum`, generics (`type Pair<A, B>`, `fn largest<T>`,
   `largest<int>(a, b)`), casts (`cast.flt`, `cast.int`, `cast.ptr`, `cast.addr`), function pointers and closures
@@ -83,7 +98,7 @@ macOS target only produces a binary. `tests/run_windows_tests.sh` re-runs the te
   meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
   `vulkan` (any GPU, any platform: compute, graphics, textures, swapchains), `vkwindow`, `vkscene` (GPU-lit 3D
   scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **174 libraries** covering containers, math, text, encodings, hashing and
+- **176 libraries** covering containers, math, text, encodings, hashing and
   crypto, compression, files and OS, concurrency, networking and HTTP. See
   [docs/libraries.md](docs/libraries.md).
 - **Faster compiler and faster programs.** Compile results are memoized, the
@@ -101,14 +116,23 @@ macOS target only produces a binary. `tests/run_windows_tests.sh` re-runs the te
 ### From the release tarball (no compiler needed)
 
 ```sh
-tar xzf xe-2.2.0-linux-x86_64.tar.gz
-cd xe-2.2.0-linux-x86_64
+tar xzf xe-2.3.0-linux-x86_64.tar.gz
+cd xe-2.3.0-linux-x86_64
 ./install.sh                 # ~/.local     (or: sudo ./install.sh → /usr/local)
 xe --version
 ```
 
 `PREFIX=/opt/xe ./install.sh` installs elsewhere; `./uninstall.sh` removes it.
-Build the tarball yourself with `scripts/make-release.sh` (it lands in `dist/`).
+Build the tarball yourself with `scripts/make-release.sh` (it lands in `dist/`), or build every platform's package at
+once with the release tool. It asks for the Xe root folder and writes `dist/xe-<version>-{linux-x86_64.tar.gz,
+windows-x86_64.zip, windows-arm64.zip, macos-arm64.tar.gz}`:
+
+```sh
+xe --run tools/release.xe
+```
+
+Xe has no ARM64 code generator yet. The ARM packages therefore contain x86-64 programs, which Windows on ARM runs through its x64
+emulation and Apple Silicon Macs run through Rosetta 2. Each package says so in a text file.
 
 ### From the repository
 
@@ -186,7 +210,7 @@ The full reference is in [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-174 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
+176 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
 `lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
 text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
 (`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
@@ -223,7 +247,9 @@ begin
 end
 ```
 
-- **2D:** `canvas` draws pixels, lines, rectangles, circles, triangles, text (8x14 bitmap font), alpha
+- **Text:** `truetype` loads `.ttf` fonts (or `truetype.load_system(1)` for a monospace system font) and draws
+  anti-aliased UTF-8 text of any pixel size onto a canvas; glyphs are cached per size.
+- **2D:** `canvas` draws pixels, lines, rectangles, circles, triangles, quick 8x14 bitmap text, alpha
   blending and sprites; `image` loads/saves PNG, BMP and PPM; `game` adds collisions, tile maps, animation,
   particles and a fixed-timestep helper.
 - **3D:** `gfx3d` is a complete software renderer (vectors, 4x4 matrices, perspective camera, z-buffer, flat
@@ -244,7 +270,7 @@ end
   Khronos validation layer when installed. Verified here only on an Intel Arc GPU under Linux (compute, graphics,
   textures, uniforms, swapchain with resize, and the offscreen fallback); the Windows and macOS paths build but were
   not run, and other vendors' GPUs were not available to test.
-- Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Wayland keyboard input assumes a US layout, and GNOME gives Wayland windows no title bar. 
+- Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Native Wayland follows the compositor's keymap (any XKB layout, AltGr, several layouts); GNOME gives Wayland windows no title bar.
 - **Audio:** `audio` plays 16-bit sound (`audio.open`, `audio.play`, tone/square/noise generators, a mixer) through ALSA on Linux and winmm on Windows, and reads/writes WAV files everywhere.
 
 ## Benchmarks
@@ -268,7 +294,7 @@ does **not** reach the fastest language.
 ## Tests
 
 ```sh
-XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 20 programs; every one must build and exit 0
+XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 21 programs; every one must build and exit 0
 ```
 
 ## Repository layout
@@ -280,7 +306,7 @@ XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 20 programs; every one must
 - `tests/` — integration programs and the runner.
 - `benchmarks/` — kernels, generator, runner and GUI.
 - `logo/` — `png/` source logo and `ascii/xe.ans` colored ASCII art.
-- `install/`, `scripts/` — installers, bootstrap, seed and release tooling.
+- `install/`, `scripts/`, `tools/` — installers, bootstrap, seed and release tooling (`tools/release.xe` builds all packages).
 - `docs/` — documentation, library index, editor setup.
 - `vscode-xe/`, `zed-xe/` — syntax highlighting for editors.
 
@@ -290,10 +316,11 @@ XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 20 programs; every one must
   Platforms table for what is missing there). macOS x86-64 builds a binary that has not been run, and has no window or
   thread support. There is no ARM64 back end (on Apple Silicon the macOS binary would need Rosetta).
 - **Language:** generics are instantiated copies with explicit type arguments (top-level only); globals are reached
-  through a hidden pointer (slightly slower than locals); `break`/`continue` are not allowed in a loop containing `defer`
-  or `gc.begin`; function pointers carry int/pointer/string arguments only.
-- **Runtime:** HTTP is plain `http://` (no TLS). The garbage collector is conservative and does not run while threads are
-  active; free memory explicitly or use regions in threaded code.
+  through a hidden pointer (slightly slower than locals); `goto` is not allowed in functions with `defer` or `gc.begin`;
+  function pointers and FFI callbacks carry int/pointer/string arguments only.
+- **Runtime:** HTTP is plain `http://` (no TLS). The garbage collector is conservative. On Linux it pauses other threads
+  with SIGPWR while it collects (`nanosleep` resumes; `poll`/`epoll_wait` may return early with EINTR). On Windows it
+  still waits until worker threads finish.
 - **Graphics:** no macOS window backend; native Wayland windows cannot present Vulkan frames (they use the offscreen
-  fallback); Wayland keyboard input assumes a US layout.
-- **Debugging:** `-g` gives line-level gdb support, not variable descriptions.
+  fallback); TrueType text has no kerning or hinting and no CFF (.otf) outlines.
+- **Debugging:** `-g` gives gdb line numbers, arguments, locals and record fields; arrays show as their first element type.

@@ -134,28 +134,21 @@ begin
         return result
     end
 
+    fn sqrt_raw(value: flt): flt
+    begin
+        asm {
+            sqrtsd xmm0, xmm0
+            leave
+            ret
+        }
+        return value
+    end
+
+    // Square root (the SSE instruction); NaN for negative values.
     fn sqrt(value: flt): flt
     begin
         if value < 0.0 { return nan() }
-        if value = 0.0 || value != value { return value }
-        if value = infinity() { return value }
-        var scaled: flt := value
-        var factor: flt := 1.0
-        while scaled > 4.0 {
-            scaled := scaled * 0.25
-            factor := factor * 2.0
-        }
-        while scaled < 0.25 {
-            scaled := scaled * 4.0
-            factor := factor * 0.5
-        }
-        var guess: flt := (scaled + 1.0) * 0.5
-        var step: int := 0
-        while step < 8 {
-            guess := (guess + scaled / guess) * 0.5
-            step := step + 1
-        }
-        return guess * factor
+        return sqrt_raw(value)
     end
 
     fn cbrt(value: flt): flt

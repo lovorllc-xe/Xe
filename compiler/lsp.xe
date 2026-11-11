@@ -492,7 +492,7 @@ begin
 
     fn completion(id: string, text: string)
     begin
-        var words: string := "fn type module uses var const global enum if else while switch case default return defer break continue begin end alloc free string int flt writeln write"
+        var words: string := "fn type module uses var const global enum if else while for to downto step goto null sizeof switch case default return defer break continue begin end alloc free string int flt writeln write"
         var items: string := str.builder("")
         var first: int := 1
         var start: int := 0

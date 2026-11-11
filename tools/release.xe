@@ -1,0 +1,207 @@
+// release: builds Xe release packages for every supported platform from one Linux machine.
+//
+//     xe --run tools/release.xe            (or: xe --build tools/release.xe -o xe-release && ./xe-release)
+//
+// It asks for the Xe root folder (the repository: compiler/, std/, libraries/, platform/), then writes to <root>/dist:
+//   xe-<v>-linux-x86_64.tar.gz      bin/xe + lib/xelang + install.sh
+//   xe-<v>-windows-x86_64.zip       bin\xe.exe + lib\xelang
+//   xe-<v>-windows-arm64.zip        the same x86-64 xe.exe; Windows 11 on ARM runs it through its x64 emulation
+//   xe-<v>-macos-arm64.tar.gz       an x86-64 Mach-O xe; Apple Silicon Macs run it through Rosetta 2
+// Xe has no ARM64 code generator yet, so the ARM packages carry x86-64 programs (and so do the programs that
+// compiler builds). Needs the Linux tools Xe already uses: as/ld, and for the cross builds llvm-mc, llvm-dlltool,
+// lld-link, ld64.lld; plus tar, gzip and zip.
+
+fn quote(text: string): string
+begin
+    return "'" + text + "'"
+end
+
+global log: string := ""
+
+// Runs a shell command and returns its output (stdout and stderr).
+fn capture(command: string): string
+begin
+    if str.length(log) = 0 { log := "/tmp/xe-release-" + str.number(process.run("exit $(( $$ % 200 ))")) + ".log" }
+    process.run("( " + command + " ) > " + quote(log) + " 2>&1")
+    var output: string := file.read(log)
+    process.run("rm -f " + quote(log))
+    return output
+end
+
+// Runs a shell command; returns 1 when it exited with status 0. Its output is shown when it fails.
+fn run(command: string): int
+begin
+    var output: string := capture(command + "; echo \"@status=$?\"")
+    var marker: int := str.find(output, "@status=")
+    if marker < 0 {
+        writeln(output)
+        return 0
+    }
+    var status: string := str.slice(output, marker + 8, str.length(output))
+    if str.char(status, 0) = '0' && (str.length(status) = 1 || str.char(status, 1) = 10) { return 1 }
+    writeln(str.slice(output, 0, marker))
+    return 0
+end
+
+fn trimmed(text: string): string
+begin
+    var start: int := 0
+    var finish: int := str.length(text)
+    while start < finish && (str.char(text, start) = ' ' || str.char(text, start) = 10 || str.char(text, start) = 13 || str.char(text, start) = 9) { start := start + 1 }
+    while finish > start && (str.char(text, finish - 1) = ' ' || str.char(text, finish - 1) = 10 || str.char(text, finish - 1) = 13 || str.char(text, finish - 1) = 9 || str.char(text, finish - 1) = '/') { finish := finish - 1 }
+    return str.slice(text, start, finish)
+end
+
+fn exists(path: string): int
+begin
+    return run("test -e " + quote(path))
+end
+
+// The version string from compiler/main.xe (fn version ... return "x.y.z").
+fn versionOf(root: string): string
+begin
+    var text: string := file.read(root + "/compiler/main.xe")
+    var at: int := str.find(text, "fn version()")
+    if at < 0 { return "dev" }
+    var rest: string := str.slice(text, at, str.length(text))
+    var open: int := str.find(rest, "return \"")
+    if open < 0 { return "dev" }
+    rest := str.slice(rest, open + 8, str.length(rest))
+    var close: int := str.find(rest, "\"")
+    if close < 0 { return "dev" }
+    return str.slice(rest, 0, close)
+end
+
+// compiler/SOURCES as a space-separated list of quoted paths.
+fn sources(root: string): string
+begin
+    var list: string := file.read(root + "/compiler/SOURCES")
+    var out: string := str.builder("")
+    var start: int := 0
+    var i: int := 0
+    while i <= str.length(list) {
+        if i = str.length(list) || str.char(list, i) = 10 {
+            var name: string := trimmed(str.slice(list, start, i))
+            if str.length(name) > 0 { out := str.append(out, " " + quote(root + "/compiler/" + name)) }
+            start := i + 1
+        }
+        i := i + 1
+    }
+    return out
+end
+
+// Fills a package folder: lib/xelang (what the compiler needs at run time), share/xe (docs, examples), readme files,
+// and for Linux install.sh / uninstall.sh.
+fn layout(root: string, stage: string, platform: string): int
+begin
+    var lib: string := quote(stage + "/lib/xelang")
+    var share: string := quote(stage + "/share/xe")
+    if run("mkdir -p " + lib + " " + share) = 0 { return 0 }
+    if run("cp -r " + quote(root + "/std") + " " + quote(root + "/compiler") + " " + quote(root + "/libraries") + " " + quote(root + "/platform") + " " + lib) = 0 { return 0 }
+    run("rm -rf " + quote(stage + "/lib/xelang/compiler/selfhosted-xe"))
+    run("cp -r " + quote(root + "/docs") + " " + quote(root + "/examples") + " " + quote(root + "/logo") + " " + share)
+    run("cp " + quote(root + "/README.md") + " " + quote(stage + "/"))
+    if platform = "linux" {
+        run("cp " + quote(root + "/README-INSTALL-LINUX.txt") + " " + quote(stage + "/"))
+        file.write(stage + "/install.sh", "#!/usr/bin/env bash\n# Installs this Xe release: ./install.sh -> ~/.local, sudo ./install.sh -> /usr/local, PREFIX=/opt/xe ./install.sh\nset -euo pipefail\nhere=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd)\"\nif [[ -n \"${PREFIX:-}\" ]]; then prefix=\"$PREFIX\"\nelif (( EUID == 0 )); then prefix=/usr/local\nelse prefix=\"${HOME:?HOME must be set}/.local\"; fi\ninstall -d \"$prefix/bin\" \"$prefix/lib\" \"$prefix/share\"\nrm -rf \"$prefix/lib/xelang\" \"$prefix/share/xe\"\ncp -r \"$here/lib/xelang\" \"$prefix/lib/xelang\"\ncp -r \"$here/share/xe\" \"$prefix/share/xe\"\ninstall -m 0755 \"$here/bin/xe\" \"$prefix/bin/xe\"\n\"$prefix/bin/xe\" -v | tail -1\ncase \":$PATH:\" in *\":$prefix/bin:\"*) ;; *) echo \"Add $prefix/bin to PATH to run xe.\" ;; esac\n")
+        file.write(stage + "/uninstall.sh", "#!/usr/bin/env bash\nset -euo pipefail\nif [[ -n \"${PREFIX:-}\" ]]; then prefix=\"$PREFIX\"\nelif (( EUID == 0 )); then prefix=/usr/local\nelse prefix=\"${HOME:?}/.local\"; fi\nrm -rf \"$prefix/bin/xe\" \"$prefix/lib/xelang\" \"$prefix/share/xe\"\necho \"Xe removed from $prefix\"\n")
+        run("chmod 0755 " + quote(stage + "/install.sh") + " " + quote(stage + "/uninstall.sh") + " " + quote(stage + "/bin/xe"))
+    }
+    if platform = "win" {
+        file.write(stage + "/INSTALL-WINDOWS.txt", "Xe for Windows (x86-64)\r\n\r\nUnzip anywhere and add the bin folder to PATH. xe.exe finds its libraries in ..\\lib\\xelang.\r\nBuilding programs needs the LLVM tools on PATH: llvm-mc, llvm-dlltool and lld-link\r\n(for example: winget install LLVM.LLVM).\r\n\r\n    xe --build hello.xe -o hello.exe\r\n")
+    }
+    if platform = "macos" {
+        file.write(stage + "/INSTALL-MACOS.txt", "Xe for macOS\n\nUnpack anywhere and add the bin folder to PATH; xe finds its libraries in ../lib/xelang.\nBuilding programs needs llvm-mc and ld64.lld (brew install llvm lld).\n\n    xe --build hello.xe -o hello\n")
+        run("chmod 0755 " + quote(stage + "/bin/xe"))
+    }
+    return 1
+end
+
+fn zipFolder(work: string, name: string, target: string): int
+begin
+    run("rm -f " + quote(target))
+    if run("command -v zip") = 1 { return run("cd " + quote(work) + " && zip -qr " + quote(target) + " " + quote(name)) }
+    return run("cd " + quote(work) + " && bsdtar -a -cf " + quote(target) + " " + quote(name))
+end
+
+fn main(): int
+begin
+    writeln("Xe release builder")
+    write("Xe root folder (empty = current folder): ")
+    var answer: string := ""
+    readln(answer)
+    var root: string := trimmed(answer)
+    if str.length(root) = 0 { root := trimmed(capture("pwd")) }
+    if str.char(root, 0) = '~' { root := env.get("HOME") + str.slice(root, 1, str.length(root)) }
+    if exists(root + "/compiler/SOURCES") = 0 {
+        writeln("error: ", root, " is not an Xe root folder (compiler/SOURCES is missing)")
+        return 1
+    }
+    root := trimmed(capture("cd " + quote(root) + " && pwd"))
+    var version: string := versionOf(root)
+    writeln("Xe ", version, " in ", root)
+    // a compiler to build with: build/xe, then xe on PATH, else bootstrap from the seed
+    var xe: string := root + "/build/xe"
+    if exists(xe) = 0 {
+        xe := trimmed(capture("command -v xe"))
+        if str.length(xe) = 0 {
+            writeln("bootstrapping the compiler from the seed...")
+            if run("bash " + quote(root + "/scripts/bootstrap.sh") + " " + quote(root + "/build")) = 0 { return 1 }
+            xe := root + "/build/xe"
+        }
+    }
+    var dist: string := root + "/dist"
+    var work: string := trimmed(capture("mktemp -d /tmp/xe-release.XXXXXX"))
+    var files: string := sources(root)
+    var envPrefix: string := "XE_HOME=" + quote(root) + " "
+    var failed: int := 0
+    run("mkdir -p " + quote(dist))
+    // ---- Linux x86-64 ----
+    var name: string := "xe-" + version + "-linux-x86_64"
+    var stage: string := work + "/" + name
+    writeln("[1/4] ", name, ".tar.gz")
+    if run("mkdir -p " + quote(stage + "/bin") + " && " + envPrefix + quote(xe) + " --build" + files + " -q -o " + quote(stage + "/bin/xe")) = 1 && layout(root, stage, "linux") = 1 {
+        if run("tar -C " + quote(work) + " --owner=0 --group=0 -czf " + quote(dist + "/" + name + ".tar.gz") + " " + quote(name)) = 0 { failed := failed + 1 }
+    }
+    else { failed := failed + 1 }
+    // ---- Windows x86-64 (and ARM64 through x64 emulation) ----
+    var winName: string := "xe-" + version + "-windows-x86_64"
+    var winStage: string := work + "/" + winName
+    writeln("[2/4] ", winName, ".zip")
+    var windowsBuilt: int := 0
+    if run("mkdir -p " + quote(winStage + "/bin") + " && " + envPrefix + quote(xe) + " --build" + files + " -p win -q -o " + quote(winStage + "/bin/xe.exe")) = 1 && layout(root, winStage, "win") = 1 {
+        windowsBuilt := 1
+        if zipFolder(work, winName, dist + "/" + winName + ".zip") = 0 { failed := failed + 1 }
+    }
+    else { failed := failed + 1 }
+    var armName: string := "xe-" + version + "-windows-arm64"
+    writeln("[3/4] ", armName, ".zip (x86-64 xe.exe, runs under Windows on ARM x64 emulation)")
+    if windowsBuilt = 1 {
+        var armStage: string := work + "/" + armName
+        if run("cp -r " + quote(winStage) + " " + quote(armStage)) = 1 {
+            file.write(armStage + "/ARM64.txt", "This package contains the x86-64 build of Xe. Windows 11 on ARM runs x86-64 programs through its\r\nbuilt-in emulation, so xe.exe and the programs it builds work there unchanged. Xe has no native ARM64\r\ncode generator yet.\r\n")
+            if zipFolder(work, armName, dist + "/" + armName + ".zip") = 0 { failed := failed + 1 }
+        }
+        else { failed := failed + 1 }
+    }
+    else { failed := failed + 1 }
+    // ---- macOS (Apple Silicon through Rosetta 2) ----
+    var macName: string := "xe-" + version + "-macos-arm64"
+    var macStage: string := work + "/" + macName
+    writeln("[4/4] ", macName, ".tar.gz (x86-64 Mach-O, runs on Apple Silicon through Rosetta 2)")
+    if run("mkdir -p " + quote(macStage + "/bin") + " && " + envPrefix + quote(xe) + " --build" + files + " -p macos -q -o " + quote(macStage + "/bin/xe")) = 1 && layout(root, macStage, "macos") = 1 {
+        file.write(macStage + "/APPLE-SILICON.txt", "This package contains the x86-64 build of Xe. Apple Silicon Macs run it through Rosetta 2\n(install it once with: softwareupdate --install-rosetta). Xe has no native ARM64 code generator yet.\nIf macOS blocks the download: xattr -dr com.apple.quarantine " + macName + "\n")
+        if run("tar -C " + quote(work) + " --owner=0 --group=0 -czf " + quote(dist + "/" + macName + ".tar.gz") + " " + quote(macName)) = 0 { failed := failed + 1 }
+    }
+    else { failed := failed + 1 }
+    run("cd " + quote(dist) + " && sha256sum xe-" + version + "-* | grep -v sha256 > SHA256SUMS-" + version + ".txt")
+    run("rm -rf " + quote(work))
+    writeln("")
+    writeln(capture("ls -l " + quote(dist) + " | grep " + quote(version)))
+    if failed > 0 {
+        writeln(failed, " package(s) failed")
+        return 1
+    }
+    writeln("all packages are in ", dist)
+    return 0
+end

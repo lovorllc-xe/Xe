@@ -12,6 +12,7 @@ format.xe
 lsp.xe
 fast.xe
 optimizer.xe
+debug.xe
 runtime.xe
 memory.xe
 logo.xe

@@ -133,13 +133,28 @@ begin
         }
         if digit(value) = 1 {
             index := index + 1
+            // 0x... and 0b... take hex / binary digits (and _ separators)
+            if value = 48 && index < size && (str.char(source, index) = 120 || str.char(source, index) = 88 || str.char(source, index) = 98 || str.char(source, index) = 66) {
+                index := index + 1
+                while index < size && (digit(str.char(source, index)) = 1 || str.char(source, index) = 95 || (str.char(source, index) >= 97 && str.char(source, index) <= 102) || (str.char(source, index) >= 65 && str.char(source, index) <= 70)) { index := index + 1 }
+                return token.make(token.numberKind(), first, index, row)
+            }
             var finished: int := 0
             while index < size && finished = 0 {
                 value := str.char(source, index)
-                if digit(value) = 1 { index := index + 1 }
+                if digit(value) = 1 || value = 95 { index := index + 1 }
                 else {
                     if value = 46 && index + 1 < size && digit(str.char(source, index + 1)) = 1 { index := index + 1 }
                     else { finished := 1 }
+                }
+            }
+            // exponent: e9, E-3, e+12
+            if index < size && (str.char(source, index) = 101 || str.char(source, index) = 69) {
+                var after: int := index + 1
+                if after < size && (str.char(source, after) = 45 || str.char(source, after) = 43) { after := after + 1 }
+                if after < size && digit(str.char(source, after)) = 1 {
+                    index := after
+                    while index < size && digit(str.char(source, index)) = 1 { index := index + 1 }
                 }
             }
             return token.make(token.numberKind(), first, index, row)

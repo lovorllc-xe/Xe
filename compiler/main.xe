@@ -1,7 +1,28 @@
 module driver
 begin
+    // 1 when the compiler itself runs on Windows (a cross-built xe.exe): commands then go through cmd.exe.
+    fn hostWindows(): int
+    begin
+        var buffer: *void := alloc(400)
+        runtime.mem.set(buffer, 0, 400)
+        syscall.invoke3(63, buffer, 0, 0)
+        var result: int := 0
+        if runtime.hw.read8(buffer) = 87 && runtime.hw.read8(buffer + 1) = 105 && runtime.hw.read8(buffer + 2) = 110 { result := 1 }
+        free(buffer)
+        return result
+    end
+
     fn quote(value: string): string
     begin
+        if hostWindows() = 1 {
+            var doubled: string := str.builder(token.character(34))
+            var at: int := 0
+            while at < str.length(value) {
+                if str.char(value, at) != 34 { doubled := str.append(doubled, token.character(str.char(value, at))) }
+                at := at + 1
+            }
+            return str.append(doubled, token.character(34))
+        }
         var result: string := str.builder(token.character(39))
         var index: int := 0
         while index < str.length(value) {
@@ -17,7 +38,7 @@ begin
 
     fn version(): string
     begin
-        return "2.2.0"
+        return "2.3.0"
     end
 
     fn err(text: string): int
@@ -54,8 +75,8 @@ begin
         writeln("  -o <file>              output path (default: the first source name without .xe)")
         writeln("  --library-path <dir>   also search this directory for .xel libraries")
         writeln("  --no-std               do not add the standard io and mem modules")
-        writeln("  -p <platform>          target platform: linux (default), win, macos. The same source builds for each;")
-        writeln("                         win needs llvm-mc, llvm-dlltool and lld-link, macos needs llvm-mc and ld64.lld")
+        writeln("  -p <platform>          target platform: linux, win, macos (default: the one xe runs on). The same source")
+        writeln("                         builds for each; win needs llvm-mc, llvm-dlltool and lld-link, macos llvm-mc and ld64.lld")
         writeln("  -q, --quiet            do not print the build summary")
         writeln("  --keep-asm             keep the generated .s and .o files")
         writeln("  -g, --debug            add source line information for gdb (debug builds are not optimized)")
@@ -75,7 +96,7 @@ begin
     fn directoryOf(path: string): string
     begin
         var index: int := str.length(path) - 1
-        while index >= 0 && str.char(path, index) != 47 { index := index - 1 }
+        while index >= 0 && str.char(path, index) != 47 && str.char(path, index) != 92 { index := index - 1 }
         if index < 0 { return "." }
         if index = 0 { return "/" }
         return str.slice(path, 0, index)
@@ -332,19 +353,83 @@ begin
         return " -dynamic-linker /lib64/ld-linux-x86-64.so.2 -L/usr/lib -L/usr/lib64 -L/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu " + found
     end
 
-    // The build commands for the other platforms. The generated assembly is the same for every platform; a small
-    // sed script adapts section names, and platform/<name>/shim.s (appended to it) provides the entry point and
-    // the system-call layer on top of that operating system.
+    fn removeFile(path: string)
+    begin
+        syscall.invoke3(87, path, 0, 0)
+    end
+
+    fn startsWith(text: string, prefix: string): int
+    begin
+        if str.length(text) < str.length(prefix) { return 0 }
+        return str.slice(text, 0, str.length(prefix)) = prefix
+    end
+
+    // Adapts one line of the generated (GNU as, ELF) assembly to the assembler syntax of another platform:
+    // section names, symbol directives, and `syscall` becomes a call into the platform shim.
+    fn adaptLine(line: string, platform: string): string
+    begin
+        var text: string := line
+        var lead: int := 0
+        while lead < str.length(text) && str.char(text, lead) = 32 { lead := lead + 1 }
+        var body: string := str.slice(text, lead, str.length(text))
+        if startsWith(body, ".section .rodata") = 1 {
+            if platform = "win" { return ".section .rdata,\"dr\"" + str.slice(body, 16, str.length(body)) }
+            return ".section __TEXT,__const" + str.slice(body, 16, str.length(body))
+        }
+        if startsWith(body, ".section .bss") = 1 {
+            if platform = "win" { return ".section .bss,\"bw\"" + str.slice(body, 13, str.length(body)) }
+            return ".section __DATA,__data" + str.slice(body, 13, str.length(body))
+        }
+        if startsWith(body, ".section .data") = 1 {
+            if platform = "win" { return ".section .data,\"dw\"" + str.slice(body, 14, str.length(body)) }
+            return ".section __DATA,__data" + str.slice(body, 14, str.length(body))
+        }
+        if startsWith(body, ".section .text") = 1 { return ".text" + str.slice(body, 14, str.length(body)) }
+        if startsWith(text, ".type ") = 1 || startsWith(text, ".section .note") = 1 { return "" }
+        if startsWith(text, ".global ") = 1 { return ".globl " + str.slice(text, 8, str.length(text)) }
+        if text = " syscall" { return " call xe.syscall" }
+        if startsWith(text, ".align ") = 1 { return ".balign " + str.slice(text, 7, str.length(text)) }
+        if startsWith(text, ".pushsection .rodata") = 1 {
+            if platform = "win" { return ".pushsection .rdata,\"dr\"" + str.slice(text, 20, str.length(text)) }
+            return ".pushsection __TEXT,__const" + str.slice(text, 20, str.length(text))
+        }
+        if platform = "win" {
+            if text = "xe.thread.start:" || text = "xe.thread.join:" || text = "xeprocess.run:" || text = "xeprocess.spawn:" || text = "xeprocess.wait:" { return str.slice(text, 0, str.length(text) - 1) + ".linux:" }
+        }
+        return text
+    end
+
+    fn adaptAssembly(assembly: string, platform: string): string
+    begin
+        var out: string := str.builder("")
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(assembly) {
+            if i = str.length(assembly) || str.char(assembly, i) = 10 {
+                if i > start {
+                    var adapted: string := adaptLine(str.slice(assembly, start, i), platform)
+                    if str.length(adapted) > 0 { out := str.append(out, adapted + token.character(10)) }
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        return out
+    end
+
+    // The build command for the other platforms. The generated assembly is adapted (adaptAssembly) and
+    // platform/<name>/shim.s is appended to it: the shim provides the entry point and the system-call layer on top
+    // of that operating system. Temporary files: <output>.p.s and, for Windows, <output>.k32.lib.
     fn crossCommand(output: string, assembly: string, object: string, platform: string, xeHome: string): string
     begin
         var directory: string := xeHome + "/platform/" + platform
         var adapted: string := output + ".p.s"
-        var prepare: string := "sed -f " + quote(directory + "/fixup.sed") + " " + quote(assembly) + " > " + quote(adapted) + " && cat " + quote(directory + "/shim.s") + " >> " + quote(adapted)
+        file.write(adapted, adaptAssembly(file.read(assembly), platform) + file.read(directory + "/shim.s"))
         if platform = "win" {
             var library: string := output + ".k32.lib"
-            return prepare + " && llvm-mc -triple=x86_64-pc-windows-msvc -filetype=obj -o " + quote(object) + " " + quote(adapted) + " && llvm-dlltool -m i386:x86-64 -d " + quote(directory + "/kernel32.def") + " -l " + quote(library) + " && lld-link /subsystem:console /entry:xe.win.entry /nodefaultlib /machine:x64 /stack:268435456 /out:" + quote(output) + " " + quote(object) + " " + quote(library) + " && rm -f " + quote(library) + " " + quote(adapted)
+            return "llvm-mc -triple=x86_64-pc-windows-msvc -filetype=obj -o " + quote(object) + " " + quote(adapted) + " && llvm-dlltool -m i386:x86-64 -d " + quote(directory + "/kernel32.def") + " -l " + quote(library) + " && lld-link /subsystem:console /entry:xe.win.entry /nodefaultlib /machine:x64 /stack:268435456 /out:" + quote(output) + " " + quote(object) + " " + quote(library)
         }
-        return prepare + " && llvm-mc -triple=x86_64-apple-macosx11.0.0 -filetype=obj -o " + quote(object) + " " + quote(adapted) + " && ld64.lld -arch x86_64 -platform_version macos 11.0.0 11.0.0 -e xe.mac.entry -o " + quote(output) + " " + quote(object) + " " + quote(directory + "/libSystem.tbd") + " && rm -f " + quote(adapted)
+        return "llvm-mc -triple=x86_64-apple-macosx11.0.0 -filetype=obj -o " + quote(object) + " " + quote(adapted) + " && ld64.lld -arch x86_64 -platform_version macos 11.0.0 11.0.0 -e xe.mac.entry -o " + quote(output) + " " + quote(object) + " " + quote(directory + "/libSystem.tbd")
     end
 
     fn linkCommand(output: string, assembly: string, object: string, target: int, keep: int, shared: string): string
@@ -361,7 +446,6 @@ begin
             var elf: string := output + ".elf"
             command := "as --64 -o " + quote(object) + " " + quote(assembly) + " && ld -nostdlib -Ttext=0x100000 -e _start -o " + quote(elf) + " " + quote(object) + " && objcopy -O binary " + quote(elf) + " " + quote(output)
         }
-        if keep = 0 { command := "(" + command + "); status=$?; rm -f " + quote(assembly) + " " + quote(object) + "; exit $status" }
         return command
     end
 
@@ -583,6 +667,7 @@ begin
         var keep: int := 0
         var programArguments: string := ""
         var platform: string := "linux"
+        if hostWindows() = 1 { platform := "win" }
         var debug: int := 0
         var index: int := first
         while index < count {
@@ -710,13 +795,18 @@ begin
             return compile(source, output, target)
         }
         if str.length(output) = 0 {
-            if runAfter = 1 { output := "/tmp/xe-run-" + str.number(nanoseconds()) + ".xee" }
+            if runAfter = 1 {
+                output := "/tmp/xe-run-" + str.number(nanoseconds()) + ".xee"
+                if hostWindows() = 1 { output := env.get("TEMP") + "\\xe-run-" + str.number(nanoseconds()) + ".exe" }
+            }
             else {
                 output := defaultOutput((*sources)[0])
                 if platform = "win" { output := output + ".exe" }
             }
         }
-        if runAfter = 1 && platform != "linux" { return err("error: --run only works for the platform you are on (linux); build with -p " + platform + " and run the result there") }
+        var hostPlatform: string := "linux"
+        if hostWindows() = 1 { hostPlatform := "win" }
+        if runAfter = 1 && platform != hostPlatform { return err("error: --run only works for the platform you are on (" + hostPlatform + "); build with -p " + platform + " and run the result there") }
         var assembly: string := output + ".s"
         var object: string := output + ".o"
         if target = 2 {
@@ -729,16 +819,23 @@ begin
         if platform != "linux" {
             if target != 0 { return err("error: -p " + platform + " works with --build only") }
             command := crossCommand(output, assembly, object, platform, xeHome)
-            if keep = 0 { command := "(" + command + "); status=$?; rm -f " + quote(assembly) + " " + quote(object) + "; exit $status" }
         }
         result := process.run(command)
         var elapsed: int := nanoseconds() - started
+        if keep = 0 {
+            removeFile(assembly)
+            removeFile(object)
+            if platform != "linux" {
+                removeFile(output + ".p.s")
+                removeFile(output + ".k32.lib")
+            }
+        }
         if result != 0 { return err("error: assembling or linking failed (exit status " + str.number(result) + ")") }
         if runAfter = 1 {
             var path: string := output
-            if str.find(path, "/") < 0 { path := "./" + path }
+            if str.find(path, "/") < 0 && str.find(path, "\\") < 0 { path := "./" + path }
             var status: int := process.run(quote(path) + programArguments)
-            process.run("rm -f " + quote(output))
+            removeFile(output)
             return status
         }
         if quiet = 0 { writeln("built " + output + " in " + duration(elapsed)) }

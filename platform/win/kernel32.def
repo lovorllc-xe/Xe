@@ -43,3 +43,4 @@ MapViewOfFile
 UnmapViewOfFile
 GetComputerNameA
 GetSystemInfo
+GetModuleFileNameA

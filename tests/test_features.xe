@@ -1,0 +1,202 @@
+// Language and runtime fixes added after 2.2.0: literals (hex, binary, _, exponents, chars), null, sizeof,
+// goto, calls spanning lines, flt := int, break/continue in loops with defer and gc regions, module functions
+// named like built-ins, call().field, &flt arguments, globals keeping rbx intact, and the GC with threads.
+// The program returns 0 when everything behaves.
+uses bytes
+
+type Pair: record
+begin
+    a: int
+    b: flt
+end
+
+global total: int := 0
+global const MASK: int := 0xFF_FF
+
+module cx
+begin
+    fn read(fd: int): int
+    begin
+        return fd + 100
+    end
+
+    fn free(x: int): int
+    begin
+        return x * 2
+    end
+
+    fn both(): int
+    begin
+        return read(1) + free(3)
+    end
+end
+
+fn makePair(a: int): Pair
+begin
+    var p: Pair
+    p.a := a
+    p.b := 0.5
+    return p
+end
+
+fn half(p: *flt)
+begin
+    *p := *p / 2.0
+end
+
+fn find(k: int): *Pair
+begin
+    if k = 0 { return null }
+    var p: *Pair := alloc(sizeof(Pair))
+    p.a := k
+    return p
+end
+
+fn sum3(a: int, b: int, c: int): int
+begin
+    return a + b + c
+end
+
+// uses rbx-allocated locals around global reads (the old xeglobal.raw bug zeroed the caller's rbx)
+fn globalsKeepRegisters(): int
+begin
+    var i: int := 0
+    var acc: int := 0
+    while i < 100 {
+        total := total + 1
+        acc := acc + i + total - total
+        i := i + 1
+    }
+    return acc
+end
+
+fn countWithGoto(): int
+begin
+    var n: int := 0
+    again:
+    n := n + 1
+    if n < 5 { goto again }
+    return n
+end
+
+fn bump(counter: *int)
+begin
+    *counter := *counter + 1
+end
+
+fn expect(name: string, ok: int): int
+begin
+    if ok = 0 {
+        writeln("FAIL ", name)
+        return 1
+    }
+    return 0
+end
+
+fn worker(data: *void): int
+begin
+    var round: int := 0
+    var bad: int := 0
+    while round < 200 {
+        var list: *[64]int := alloc(512)
+        (*list)[63] := round
+        gc.begin {
+            var scratch: *[64]int := alloc(512)
+            (*scratch)[0] := round
+            if (*scratch)[0] != round { bad := bad + 1 }
+        }
+        gc.end
+        if (*list)[63] != round { bad := bad + 1 }
+        round := round + 1
+    }
+    return bad
+end
+
+fn main(): int
+begin
+    var failed: int := 0
+    failed := failed + expect("hex", 0xff = 255 && 0x10 = 16 && MASK = 65535)
+    failed := failed + expect("binary", 0b1010 = 10)
+    failed := failed + expect("separators", 1_000_000 = 1000000)
+    failed := failed + expect("exponent", 1e3 = 1000.0 && 2.5e-1 = 0.25)
+    failed := failed + expect("char", 'a' = 97 && '\n' = 10 && '\'' = 39)
+    failed := failed + expect("sizeof", sizeof(Pair) = 16 && sizeof(int) = 8)
+    var f: flt := 3
+    failed := failed + expect("flt from int", f = 3.0)
+    half(&f)
+    failed := failed + expect("&flt argument", f = 1.5)
+    failed := failed + expect("call field", makePair(7).a = 7)
+    var p: *Pair := find(0)
+    failed := failed + expect("null", @p = 0 && p = null)
+    p := find(4)
+    failed := failed + expect("not null", p != null && p.a = 4)
+    failed := failed + expect("module built-in names", cx.both() = 107 && cx.read(1) = 101)
+    var spread: int := sum3(1,
+        2,
+        3)
+    failed := failed + expect("multi-line call", spread = 6)
+    failed := failed + expect("globals keep registers", globalsKeepRegisters() = 4950)
+    failed := failed + expect("goto", countWithGoto() = 5)
+    // for loops: to, downto, step; continue runs the step; the variable belongs to the loop
+    var sum: int := 0
+    for k := 1 to 10 { sum := sum + k }
+    failed := failed + expect("for to", sum = 55)
+    sum := 0
+    for k := 10 downto 1 step 3 { sum := sum * 100 + k }
+    failed := failed + expect("for downto step", sum = 10070401)
+    sum := 0
+    for k := 0 to 9 {
+        if k % 2 = 0 { continue }
+        if k = 7 { break }
+        sum := sum + k
+    }
+    failed := failed + expect("for continue break", sum = 9)
+    // break and continue in a loop with defer and a gc region
+    var deferred: int := 0
+    var i: int := 0
+    while i < 10 {
+        defer bump(&deferred)
+        i := i + 1
+        if i = 3 { continue }
+        if i = 6 { break }
+    }
+    failed := failed + expect("break with defer", i = 6 && deferred = 6)
+    i := 0
+    while i < 1000 {
+        i := i + 1
+        gc.begin {
+            var block: *[16]int := alloc(128)
+            (*block)[0] := i
+            if i % 2 = 0 { continue }
+            if i = 999 { break }
+        }
+        gc.end
+    }
+    failed := failed + expect("break in gc region", i = 999)
+    // binary-safe files
+    var data: *bytes.Buffer := bytes.new()
+    bytes.push(data, 0)
+    bytes.push(data, 255)
+    bytes.push(data, 0)
+    bytes.write_file("/tmp/xe-features-test.bin", data)
+    var back: *bytes.Buffer := bytes.read_file("/tmp/xe-features-test.bin")
+    failed := failed + expect("bytes file", @back != 0 && back.size = 3 && bytes.get(back, 1) = 255)
+    // the collector runs while threads are alive; regions are per thread
+    var ids: [3]int
+    var t: int := 0
+    while t < 3 {
+        ids[t] := thread.start(&worker, null)
+        t := t + 1
+    }
+    var bad: int := worker(null)
+    t := 0
+    while t < 3 {
+        bad := bad + thread.join(ids[t])
+        t := t + 1
+    }
+    runtime.gc.collect()
+    failed := failed + expect("threads and regions", bad = 0)
+    failed := failed + expect("collections with threads", runtime.gc.stats(0) > 0)
+    if failed = 0 { writeln("features ok") }
+    return failed
+end

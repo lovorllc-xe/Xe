@@ -2,11 +2,13 @@
 // socket (no libwayland): wl_shm pixel buffers, xdg-shell windows, pointer and keyboard input,
 // server-side decorations when the compositor offers them. Most programs should use `window`,
 // which picks Wayland or X11 automatically; this module is the Wayland half of it.
-// Keyboard input assumes a US layout (the keymap sent by the compositor is not parsed).
+// Keyboard input follows the compositor's keymap (any XKB layout, AltGr, several layouts; see xkbmap):
+// key_down events carry the typed character in ev.d with ev.flags = 2. Without a keymap a US layout is assumed.
 uses syscall
 uses clock
 uses x11
 uses wevent
+uses xkbmap
 
 module wayland
 begin
@@ -60,6 +62,13 @@ begin
         repeat_rate: int
         repeat_delay: int
         failed: int
+        keymap: *xkbmap.Keymap
+        group: int
+        altgr: int
+        fdq: *[8]int
+        fdq_count: int
+        repeat_char: int
+        repeat_flags: int
     end
 
     fn put64(buffer: *void, offset: int, value: int)
@@ -403,14 +412,56 @@ begin
         return 0
     end
 
+    fn take_fd(d: *wayland.Display): int
+    begin
+        if d.fdq_count = 0 { return -1 }
+        var fd: int := (*d.fdq)[0]
+        var i: int := 1
+        while i < d.fdq_count {
+            (*d.fdq)[i - 1] := (*d.fdq)[i]
+            i := i + 1
+        }
+        d.fdq_count := d.fdq_count - 1
+        return fd
+    end
+
+    // wl_keyboard.keymap: format 1 is an XKB text keymap in a file descriptor
+    fn load_keymap(d: *wayland.Display, format: int, size: int)
+    begin
+        var fd: int := take_fd(d)
+        if fd < 0 { return }
+        if format = 1 && size > 0 && size < 16777216 {
+            var mem: int := syscall.raw.invoke6(9, 0, size, 1, 2, fd, 0)
+            if mem > 4096 {
+                var base: *void := to_pointer(mem)
+                var text: string := str.builder("")
+                var i: int := 0
+                while i < size && x11.get8(base, i) != 0 {
+                    text := str.append(text, str.fromchar(x11.get8(base, i)))
+                    i := i + 1
+                }
+                syscall.raw.invoke3(11, mem, size, 0)
+                var map: *xkbmap.Keymap := xkbmap.parse(text)
+                if map.loaded = 1 { d.keymap := map }
+            }
+        }
+        syscall.io.close(fd)
+    end
+
     fn on_keyboard(d: *wayland.Display, op: int, p: *void, ev: *wevent.Event): int
     begin
+        if op = 0 {
+            load_keymap(d, x11.get32(p, 8), x11.get32(p, 12))
+            return 0
+        }
         if op = 4 {
             var mods: int := x11.get32(p, 12)
             var locked: int := x11.get32(p, 20)
             d.shift := mods & 1
             d.ctrl := (mods >> 2) & 1
             d.lock := (locked >> 1) & 1
+            d.altgr := ((mods | locked) >> 7) & 1
+            d.group := x11.get32(p, 24)
             return 0
         }
         if op = 5 {
@@ -422,9 +473,19 @@ begin
             var code: int := x11.get32(p, 16)
             if code >= 256 { return 0 }
             var symbol: int := symbol_for(d, code)
+            var typed: int := 0
+            if @d.keymap != 0 { typed := xkbmap.char_for(d.keymap, code, d.group, d.shift, d.altgr, d.lock) }
+            if typed >= 32 && typed <= 126 { symbol := typed }
+            if symbol = 0 && typed > 126 { symbol := 16777216 + typed }
             if symbol = 0 { return 0 }
             ev.a := symbol
             ev.b := code
+            ev.flags := 0
+            ev.d := 0
+            if @d.keymap != 0 {
+                ev.flags := 2
+                if typed >= 32 && d.ctrl = 0 { ev.d := typed }
+            }
             if x11.get32(p, 20) = 0 {
                 if d.repeat_code = code { d.repeat_code := 0 }
                 ev.kind := wevent.kind_key_up()
@@ -433,6 +494,8 @@ begin
             if (symbol < 65505 || symbol > 65518) && d.repeat_rate > 0 {
                 d.repeat_code := code
                 d.repeat_sym := symbol
+                d.repeat_char := ev.d
+                d.repeat_flags := ev.flags
                 d.repeat_next := clock.monotonic() + d.repeat_delay * 1000000
             }
             ev.kind := wevent.kind_key_down()
@@ -553,7 +616,42 @@ begin
         var ready: int := syscall.raw.invoke3(7, @fds, 1, timeout_ms)
         free(fds)
         if ready <= 0 { return 0 }
-        var n: int := syscall.io.read(d.fd, d.inbuf + d.in_len, 65536 - d.in_len)
+        // recvmsg, so file descriptors sent by the compositor (the keymap) arrive too
+        var iov: *[2]int := alloc(16)
+        (*iov)[0] := @d.inbuf + d.in_len
+        (*iov)[1] := 65536 - d.in_len
+        var control: *[32]int := alloc(256)
+        var msg: *[8]int := alloc(64)
+        (*msg)[2] := @iov
+        (*msg)[3] := 1
+        (*msg)[4] := @control
+        (*msg)[5] := 256
+        var n: int := syscall.raw.invoke3(47, d.fd, @msg, 1073741824)
+        if n > 0 {
+            var used: int := (*msg)[5]
+            var offset: int := 0
+            while offset + 16 <= used {
+                var length: int := (*control)[offset / 8]
+                var level: int := x11.get32(control, offset + 8)
+                var kind: int := x11.get32(control, offset + 12)
+                if level = 1 && kind = 1 {
+                    var at: int := 16
+                    while at + 4 <= length {
+                        if d.fdq_count < 8 {
+                            (*d.fdq)[d.fdq_count] := x11.get32(control, offset + at)
+                            d.fdq_count := d.fdq_count + 1
+                        }
+                        else { syscall.io.close(x11.get32(control, offset + at)) }
+                        at := at + 4
+                    }
+                }
+                if length < 16 { offset := used }
+                else { offset := offset + ((length + 7) / 8) * 8 }
+            }
+        }
+        free(iov)
+        free(control)
+        free(msg)
         if n <= 0 { return -1 }
         d.in_len := d.in_len + n
         return 1
@@ -587,13 +685,15 @@ begin
         }
         var fd: int := x11.connect_socket(path)
         if fd < 0 { return none }
-        var d: *wayland.Display := alloc(512)
+        var d: *wayland.Display := alloc(1024)
         runtime.mem.set(d, 0, 512)
         d.fd := fd
         d.out := alloc(32768 + 64)
         d.inbuf := alloc(65536 + 64)
         d.scratch := alloc(64)
         d.busy := alloc(16)
+        d.fdq := alloc(64)
+        d.fdq_count := 0
         d.next_id := 2
         d.repeat_rate := 25
         d.repeat_delay := 600
@@ -699,6 +799,8 @@ begin
                     ev.kind := wevent.kind_key_down()
                     ev.a := d.repeat_sym
                     ev.b := d.repeat_code
+                    ev.flags := d.repeat_flags
+                    ev.d := d.repeat_char
                     result := wevent.kind_key_down()
                     searching := 0
                 }

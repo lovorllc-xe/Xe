@@ -274,8 +274,10 @@ begin
             var index: int := key_index(symbol)
             if (*win.keys)[index] = 0 { (*win.edges)[index] := 1 }
             (*win.keys)[index] := 1
-            if ev.flags = 0 {
-                if symbol >= 32 && symbol <= 126 { queue_char(win, symbol) }
+            // flags 2: the backend knows the typed character (ev.d, 0 for none), for example from the keymap
+            if ev.flags = 2 && ev.d >= 32 { queue_char(win, ev.d) }
+            if ev.flags = 0 || ev.flags = 2 {
+                if ev.flags = 0 && symbol >= 32 && symbol <= 126 { queue_char(win, symbol) }
                 if symbol = 65293 { queue_char(win, 10) }
                 if symbol = 65288 { queue_char(win, 8) }
                 if symbol = 65289 { queue_char(win, 9) }

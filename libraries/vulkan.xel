@@ -953,7 +953,9 @@ begin
     // ======================================================================== buffers
 
     // A host-visible, host-coherent buffer of `size` bytes usable as storage/uniform/vertex/index/transfer
-    // buffer. `.data` points at its mapped memory.
+    // buffer. `.data` points at its mapped memory. The GPU reads it over the bus every time it is used: fine for
+    // data that changes every frame or for compute results, slow for static meshes and textures on a discrete GPU.
+    // For static data use buffer_device + buffer_upload (device-local memory, copied once).
     fn buffer_new(vk: *vulkan.Vulkan, size: int): *vulkan.Buffer
     begin
         return buffer_new_usage(vk, size, 243)
@@ -1018,9 +1020,93 @@ begin
         return buffer
     end
 
+    // A buffer in the GPU's own memory (not mapped: `.data` is null). usage as in buffer_new_usage; transfer-dst is
+    // added so buffer_upload can fill it. The fastest kind of buffer for vertices, indices and uniforms that rarely
+    // change. On integrated GPUs it is the same memory as buffer_new.
+    fn buffer_device(vk: *vulkan.Vulkan, size: int, usage: int): *vulkan.Buffer
+    begin
+        var none: *vulkan.Buffer
+        var real_size: int := size
+        if real_size < 4 { real_size := 4 }
+        var buffer: *vulkan.Buffer := alloc(48)
+        buffer.size := real_size
+        buffer.data := none
+        var info: *void := ffi.block(56)
+        ffi.put32(info, 0, 12)
+        ffi.put64(info, 24, real_size)
+        ffi.put32(info, 32, usage | 3)
+        var out: *void := ffi.block(16)
+        if call(vk, "vkCreateBuffer", vk.device, @info, 0, @out, 0, 0) != 0 {
+            free(buffer)
+            return none
+        }
+        buffer.handle := ffi.get64(out, 0)
+        var requirements: *void := ffi.block(32)
+        call(vk, "vkGetBufferMemoryRequirements", vk.device, buffer.handle, @requirements, 0, 0, 0)
+        var type_index: int := memory_type_prefer(vk, ffi.get32(requirements, 16), 1, 0)
+        var allocate: *void := ffi.block(32)
+        ffi.put32(allocate, 0, 5)
+        ffi.put64(allocate, 16, ffi.get64(requirements, 0))
+        ffi.put32(allocate, 24, type_index)
+        if call(vk, "vkAllocateMemory", vk.device, @allocate, 0, @out, 0, 0) != 0 {
+            call(vk, "vkDestroyBuffer", vk.device, buffer.handle, 0, 0, 0, 0)
+            free(buffer)
+            return none
+        }
+        buffer.memory := ffi.get64(out, 0)
+        call(vk, "vkBindBufferMemory", vk.device, buffer.handle, buffer.memory, 0, 0, 0)
+        free(info)
+        free(out)
+        free(requirements)
+        free(allocate)
+        return buffer
+    end
+
+    fn copy_buffer(vk: *vulkan.Vulkan, source: *vulkan.Buffer, target: *vulkan.Buffer, bytes: int): int
+    begin
+        var result: int := single_begin(vk)
+        if result != 0 { return result }
+        var region: *void := ffi.block(24)
+        ffi.put64(region, 16, bytes)
+        call(vk, "vkCmdCopyBuffer", vk.single, source.handle, target.handle, 1, @region, 0)
+        memory_barrier(vk, vk.single, 4096, 4096, 65536, 16383)
+        free(region)
+        return single_end(vk)
+    end
+
+    // Copies `bytes` bytes from raw memory into a buffer (any kind) through a staging buffer, and waits.
+    fn buffer_upload(vk: *vulkan.Vulkan, buffer: *vulkan.Buffer, data: *void, bytes: int): int
+    begin
+        if @buffer.data != 0 {
+            runtime.mem.copy(buffer.data, data, bytes)
+            return 0
+        }
+        var staging: *vulkan.Buffer := buffer_new_usage(vk, bytes, 1)
+        if @staging = 0 { return -2 }
+        runtime.mem.copy(staging.data, data, bytes)
+        var result: int := copy_buffer(vk, staging, buffer, bytes)
+        buffer_free(vk, staging)
+        return result
+    end
+
+    // Copies `bytes` bytes of a buffer (any kind) into raw memory, and waits.
+    fn buffer_download(vk: *vulkan.Vulkan, buffer: *vulkan.Buffer, data: *void, bytes: int): int
+    begin
+        if @buffer.data != 0 {
+            runtime.mem.copy(data, buffer.data, bytes)
+            return 0
+        }
+        var staging: *vulkan.Buffer := buffer_readback(vk, bytes)
+        if @staging = 0 { return -2 }
+        var result: int := copy_buffer(vk, buffer, staging, bytes)
+        if result = 0 { runtime.mem.copy(data, staging.data, bytes) }
+        buffer_free(vk, staging)
+        return result
+    end
+
     fn buffer_free(vk: *vulkan.Vulkan, buffer: *vulkan.Buffer)
     begin
-        call(vk, "vkUnmapMemory", vk.device, buffer.memory, 0, 0, 0, 0)
+        if @buffer.data != 0 { call(vk, "vkUnmapMemory", vk.device, buffer.memory, 0, 0, 0, 0) }
         call(vk, "vkDestroyBuffer", vk.device, buffer.handle, 0, 0, 0, 0)
         call(vk, "vkFreeMemory", vk.device, buffer.memory, 0, 0, 0, 0)
         free(buffer)

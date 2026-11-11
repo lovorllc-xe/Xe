@@ -226,6 +226,7 @@ begin
         if kind = ast.memberKind() && expressionType(source, pool, functionId, id) = "flt" { return 1 }
         if kind = ast.unaryKind() {
             if ast.read(pool, id, 10) = 42 && expressionType(source, pool, functionId, id) = "flt" { return 1 }
+            if ast.read(pool, id, 10) != 45 { return 0 }
             return floatExpressionType(source, pool, functionId, ast.read(pool, id, 3))
         }
         if kind = ast.binaryKind() {
@@ -1265,6 +1266,7 @@ begin
             else {
                 if baseKind = ast.indexKind() { address := arrayElementAddress(source, pool, functionId, base) }
                 else {
+                    if baseKind = ast.callKind() && recordWordCount(source, baseType) > 0 { address := callCode(source, pool, functionId, base) }
                     if baseKind = ast.nameKind() {
                         var localOffset: int := boundLocalOffset(source, pool, functionId, base)
                         if localOffset >= 0 {
@@ -1426,25 +1428,25 @@ begin
                     if ast.read(pool, condition, 0) = ast.binaryKind() && ast.read(pool, condition, 10) = 60 {
                         var conditionIndex: int := ast.read(pool, condition, 3)
                         if conditionIndex >= 0 && ast.read(pool, conditionIndex, 0) = ast.nameKind() && ast.read(pool, conditionIndex, 11) = binding {
-                                // Resolve the latest direct initialization before
-                                // this loop (for example `i := 1` after a declaration
-                                // initialized to zero), then reject hidden writes.
-                                var initial: [3]int := loopInitialCounterValue(source, pool, functionId, loop, binding)
-                                if initial[0] = 0 {
-                                    // Nested loop declarations are not direct
-                                    // entries in the function statement chain.
-                                    // In that case, start from the declaration
-                                    // initializer; the all-node scan below
-                                    // rejects any intervening mutation.
-                                    var declaredInitial: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, binding, 6), 0)
-                                    if declaredInitial[0] = 1 {
-                                        initial[0] := 1
-                                        initial[1] := declaredInitial[1]
-                                        initial[2] := ast.read(pool, binding, 2)
-                                    }
+                            // Resolve the latest direct initialization before
+                            // this loop (for example `i := 1` after a declaration
+                            // initialized to zero), then reject hidden writes.
+                            var initial: [3]int := loopInitialCounterValue(source, pool, functionId, loop, binding)
+                            if initial[0] = 0 {
+                                // Nested loop declarations are not direct
+                                // entries in the function statement chain.
+                                // In that case, start from the declaration
+                                // initializer; the all-node scan below
+                                // rejects any intervening mutation.
+                                var declaredInitial: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, binding, 6), 0)
+                                if declaredInitial[0] = 1 {
+                                    initial[0] := 1
+                                    initial[1] := declaredInitial[1]
+                                    initial[2] := ast.read(pool, binding, 2)
                                 }
+                            }
                             var bound: [2]int := compileTimeIntegerValue(source, pool, ast.read(pool, condition, 4), 0)
-                                if initial[0] = 1 && initial[1] >= 0 && initial[1] <= 1000000000 && bound[0] = 1 && bound[1] > initial[1] && bound[1] <= 1000000000 {
+                            if initial[0] = 1 && initial[1] >= 0 && initial[1] <= 1000000000 && bound[0] = 1 && bound[1] > initial[1] && bound[1] <= 1000000000 {
                                 // The counter must not be changed, aliased, or
                                 // exposed to inline assembly before this loop.
                                 // The loop-initial-value helper only follows
@@ -2073,51 +2075,51 @@ begin
             else { item := lexer.scan(source, position, line) }
             if position > str.length(source) { }
             else {
-            if item[0] = token.endKind() { position := str.length(source) + 1 }
-            else {
-                if item[0] = token.nameKind() && str.slice(source, item[1], item[2]) = "type" {
-                    var alias: [4]int := lexer.scan(source, item[2], item[3])
-                    var colon: [4]int := lexer.scan(source, alias[2], alias[3])
-                    var aliasScope: string := ""
-                    var aliasMatches: int := 0
-                    if alias[0] = token.nameKind() && colon[0] = 58 && str.slice(source, alias[1], alias[2]) = aliasName { aliasMatches := 1 }
-                    if aliasMatches = 1 { aliasScope := moduleAt(source, item[1]) }
-                    if alias[0] = token.nameKind() && colon[0] = 58 && str.slice(source, alias[1], alias[2]) = aliasName && (aliasScope = desiredScope || str.length(aliasScope) = 0) {
-                        var marker: [4]int := lexer.scan(source, colon[2], colon[3])
-                        var resolved: string := ""
-                        if str.slice(source, marker[1], marker[2]) = "record" {
-                            resolved := aliasName
-                            if str.length(aliasScope) > 0 { resolved := aliasScope + "." + aliasName }
-                        }
-                        else {
-                            var start: int := colon[2]
-                            var finish: [4]int := lexer.scan(source, start, colon[3])
-                            while finish[0] != 10 && finish[0] != token.endKind() { finish := lexer.scan(source, finish[2], finish[3]) }
-                            var raw: string := str.builder("")
-                            var offset: int := start
-                            while offset < finish[1] {
-                                var character: int := str.char(source, offset)
-                                if character > 32 { raw := str.append(raw, token.character(character)) }
-                                offset := offset + 1
+                if item[0] = token.endKind() { position := str.length(source) + 1 }
+                else {
+                    if item[0] = token.nameKind() && str.slice(source, item[1], item[2]) = "type" {
+                        var alias: [4]int := lexer.scan(source, item[2], item[3])
+                        var colon: [4]int := lexer.scan(source, alias[2], alias[3])
+                        var aliasScope: string := ""
+                        var aliasMatches: int := 0
+                        if alias[0] = token.nameKind() && colon[0] = 58 && str.slice(source, alias[1], alias[2]) = aliasName { aliasMatches := 1 }
+                        if aliasMatches = 1 { aliasScope := moduleAt(source, item[1]) }
+                        if alias[0] = token.nameKind() && colon[0] = 58 && str.slice(source, alias[1], alias[2]) = aliasName && (aliasScope = desiredScope || str.length(aliasScope) = 0) {
+                            var marker: [4]int := lexer.scan(source, colon[2], colon[3])
+                            var resolved: string := ""
+                            if str.slice(source, marker[1], marker[2]) = "record" {
+                                resolved := aliasName
+                                if str.length(aliasScope) > 0 { resolved := aliasScope + "." + aliasName }
                             }
-                            resolved := resolveAliasType(source, raw, depth + 1, aliasScope)
-                        }
-                        if str.length(resolved) = 0 { return "" }
-                        if aliasScope = desiredScope && str.length(desiredScope) > 0 {
-                            if str.length(foundScoped) > 0 && foundScoped != resolved { return "" }
-                            foundScoped := resolved
-                        }
-                        else {
-                            if str.length(aliasScope) = 0 {
-                                if str.length(foundGlobal) > 0 && foundGlobal != resolved { return "" }
-                                foundGlobal := resolved
+                            else {
+                                var start: int := colon[2]
+                                var finish: [4]int := lexer.scan(source, start, colon[3])
+                                while finish[0] != 10 && finish[0] != token.endKind() { finish := lexer.scan(source, finish[2], finish[3]) }
+                                var raw: string := str.builder("")
+                                var offset: int := start
+                                while offset < finish[1] {
+                                    var character: int := str.char(source, offset)
+                                    if character > 32 { raw := str.append(raw, token.character(character)) }
+                                    offset := offset + 1
+                                }
+                                resolved := resolveAliasType(source, raw, depth + 1, aliasScope)
+                            }
+                            if str.length(resolved) = 0 { return "" }
+                            if aliasScope = desiredScope && str.length(desiredScope) > 0 {
+                                if str.length(foundScoped) > 0 && foundScoped != resolved { return "" }
+                                foundScoped := resolved
+                            }
+                            else {
+                                if str.length(aliasScope) = 0 {
+                                    if str.length(foundGlobal) > 0 && foundGlobal != resolved { return "" }
+                                    foundGlobal := resolved
+                                }
                             }
                         }
                     }
+                    position := item[2]
+                    line := item[3]
                 }
-                position := item[2]
-                line := item[3]
-            }
             }
         }
         if str.length(foundScoped) > 0 { return foundScoped }
@@ -2130,7 +2132,11 @@ begin
         var position: int := start
         while position < finish {
             var character: int := str.char(source, position)
-            if character > 32 { value := str.append(value, token.character(character)) }
+            // a // comment ends the type (fn f(): int  // note)
+            if character = 47 && position + 1 < finish && str.char(source, position + 1) = 47 {
+                while position < finish && str.char(source, position) != 10 { position := position + 1 }
+            }
+            else { if character > 32 { value := str.append(value, token.character(character)) } }
             position := position + 1
         }
         if primitiveType(value) = 1 { return value }
@@ -2150,8 +2156,11 @@ begin
         var position: int := start
         while position < finish {
             var character: int := str.char(source, position)
-            if character > 32 {
-                value := str.append(value, token.character(character))
+            if character = 47 && position + 1 < finish && str.char(source, position + 1) = 47 {
+                while position < finish && str.char(source, position) != 10 { position := position + 1 }
+            }
+            else {
+                if character > 32 { value := str.append(value, token.character(character)) }
             }
             position := position + 1
         }
@@ -2215,7 +2224,7 @@ begin
                     var type: [4]int := parser.significant(source, colon[2], colon[3])
                     if name[0] = token.nameKind() && colon[0] = 58 && name[1] = resolvedDeclaration {
                         var typeFinish: [4]int := type
-                    while typeFinish[0] != token.assignKind() && typeFinish[0] != 10 && typeFinish[0] != token.endKind() && typeFinish[1] < finish {
+                        while typeFinish[0] != token.assignKind() && typeFinish[0] != 10 && typeFinish[0] != token.endKind() && typeFinish[1] < finish {
                             typeFinish := lexer.scan(source, typeFinish[2], typeFinish[3])
                         }
                         return typeTextForFunction(source, pool, functionId, type[1], typeFinish[1], type[3])
@@ -2932,6 +2941,8 @@ begin
                 if (left = "int" || left = "flt") && (right = "int" || right = "flt") { return "int" }
                 if (left = "string" || left = "str") && (right = "string" || right = "str") { return "int" }
                 if str.length(left) > 0 && str.char(left, 0) = 42 && argumentTypeMatches(left, right) = 1 { return "int" }
+                if str.length(left) > 0 && str.char(left, 0) = 42 && right = "int" { return "int" }
+                if str.length(right) > 0 && str.char(right, 0) = 42 && left = "int" { return "int" }
                 return ""
             }
             if operation = 258 || operation = 259 || operation = 60 || operation = 62 {
@@ -3264,15 +3275,15 @@ begin
                     }
                     if direct = 0 { cursor := -1 }
                     else {
-                    var argumentOperand: string := simpleOperand(argumentCode)
-                    if cursor = complexArgument { }
-                    else {
-                        if str.length(argumentOperand) > 0 { directOutput := str.append(directOutput, " mov " + integerArgumentRegister(directIndex) + ", " + argumentOperand + "\n") }
-                        else { directOutput := str.append(directOutput, argumentCode + " mov " + integerArgumentRegister(directIndex) + ", rax\n") }
-                    }
-                    cursor := ast.read(pool, cursor, 5)
-                    directIndex := directIndex + 1
-                    directParameterIndex := directParameterIndex + 1
+                        var argumentOperand: string := simpleOperand(argumentCode)
+                        if cursor = complexArgument { }
+                        else {
+                            if str.length(argumentOperand) > 0 { directOutput := str.append(directOutput, " mov " + integerArgumentRegister(directIndex) + ", " + argumentOperand + "\n") }
+                            else { directOutput := str.append(directOutput, argumentCode + " mov " + integerArgumentRegister(directIndex) + ", rax\n") }
+                        }
+                        cursor := ast.read(pool, cursor, 5)
+                        directIndex := directIndex + 1
+                        directParameterIndex := directParameterIndex + 1
                     }
                 }
                 if direct = 1 { return directOutput + " call " + functionLabel(name) + "\n" }
@@ -3293,29 +3304,29 @@ begin
                 output := str.append(output, record + " sub rsp, 16\n mov qword ptr [rsp], rax\n")
             }
             else {
-            if arrayExpressionType(source, pool, functionId, cursor) = 1 {
-                var array: string := arrayAddress(source, pool, functionId, cursor)
-                if str.length(array) = 0 {
-                    return ""
-                }
-                output := str.append(output, array + " sub rsp, 16\n mov qword ptr [rsp], rax\n")
-            }
-            else {
-                if floatExpressionType(source, pool, functionId, cursor) = 1 {
-                    var floating: string := floatExpression(source, pool, functionId, cursor)
-                    if str.length(floating) = 0 {
+                if arrayExpressionType(source, pool, functionId, cursor) = 1 {
+                    var array: string := arrayAddress(source, pool, functionId, cursor)
+                    if str.length(array) = 0 {
                         return ""
                     }
-                    output := str.append(output, floating + " sub rsp, 16\n movsd qword ptr [rsp], xmm0\n")
+                    output := str.append(output, array + " sub rsp, 16\n mov qword ptr [rsp], rax\n")
                 }
                 else {
-                    var integer: string := integerExpression(source, pool, functionId, cursor)
-                    if str.length(integer) = 0 {
-                        return ""
+                    if floatExpressionType(source, pool, functionId, cursor) = 1 {
+                        var floating: string := floatExpression(source, pool, functionId, cursor)
+                        if str.length(floating) = 0 {
+                            return ""
+                        }
+                        output := str.append(output, floating + " sub rsp, 16\n movsd qword ptr [rsp], xmm0\n")
                     }
-                    output := str.append(output, integer + " sub rsp, 16\n mov qword ptr [rsp], rax\n")
+                    else {
+                        var integer: string := integerExpression(source, pool, functionId, cursor)
+                        if str.length(integer) = 0 {
+                            return ""
+                        }
+                        output := str.append(output, integer + " sub rsp, 16\n mov qword ptr [rsp], rax\n")
+                    }
                 }
-            }
             }
             cursor := ast.read(pool, cursor, 5)
             stagedParameterIndex := stagedParameterIndex + 1
@@ -3416,36 +3427,36 @@ begin
                             else {
                                 if name = "runtime.hw.write32" { output := str.append(output, " mov dword ptr [rdi], esi\n xor eax, eax\n") }
                                 else {
-        if name = "syscall.invoke3" {
-            output := str.append(output, " mov rax, rdi\n mov rdi, rsi\n mov rsi, rdx\n mov rdx, rcx\n syscall\n")
-        }
-        else {
-            if name = "syscall.invoke6" {
-                output := str.append(output, " mov rax, rdi\n mov r10, r8\n mov r8, r9\n mov r9, qword ptr [rsp]\n mov rdi, rsi\n mov rsi, rdx\n mov rdx, rcx\n syscall\n")
-            }
-            else {
-                if name = "env.get" { output := str.append(output, " call xeenv.get\n") }
-                else {
-                    if name = "process.spawn" { output := str.append(output, " call xeprocess.spawn\n") }
-                    else {
-                        if name = "process.wait" { output := str.append(output, " call xeprocess.wait\n") }
-                        else {
-                            if name = "thread.start" { output := str.append(output, " call xe.thread.start\n") }
-                            else {
-                                if name = "thread.join" { output := str.append(output, " call xe.thread.join\n") }
-                                else { output := str.append(output, " call " + functionLabel(name) + "\n") }
+                                    if name = "syscall.invoke3" {
+                                        output := str.append(output, " mov rax, rdi\n mov rdi, rsi\n mov rsi, rdx\n mov rdx, rcx\n syscall\n")
+                                    }
+                                    else {
+                                        if name = "syscall.invoke6" {
+                                            output := str.append(output, " mov rax, rdi\n mov r10, r8\n mov r8, r9\n mov r9, qword ptr [rsp]\n mov rdi, rsi\n mov rsi, rdx\n mov rdx, rcx\n syscall\n")
+                                        }
+                                        else {
+                                            if name = "env.get" { output := str.append(output, " call xeenv.get\n") }
+                                            else {
+                                                if name = "process.spawn" { output := str.append(output, " call xeprocess.spawn\n") }
+                                                else {
+                                                    if name = "process.wait" { output := str.append(output, " call xeprocess.wait\n") }
+                                                    else {
+                                                        if name = "thread.start" { output := str.append(output, " call xe.thread.start\n") }
+                                                        else {
+                                                            if name = "thread.join" { output := str.append(output, " call xe.thread.join\n") }
+                                                            else { output := str.append(output, " call " + functionLabel(name) + "\n") }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-                                }
-                            }
-                    }
-                }
-            }
-        }
         }
         return output + " add rsp, " + token.number(stackBytes + padding + count * 16) + "\n"
     end
@@ -4252,11 +4263,14 @@ begin
     fn emitStatementCode(source: string, pool: *[12582912]int, functionId: int, statement: int): string
     begin
         var kind: int := ast.read(pool, statement, 0)
+        if kind = ast.labelKind() { return ".LxeGoto" + token.number(functionId) + "_" + str.slice(source, ast.read(pool, statement, 3), ast.read(pool, statement, 4)) + ":\n" }
+        if kind = ast.gotoKind() { return " jmp .LxeGoto" + token.number(functionId) + "_" + str.slice(source, ast.read(pool, statement, 3), ast.read(pool, statement, 4)) + "\n" }
         if kind = ast.breakKind() || kind = ast.continueKind() {
             var loop: int := enclosingLoop(pool, functionId, statement)
             if loop < 0 { return "" }
-            if kind = ast.breakKind() { return " jmp .LxeWhileEnd" + token.number(loop) + "\n" }
-            return " jmp .LxeWhile" + token.number(loop) + "\n"
+            var cleanup: string := deferredBlock(source, pool, functionId, ast.read(pool, loop, 6), ast.read(pool, statement, 1))
+            if kind = ast.breakKind() { return cleanup + " jmp .LxeWhileEnd" + token.number(loop) + "\n" }
+            return cleanup + " jmp .LxeWhile" + token.number(loop) + "\n"
         }
         if kind = ast.variableKind() {
             var declaredType: string := typeTextForFunction(source, pool, functionId, ast.read(pool, statement, 7), ast.read(pool, statement, 8), 1)
@@ -4482,6 +4496,14 @@ begin
             var again: string := ".LxeWhile" + id
             var finish: string := ".LxeWhileEnd" + id
             var condition: string := branchCondition(source, pool, functionId, ast.read(pool, statement, 3), finish, 0)
+            if ast.read(pool, statement, 4) >= 0 {
+                // for loop: declaration, then test; `continue` (and the end of the body) jump to the step
+                var test: string := ".LxeForTest" + id
+                var init: string := emitStatementCode(source, pool, functionId, ast.read(pool, statement, 4))
+                var step: string := emitStatementCode(source, pool, functionId, ast.read(pool, statement, 7))
+                if str.length(init) = 0 || str.length(step) = 0 || str.length(condition) = 0 { return "" }
+                return init + " jmp " + test + "\n" + again + ":\n" + step + test + ":\n" + condition + emitBlock(source, pool, functionId, ast.read(pool, statement, 6)) + " jmp " + again + "\n" + finish + ":\n"
+            }
             return again + ":\n" + condition + emitBlock(source, pool, functionId, ast.read(pool, statement, 6)) + " jmp " + again + "\n" + finish + ":\n"
         }
         if kind = ast.switchKind() {
@@ -4579,22 +4601,22 @@ begin
                             integerIndex := integerIndex + 1
                         }
                         else {
-                        if type = "flt" {
-                            if floatIndex < 8 { parameters := str.append(parameters, " movsd qword ptr [rbp-" + token.number(destination) + "], " + floatArgumentRegister(floatIndex) + "\n") }
-                            else {
-                                parameters := str.append(parameters, " mov rax, qword ptr [rbp+" + token.number(16 + stackIndex * 8) + "]\n mov qword ptr [rbp-" + token.number(destination) + "], rax\n")
-                                stackIndex := stackIndex + 1
+                            if type = "flt" {
+                                if floatIndex < 8 { parameters := str.append(parameters, " movsd qword ptr [rbp-" + token.number(destination) + "], " + floatArgumentRegister(floatIndex) + "\n") }
+                                else {
+                                    parameters := str.append(parameters, " mov rax, qword ptr [rbp+" + token.number(16 + stackIndex * 8) + "]\n mov qword ptr [rbp-" + token.number(destination) + "], rax\n")
+                                    stackIndex := stackIndex + 1
+                                }
+                                floatIndex := floatIndex + 1
                             }
-                            floatIndex := floatIndex + 1
-                        }
-                        else {
-                            if integerIndex < 6 { parameters := str.append(parameters, " mov qword ptr [rbp-" + token.number(destination) + "], " + integerArgumentRegister(integerIndex) + "\n") }
                             else {
-                                parameters := str.append(parameters, " mov rax, qword ptr [rbp+" + token.number(16 + stackIndex * 8) + "]\n mov qword ptr [rbp-" + token.number(destination) + "], rax\n")
-                                stackIndex := stackIndex + 1
+                                if integerIndex < 6 { parameters := str.append(parameters, " mov qword ptr [rbp-" + token.number(destination) + "], " + integerArgumentRegister(integerIndex) + "\n") }
+                                else {
+                                    parameters := str.append(parameters, " mov rax, qword ptr [rbp+" + token.number(16 + stackIndex * 8) + "]\n mov qword ptr [rbp-" + token.number(destination) + "], rax\n")
+                                    stackIndex := stackIndex + 1
+                                }
+                                integerIndex := integerIndex + 1
                             }
-                            integerIndex := integerIndex + 1
-                        }
                         }
                         parameter := typeFinish
                         if parameter[0] = 44 { parameter := parser.significant(source, parameter[2], parameter[3]) }
@@ -4607,6 +4629,7 @@ begin
                     output := str.append(output, ".global " + label + "\n.type " + label + ", @function\n" + label + ":\n push rbp\n mov rbp, rsp\n sub rsp, " + token.number(frameSize) + "\n" + saveRegisters(source, pool, functionId) + parameters)
                     output := str.append(output, integerLocalStatements(source, pool, functionId))
                     output := str.append(output, integerReturnCode(source, pool, functionId))
+                    output := str.append(output, ".LxeFnEnd" + token.number(functionId) + ":\n")
                 }
             }
             functionId := ast.read(pool, functionId, 5)
@@ -4677,7 +4700,7 @@ begin
         var entry: string := runtime.startName()
         var separator: string := runtime.underscore()
         var output: string := str.builder(".intel" + separator + "syntax noprefix\n.section .rodata\n" + messages(source) + stringConstants(source) + floatConstants(source))
-        output := str.append(output, ".section .text\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n mov qword ptr [rip+.LxeStackBase], rsp\n call main\n mov edi, eax\n mov eax, 231\n syscall\n")
+        output := str.append(output, ".section .text\n.Ltext0:\n.global " + entry + "\n" + entry + ":\n mov rdi, qword ptr [rsp]\n mov qword ptr [rip+.LxeArgc], rdi\n lea rsi, [rsp+8]\n mov qword ptr [rip+.LxeArgv], rsi\n lea rdx, [rsi+rdi*8+8]\n mov qword ptr [rip+.LxeEnv], rdx\n mov qword ptr [rip+.LxeStackBase], rsp\n call main\n mov edi, eax\n mov eax, 231\n syscall\n")
         if debugEnabled(source) = 1 { output := str.append(output, debugPrepare(source, pool)) }
         var localCount: int := integerLocalCount(source, pool, mainId)
         var stackSpace: int := 40 + (localCount + arrayTemporaryWords(source, pool, mainId)) * 8
@@ -4685,8 +4708,11 @@ begin
         output := str.append(output, ".global main\n.type main, @function\nmain:\n push rbp\n mov rbp, rsp\n sub rsp, " + token.number(stackSpace) + "\n")
         output := str.append(output, integerLocalStatements(source, pool, mainId))
         output := str.append(output, integerReturnCode(source, pool, mainId))
+        output := str.append(output, ".LxeFnEnd" + token.number(mainId) + ":\n")
         output := str.append(output, integerHelpers(source, pool, program))
+        output := str.append(output, ".Letext0:\n")
         output := str.append(output, runtime.assembly())
+        if debugEnabled(source) = 1 { output := str.append(output, debug.sections(source, pool, program)) }
         output := str.append(output, ".section .note.GNU" + separator + "stack,\"\",@progbits\n")
         return optimizer.assembly(output)
     end

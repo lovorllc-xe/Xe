@@ -1,10 +1,52 @@
-XE 2.2.0
+XE 2.3.0
+
+WHAT CHANGED IN 2.3.0 (fixes and features from real use)
+=====================
+Existing programs keep working; these changed:
+
+ - Fixed: reading a global variable zeroed the caller's rbx (the generated xeglobal.raw used inline asm ending in
+   leave/ret, skipping the register restore). Functions containing asm no longer get register-allocated locals.
+ - Literals: hex 0xFF, binary 0b1010, separators 1_000_000 / 0xFFFF_FFFF, exponents 1e9 2.5e-3 (flt),
+   character literals 'a' '\n' '\t' '\0' '\\' '\'' (ints), null (the null pointer), sizeof(T) (bytes).
+ - for loops: "for i := 0 to n - 1 { ... }", "for i := n downto 1 step 2 { ... }". Bounds are inclusive, the
+   step (default 1) must be positive, i is a new int that exists only inside the loop, and continue runs the step.
+ - goto: "name:" alone on a line is a label; "goto name" jumps to it (same function; not in functions that use
+   defer or gc.begin).
+ - A call or index may span several lines: newlines inside ( ) and [ ] do not end the statement.
+ - break and continue work in loops that contain defer or gc.begin: the loop body's pending defers run and its
+   regions close before the jump.
+ - "var f: flt := 3" and "f := n" convert the int. "string + int" is an error that says how to convert.
+ - Record fields of call results (make(1).x), & of a flt local passed as an argument, "return null" from a
+   pointer function, and "p = null" comparisons now compile.
+ - Modules may define functions named read, write, free, new, delete, alloc, writeln, readln; inside the module
+   the unqualified name calls the module's function (outside: module.read). Top-level functions with these names
+   are reported as errors.
+ - Errors that used to say only "this call is not supported" name the sub-expression the code generator cannot
+   handle and point at it.
+ - xe --build -g emits DWARF variable information: gdb shows function arguments (info args), locals (info locals),
+   their types, records with fields, and pointers.
+ - Garbage collector and threads (Linux): the collector runs while threads are alive. It stops the other threads
+   with SIGPWR, scans their stacks and registers, and resumes them. gc.begin regions belong to the thread that
+   opened them. nanosleep-based sleeps (time.sleep_ms, clock.sleep_ns) resume after the pause; poll and epoll_wait
+   may return early with EINTR. On Windows the collector still waits until worker threads have finished.
+ - FFI callbacks: ffi.callback(&fn) returns a C function pointer that calls an Xe function (up to six int/pointer
+   arguments; on Windows a thunk converts the calling convention). Use it for g_signal_connect, qsort and similar.
+ - New libraries: truetype (anti-aliased TrueType text of any size, UTF-8, composite glyphs, glyph cache) and
+   xkbmap (XKB keymaps). Native Wayland windows follow the compositor's keymap: any layout, AltGr, several layouts.
+   key_down events carry the typed character (ev.flags = 2, ev.d = code point).
+ - bytes.read_file / bytes.write_file read and write whole binary files. math.sqrt and mathx.sqrt use the
+   sqrtsd instruction.
+ - vulkan.buffer_new is host-visible memory (fine for data the CPU rewrites every frame, slow for the GPU to read
+   on a discrete card). For static meshes use vulkan.buffer_device(vk, size, usage) + vulkan.buffer_upload;
+   vkscene does this for its models.
+ - Allocator, free and collector use register bit operations on the heap bitmaps (faster allocation and GC).
+ - tools/release.xe builds the Linux, Windows x86-64, Windows ARM64 (x64 emulation) and macOS (Rosetta 2) packages.
 
 WHAT CHANGED IN 2.2.0 (language features, tooling, platforms)
 =====================
 Existing syntax is unchanged; these were added:
 
- - else if; break and continue (innermost while; not in a loop containing defer or gc.begin).
+ - else if; break and continue (innermost while).
  - Global variables and constants: "global name: Type := value", "global const NAME: Type := expr" (also inside a
    module), and "enum Name begin a  b := 5  c end" (Name.a ...). Lowered by compiler/desugar.xe.
  - Generics: "type Pair<A, B>: record ... end", "fn largest<T>(a: T, b: T): T", used with explicit type arguments
@@ -24,12 +66,11 @@ The compiler, runtime and library set changed:
  - Diagnostics print file:line:col, the source line and a caret.
  - New allocator and conservative mark-and-sweep garbage collector:
    runtime.gc.collect(), runtime.gc.enable(flag), runtime.gc.stats(which); the
-   heapstats library wraps them. The collector never runs while threads are
-   active. free(0) is a no-op; double frees are ignored.
+   heapstats library wraps them. (Since 2.3 it also runs while threads are
+   alive on Linux.) free(0) is a no-op; double frees are ignored.
  - Record fields auto-dereference through pointers: node.next works for a
-   *Node. Use @p to turn a pointer into an int (null check: @p = 0).
- - Names that match builtins (new, delete, read, write, free) cannot be used
-   unqualified for module functions; call them as module.new().
+   *Node. Use @p to turn a pointer into an int (null check: @p = 0, or p = null since 2.3).
+ - (Until 2.3, module functions named like builtins had to be called as module.new().)
  - xe --version / -v / -V prints the colored logo.
  - Platforms: xe --build prog.xe -o out -p linux|win|macos (see README, Platforms). Linux window backends: X11 (default), Wayland.
  - 174 libraries; see docs/libraries.md. New: canvas, image, window, wayland, x11, gui, gfx3d, game, ffi, vulkan,
@@ -51,10 +92,11 @@ PART I — FIRST DESCRIPTION
 
 Xe is a statically checked programming language with a small syntax, records,
 fixed-size arrays, pointers, explicit memory management, and a native-code
-compiler. The installed self-hosted compiler currently targets Linux x86-64
-for general-purpose executable builds. It emits native assembly and links it
+compiler. The self-hosted compiler targets Linux x86-64 and cross-builds
+Windows x86-64 and macOS x86-64 executables (xe --build -p win|macos). It emits native assembly and links it
 with the system assembler and linker. The compiler itself can be built from
-its Xe source after a small C++ bootstrap build.
+its Xe source starting from a checked-in assembly seed (scripts/bootstrap.sh;
+only as, ld and gzip are needed).
 
 Xe source files end in .xe. Importable source libraries end in .xel. A normal
 program starts at fn main(): int. The returned integer becomes the process
@@ -80,13 +122,13 @@ Build a source file to a native executable and run it:
     ./hello.xee
 
 The output extension .xee is a naming convention. The result is a normal
-native executable; the shell executes it with ./hello.xee. Xe does not have
-an interpreter command such as xe --run.
+native executable; the shell executes it with ./hello.xee. To build to a
+temporary file and run at once: xe --run hello.xe -- args.
 
-The platform bundles provide compiler installation scripts, but the current
-general executable backend is Linux x86-64. macOS and Windows packages
-currently build the compiler command-line program; they do not provide the
-same complete native runtime target as Linux.
+Release packages exist for Linux x86-64, Windows x86-64, Windows on ARM
+(the x86-64 build under emulation) and macOS (the x86-64 build under
+Rosetta 2); tools/release.xe builds them all. Linux is the fully tested
+target; see README.md, Platforms.
 
 PART II — FULL TUTORIAL
 =======================
@@ -306,11 +348,36 @@ while repeats while its condition is true:
         index := index + 1
     }
 
-The C++ bootstrap parser also recognizes for (condition) { ... } as a
-condition-controlled loop, similar to while. The installed self-hosted compiler
-currently supports while but does not parse for, so use while in portable Xe
-programs. Xe does not currently provide C-style for(init; condition; step),
-break, or continue statements.
+Besides while there is a counting loop: for i := first to last { ... } (or
+downto, with an optional step) declares i as an int that belongs to the loop
+and runs while i <= last (i >= last for downto); last is evaluated before
+every iteration:
+
+    for i := 0 to 9 { writeln(i) }
+    for i := 10 downto 0 step 2 { writeln(i) }
+
+Inside a loop, break leaves the innermost loop and continue starts the next
+iteration (a for loop runs its step first); pending defers of the loop body run and
+its gc regions close first. A label is a name followed by ':' alone on a line;
+goto name jumps to it (same function, not in functions that use defer or
+gc.begin):
+
+    var i: int := 0
+    while 1 {
+        i := i + 1
+        if i % 2 = 0 { continue }
+        if i > 9 { break }
+        writeln(i)
+    }
+
+    fn retry(): int
+    begin
+        var attempts: int := 0
+    again:
+        attempts := attempts + 1
+        if attempts < 3 { goto again }
+        return attempts
+    end
 
 switch selects one matching case, or default if no case matches. Execution
 leaves the switch after its selected arm:
@@ -742,7 +809,7 @@ or file rotation.
     math.sqrt(value: flt): flt
     math.clamp(value: int, minimum: int, maximum: int): int
 
-math.sqrt uses Newton iteration and returns 0 for nonpositive input.
+math.sqrt uses the sqrtsd instruction and returns 0 for nonpositive input.
 math.clamp swaps reversed endpoints.
 
     math_ext.reduce_angle(angle: flt): flt

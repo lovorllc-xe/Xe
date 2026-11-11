@@ -604,9 +604,328 @@ begin
         return out + initial
     end
 
-    // The entry point: returns the lowered source, or "" after reporting an error.
-    fn run(source: string): string
+    fn hexDigit(c: int): int
     begin
+        if c >= 48 && c <= 57 { return c - 48 }
+        if c >= 97 && c <= 102 { return c - 87 }
+        if c >= 65 && c <= 70 { return c - 55 }
+        return -1
+    end
+
+    // Converts the digits of a number written in base `base` (underscores allowed); -1 when a digit is wrong.
+    fn digitsValue(text: string, from: int, base: int): int
+    begin
+        var value: int := 0
+        var seen: int := 0
+        var i: int := from
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            if c != 95 {
+                var d: int := hexDigit(c)
+                if d < 0 || d >= base { return -1 }
+                value := value * base + d
+                seen := 1
+            }
+            i := i + 1
+        }
+        if seen = 0 { return -1 }
+        return value
+    end
+
+    fn charValue(source: string, quote: int, out: *[2]int): int
+    begin
+        var size: int := str.length(source)
+        if quote + 2 >= size { return 0 }
+        var c: int := str.char(source, quote + 1)
+        var finish: int := quote + 2
+        if c = 92 {
+            if quote + 3 >= size { return 0 }
+            var e: int := str.char(source, quote + 2)
+            finish := quote + 3
+            if e = 110 { c := 10 }
+            else {
+                if e = 116 { c := 9 }
+                else {
+                    if e = 114 { c := 13 }
+                    else {
+                        if e = 48 { c := 0 }
+                        else { c := e }
+                    }
+                }
+            }
+        }
+        if str.char(source, finish) != 39 { return 0 }
+        (*out)[0] := c
+        (*out)[1] := finish + 1
+        return 1
+    end
+
+    // Rewrites the literal forms the lexer does not know into plain decimals: 0xFF, 0b1010, 1_000_000, 1e9 / 2.5e-3,
+    // 'a' / '\n', `null` (0) and sizeof(Type) (the size in bytes). Only the spelling changes; lines do not move.
+    fn literals(source: string): string
+    begin
+        var out: string := str.builder("")
+        var copied: int := 0
+        var position: int := 0
+        var line: int := 1
+        var before: int := 0
+        var running: int := 1
+        var size: int := str.length(source)
+        while running = 1 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() { running := 0 }
+            else {
+                var replacement: string := ""
+                var finish: int := item[2]
+                if item[0] = token.numberKind() {
+                    var text: string := str.slice(source, item[1], item[2])
+                    var hasPrefix: int := 0
+                    if str.length(text) > 2 && str.char(text, 0) = 48 {
+                        var prefix: int := str.char(text, 1)
+                        if prefix = 120 || prefix = 88 {
+                            hasPrefix := 1
+                            var value: int := digitsValue(text, 2, 16)
+                            if value >= 0 { replacement := str.number(value) }
+                        }
+                        if prefix = 98 || prefix = 66 {
+                            hasPrefix := 1
+                            var value: int := digitsValue(text, 2, 2)
+                            if value >= 0 { replacement := str.number(value) }
+                        }
+                    }
+                    if hasPrefix = 0 {
+                        var exponentAt: int := -1
+                        var underscore: int := 0
+                        var k: int := 0
+                        while k < str.length(text) {
+                            if (str.char(text, k) = 101 || str.char(text, k) = 69) && exponentAt < 0 { exponentAt := k }
+                            if str.char(text, k) = 95 { underscore := 1 }
+                            k := k + 1
+                        }
+                        if underscore = 1 || (exponentAt > 0 && str.find(text, ".") < 0) {
+                            var clean: string := str.builder("")
+                            k := 0
+                            while k < str.length(text) {
+                                if k = exponentAt && str.find(text, ".") < 0 { clean := str.append(clean, ".0") }
+                                if str.char(text, k) != 95 { clean := str.append(clean, str.fromchar(str.char(text, k))) }
+                                k := k + 1
+                            }
+                            replacement := clean
+                        }
+                    }
+                }
+                if item[0] = 39 {
+                    var value: *[2]int := alloc(16)
+                    if charValue(source, item[1], value) = 1 {
+                        replacement := str.number((*value)[0])
+                        finish := (*value)[1]
+                    }
+                    free(value)
+                }
+                if item[0] = token.nameKind() && before != 46 {
+                    var word: string := str.slice(source, item[1], item[2])
+                    if word = "null" {
+                        var after: [4]int := lexer.scan(source, item[2], item[3])
+                        if after[0] != 46 && after[0] != 58 && after[0] != 40 { replacement := "0" }
+                    }
+                    if word = "sizeof" {
+                        var open: [4]int := lexer.scan(source, item[2], item[3])
+                        if open[0] = 40 {
+                            var depth: int := 1
+                            var walker: [4]int := lexer.scan(source, open[2], open[3])
+                            var closeAt: int := -1
+                            while walker[0] != token.endKind() && walker[0] != 10 && closeAt < 0 {
+                                if walker[0] = 40 { depth := depth + 1 }
+                                if walker[0] = 41 {
+                                    depth := depth - 1
+                                    if depth = 0 { closeAt := walker[1] }
+                                }
+                                if closeAt < 0 { walker := lexer.scan(source, walker[2], walker[3]) }
+                            }
+                            if closeAt >= 0 {
+                                var typeText: string := trim(str.slice(source, open[2], closeAt))
+                                var words: int := codegen.typeWords(source, typeText)
+                                if str.length(typeText) > 0 && (str.char(typeText, 0) = 42 || typeText = "int" || typeText = "flt" || typeText = "string") { words := 1 }
+                                if words > 0 {
+                                    replacement := str.number(words * 8)
+                                    finish := walker[2]
+                                }
+                            }
+                        }
+                    }
+                }
+                if str.length(replacement) > 0 {
+                    out := str.append(out, str.slice(source, copied, item[1]) + replacement)
+                    copied := finish
+                    position := finish
+                    line := item[3]
+                    before := 0
+                }
+                else {
+                    position := item[2]
+                    line := item[3]
+                    if item[0] != 10 { before := item[0] }
+                }
+            }
+        }
+        if copied = 0 { return source }
+        return str.append(out, str.slice(source, copied, size))
+    end
+
+    fn builtinName(word: string): int
+    begin
+        if word = "read" || word = "write" || word = "free" || word = "new" || word = "delete" || word = "alloc" || word = "writeln" || word = "readln" { return 1 }
+        return 0
+    end
+
+    // Inside `module m`, an unqualified call to a function that m itself declares with a built-in name
+    // (read, write, free, new, delete, alloc, writeln, readln) becomes `m.name(...)`, so the module's function wins.
+    fn moduleBuiltins(source: string): string
+    begin
+        // pass 1: the "module|name" pairs that are declared
+        var declared: string := str.builder("|")
+        var module: string := ""
+        var depth: int := 0
+        var item: [4]int := lexer.scan(source, 0, 1)
+        var previous: string := ""
+        var any: int := 0
+        while item[0] != token.endKind() {
+            if item[0] = token.nameKind() {
+                var word: string := str.slice(source, item[1], item[2])
+                if word = "module" && str.length(module) = 0 {
+                    var name: [4]int := lexer.scan(source, item[2], item[3])
+                    if name[0] = token.nameKind() {
+                        module := str.slice(source, name[1], name[2])
+                        depth := 0
+                    }
+                }
+                else {
+                    if str.length(module) > 0 {
+                        if word = "begin" { depth := depth + 1 }
+                        if word = "end" {
+                            depth := depth - 1
+                            if depth = 0 { module := "" }
+                        }
+                        if previous = "fn" && builtinName(word) = 1 {
+                            declared := str.append(declared, module + "." + word + "|")
+                            any := 1
+                        }
+                    }
+                    else {
+                        if previous = "fn" && builtinName(word) = 1 {
+                            failure(source, item[1], "'" + word + "' is a built-in function; put this function in a module (it is then called as module." + word + ") or rename it")
+                            return ""
+                        }
+                    }
+                }
+                previous := word
+            }
+            else { if item[0] != 10 { previous := "" } }
+            item := lexer.scan(source, item[2], item[3])
+        }
+        if any = 0 { return source }
+        // pass 2: rewrite the unqualified calls
+        var out: string := str.builder("")
+        var copied: int := 0
+        module := ""
+        depth := 0
+        previous := ""
+        var before: int := 0
+        item := lexer.scan(source, 0, 1)
+        while item[0] != token.endKind() {
+            if item[0] = token.nameKind() {
+                var word: string := str.slice(source, item[1], item[2])
+                if word = "module" && str.length(module) = 0 {
+                    var name: [4]int := lexer.scan(source, item[2], item[3])
+                    if name[0] = token.nameKind() {
+                        module := str.slice(source, name[1], name[2])
+                        depth := 0
+                    }
+                }
+                else {
+                    if str.length(module) > 0 {
+                        if word = "begin" { depth := depth + 1 }
+                        if word = "end" {
+                            depth := depth - 1
+                            if depth = 0 { module := "" }
+                        }
+                        if before != 46 && previous != "fn" && builtinName(word) = 1 && str.find(declared, "|" + module + "." + word + "|") >= 0 {
+                            var open: [4]int := lexer.scan(source, item[2], item[3])
+                            if open[0] = 40 {
+                                out := str.append(out, str.slice(source, copied, item[1]) + module + ".")
+                                copied := item[1]
+                            }
+                        }
+                    }
+                }
+                previous := word
+            }
+            else { if item[0] != 10 { previous := "" } }
+            if item[0] != 10 { before := item[0] }
+            item := lexer.scan(source, item[2], item[3])
+        }
+        return str.append(out, str.slice(source, copied, str.length(source)))
+    end
+
+    // `for i := A to B {` becomes `for var i: int := A to B step 1 {` (same line), so the parser sees a typed
+    // declaration and an explicit step.
+    fn forLoops(source: string): string
+    begin
+        var out: string := str.builder("")
+        var copied: int := 0
+        var item: [4]int := lexer.scan(source, 0, 1)
+        var previous: int := 10
+        var changed: int := 0
+        while item[0] != token.endKind() {
+            if item[0] = token.nameKind() && (previous = 10 || previous = 123 || previous = 125) && str.slice(source, item[1], item[2]) = "for" {
+                var name: [4]int := lexer.scan(source, item[2], item[3])
+                var insertVar: int := 0
+                var nameEnd: int := -1
+                if name[0] = token.nameKind() && str.slice(source, name[1], name[2]) != "var" {
+                    var assign: [4]int := lexer.scan(source, name[2], name[3])
+                    if assign[0] = token.assignKind() {
+                        insertVar := 1
+                        nameEnd := name[2]
+                    }
+                }
+                // find the '{' that opens the body and whether there is a step
+                var walker: [4]int := lexer.scan(source, item[2], item[3])
+                var depth: int := 0
+                var hasStep: int := 0
+                var brace: int := -1
+                while walker[0] != token.endKind() && brace < 0 && walker[0] != 10 {
+                    if walker[0] = 40 || walker[0] = 91 { depth := depth + 1 }
+                    if walker[0] = 41 || walker[0] = 93 { depth := depth - 1 }
+                    if walker[0] = token.nameKind() && depth = 0 && str.slice(source, walker[1], walker[2]) = "step" { hasStep := 1 }
+                    if walker[0] = 123 && depth = 0 { brace := walker[1] }
+                    if brace < 0 { walker := lexer.scan(source, walker[2], walker[3]) }
+                }
+                if brace > 0 && (insertVar = 1 || hasStep = 0) {
+                    changed := 1
+                    if insertVar = 1 {
+                        out := str.append(out, str.slice(source, copied, name[1]) + "var " + str.slice(source, name[1], nameEnd) + ": int")
+                        copied := nameEnd
+                    }
+                    if hasStep = 0 {
+                        var cut: int := brace
+                        while cut > copied && (str.char(source, cut - 1) = 32 || str.char(source, cut - 1) = 9) { cut := cut - 1 }
+                        out := str.append(out, str.slice(source, copied, cut) + " step 1")
+                        copied := cut
+                    }
+                }
+            }
+            if item[0] != token.endKind() { previous := item[0] }
+            item := lexer.scan(source, item[2], item[3])
+        }
+        if changed = 0 { return source }
+        return str.append(out, str.slice(source, copied, str.length(source)))
+    end
+
+    // The entry point: returns the lowered source, or "" after reporting an error.
+    fn run(original: string): string
+    begin
+        var source: string := moduleBuiltins(forLoops(literals(original)))
+        if str.length(source) = 0 && str.length(original) > 0 { return "" }
         if needed(source) = 0 { return source }
         var table: *desugar.Table := alloc(128)
         runtime.mem.set(table, 0, 128)

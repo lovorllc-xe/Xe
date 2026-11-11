@@ -1,0 +1,277 @@
+// xkbmap: keyboard layouts - maps key codes to characters using an XKB keymap (AltGr, several layouts).
+// Reads an XKB text keymap (what a Wayland compositor sends with wl_keyboard.keymap, or `xkbcomp :0 -`) and maps evdev key codes to the characters of the configured layout.
+// Up to 4 groups (layouts) and 4 levels (plain, Shift, AltGr, Shift+AltGr) per key; Caps Lock flips letters.
+// Key names are resolved from single characters, Unicode names (U00E4, 0x1000107) and a table of the
+// Latin-1/2/3/4/9, Cyrillic, Greek and publishing keysym names. Keys without a character (Escape, arrows,
+// dead keys, modifiers) give 0.
+//
+//     var map: *xkbmap.Keymap := xkbmap.parse(text)
+//     var c: int := xkbmap.char_for(map, evdevCode, group, shift, altgr, caps)
+module xkbmap
+begin
+    type Keymap: record
+    begin
+        chars: *[4224]int
+        loaded: int
+    end
+
+    fn names(): string
+    begin
+        return ";space:20;exclam:21;quotedbl:22;numbersign:23;dollar:24;percent:25;ampersand:26;apostrophe:27;parenleft:28;parenright:29;asterisk:2a;plus:2b;comma:2c;minus:2d;period:2e;slash:2f;colon:3a;semicolon:3b;less:3c;equal:3d;greater:3e;question:3f;at:40;bracketleft:5b;backslash:5c;bracketright:5d;asciicircum:5e;underscore:5f;grave:60;braceleft:7b;bar:7c;braceright:7d;asciitilde:7e;nobreakspace:a0;exclamdown:a1;cent:a2;sterling:a3;currency:a4;yen:a5;brokenbar:a6;section:a7;diaeresis:a8;copyright:a9;ordfeminine:aa;guillemetleft:ab;notsign:ac;hyphen:ad;registered:ae;macron:af;degree:b0;plusminus:b1;twosuperior:b2;threesuperior:b3;acute:b4;mu:b5;paragraph:b6;periodcentered:b7;cedilla:b8;onesuperior:b9;ordmasculine:ba;guillemetright:bb;onequarter:bc;onehalf:bd;threequarters:be;questiondown:bf;Agrave:c0;Aacute:c1;Acircumflex:c2;Atilde:c3;Adiaeresis:c4;Aring:c5;AE:c6;Ccedilla:c7;Egrave:c8;Eacute:c9;Ecircumflex:ca;Ediaeresis:cb;Igrave:cc;Iacute:cd;Icircumflex:ce;Idiaeresis:cf;ETH:d0;Ntilde:d1;Ograve:d2;Oacute:d3;Ocircumflex:d4;Otilde:d5;Odiaeresis:d6;multiply:d7;Oslash:d8;Ugrave:d9;Uacute:da;Ucircumflex:db;Udiaeresis:dc;Yacute:dd;THORN:de;ssharp:df;agrave:e0;aacute:e1;acircumflex:e2;atilde:e3;adiaeresis:e4;aring:e5;ae:e6;ccedilla:e7;egrave:e8;eacute:e9;ecircumflex:ea;ediaeresis:eb;igrave:ec;iacute:ed;icircumflex:ee;idiaeresis:ef;eth:f0;ntilde:f1;ograve:f2;oacute:f3;ocircumflex:f4;otilde:f5;odiaeresis:f6;division:f7;oslash:f8;ugrave:f9;uacute:fa;ucircumflex:fb;udiaeresis:fc;yacute:fd;thorn:fe;ydiaeresis:ff;Aogonek:104;breve:2d8;Lstroke:141;Lcaron:13d;Sacute:15a;Scaron:160;Scedilla:15e;Tcaron:164;Zacute:179;Zcaron:17d;Zabovedot:17b;aogonek:105;ogonek:2db;lstroke:142;lcaron:13e;sacute:15b;caron:2c7;scaron:161;scedilla:15f;tcaron:165;zacute:17a;doubleacute:2dd;zcaron:17e;zabovedot:17c;Racute:154;Abreve:102;Lacute:139;Cacute:106;Ccaron:10c;Eogonek:118;Ecaron:11a;Dcaron:10e;Dstroke:110;Nacute:143;Ncaron:147;Odoubleacute:150;Rcaron:158;Uring:16e;Udoubleacute:170;Tcedilla:162;racute:155;abreve:103;lacute:13a;cacute:107;ccaron:10d;eogonek:119;ecaron:11b;dcaron:10f;dstroke:111;nacute:144;ncaron:148;odoubleacute:151;rcaron:159;uring:16f;udoubleacute:171;tcedilla:163;abovedot:2d9;Hstroke:126;Hcircumflex:124;Iabovedot:130;Gbreve:11e;Jcircumflex:134;hstroke:127;hcircumflex:125;idotless:131;gbreve:11f;jcircumflex:135;Cabovedot:10a;Ccircumflex:108;Gabovedot:120;Gcircumflex:11c;Ubreve:16c;Scircumflex:15c;cabovedot:10b;ccircumflex:109;gabovedot:121;gcircumflex:11d;ubreve:16d;scircumflex:15d;kra:138;Rcedilla:156;Itilde:128;Lcedilla:13b;Emacron:112;Gcedilla:122;Tslash:166;rcedilla:157;itilde:129;lcedilla:13c;emacron:113;gcedilla:123;tslash:167;ENG:14a;eng:14b;Amacron:100;Iogonek:12e;Eabovedot:116;Imacron:12a;Ncedilla:145;Omacron:14c;Kcedilla:136;Uogonek:172;Utilde:168;Umacron:16a;amacron:101;iogonek:12f;eabovedot:117;imacron:12b;ncedilla:146;omacron:14d;kcedilla:137;uogonek:173;utilde:169;umacron:16b;OE:152;oe:153;Ydiaeresis:178;Serbian_dje:452;Macedonia_gje:453;Cyrillic_io:451;Ukrainian_ie:454;Macedonia_dse:455;Ukrainian_i:456;Ukrainian_yi:457;Cyrillic_je:458;Cyrillic_lje:459;Cyrillic_nje:45a;Serbian_tshe:45b;Macedonia_kje:45c;Ukrainian_ghe_with_upturn:491;Byelorussian_shortu:45e;Cyrillic_dzhe:45f;numerosign:2116;Serbian_DJE:402;Macedonia_GJE:403;Cyrillic_IO:401;Ukrainian_IE:404;Macedonia_DSE:405;Ukrainian_I:406;Ukrainian_YI:407;Cyrillic_JE:408;Cyrillic_LJE:409;Cyrillic_NJE:40a;Serbian_TSHE:40b;Macedonia_KJE:40c;Ukrainian_GHE_WITH_UPTURN:490;Byelorussian_SHORTU:40e;Cyrillic_DZHE:40f;Cyrillic_yu:44e;Cyrillic_a:430;Cyrillic_be:431;Cyrillic_tse:446;Cyrillic_de:434;Cyrillic_ie:435;Cyrillic_ef:444;Cyrillic_ghe:433;Cyrillic_ha:445;Cyrillic_i:438;Cyrillic_shorti:439;Cyrillic_ka:43a;Cyrillic_el:43b;Cyrillic_em:43c;Cyrillic_en:43d;Cyrillic_o:43e;Cyrillic_pe:43f;Cyrillic_ya:44f;Cyrillic_er:440;Cyrillic_es:441;Cyrillic_te:442;Cyrillic_u:443;Cyrillic_zhe:436;Cyrillic_ve:432;Cyrillic_softsign:44c;Cyrillic_yeru:44b;Cyrillic_ze:437;Cyrillic_sha:448;Cyrillic_e:44d;Cyrillic_shcha:449;Cyrillic_che:447;Cyrillic_hardsign:44a;Cyrillic_YU:42e;Cyrillic_A:410;Cyrillic_BE:411;Cyrillic_TSE:426;Cyrillic_DE:414;Cyrillic_IE:415;Cyrillic_EF:424;Cyrillic_GHE:413;Cyrillic_HA:425;Cyrillic_I:418;Cyrillic_SHORTI:419;Cyrillic_KA:41a;Cyrillic_EL:41b;Cyrillic_EM:41c;Cyrillic_EN:41d;Cyrillic_O:41e;Cyrillic_PE:41f;Cyrillic_YA:42f;Cyrillic_ER:420;Cyrillic_ES:421;Cyrillic_TE:422;Cyrillic_U:423;Cyrillic_ZHE:416;Cyrillic_VE:412;Cyrillic_SOFTSIGN:42c;Cyrillic_YERU:42b;Cyrillic_ZE:417;Cyrillic_SHA:428;Cyrillic_E:42d;Cyrillic_SHCHA:429;Cyrillic_CHE:427;Cyrillic_HARDSIGN:42a;Greek_ALPHAaccent:386;Greek_EPSILONaccent:388;Greek_ETAaccent:389;Greek_IOTAaccent:38a;Greek_IOTAdieresis:3aa;Greek_OMICRONaccent:38c;Greek_UPSILONaccent:38e;Greek_UPSILONdieresis:3ab;Greek_OMEGAaccent:38f;Greek_accentdieresis:385;Greek_horizbar:2015;Greek_alphaaccent:3ac;Greek_epsilonaccent:3ad;Greek_etaaccent:3ae;Greek_iotaaccent:3af;Greek_iotadieresis:3ca;Greek_iotaaccentdieresis:390;Greek_omicronaccent:3cc;Greek_upsilonaccent:3cd;Greek_upsilondieresis:3cb;Greek_upsilonaccentdieresis:3b0;Greek_omegaaccent:3ce;Greek_ALPHA:391;Greek_BETA:392;Greek_GAMMA:393;Greek_DELTA:394;Greek_EPSILON:395;Greek_ZETA:396;Greek_ETA:397;Greek_THETA:398;Greek_IOTA:399;Greek_KAPPA:39a;Greek_LAMDA:39b;Greek_MU:39c;Greek_NU:39d;Greek_XI:39e;Greek_OMICRON:39f;Greek_PI:3a0;Greek_RHO:3a1;Greek_SIGMA:3a3;Greek_TAU:3a4;Greek_UPSILON:3a5;Greek_PHI:3a6;Greek_CHI:3a7;Greek_PSI:3a8;Greek_OMEGA:3a9;Greek_alpha:3b1;Greek_beta:3b2;Greek_gamma:3b3;Greek_delta:3b4;Greek_epsilon:3b5;Greek_zeta:3b6;Greek_eta:3b7;Greek_theta:3b8;Greek_iota:3b9;Greek_kappa:3ba;Greek_lamda:3bb;Greek_mu:3bc;Greek_nu:3bd;Greek_xi:3be;Greek_omicron:3bf;Greek_pi:3c0;Greek_rho:3c1;Greek_sigma:3c3;Greek_finalsmallsigma:3c2;Greek_tau:3c4;Greek_upsilon:3c5;Greek_phi:3c6;Greek_chi:3c7;Greek_psi:3c8;Greek_omega:3c9;emspace:2003;enspace:2002;em3space:2004;em4space:2005;digitspace:2007;punctspace:2008;thinspace:2009;hairspace:200a;emdash:2014;endash:2013;ellipsis:2026;doubbaselinedot:2025;onethird:2153;twothirds:2154;onefifth:2155;twofifths:2156;threefifths:2157;fourfifths:2158;onesixth:2159;fivesixths:215a;careof:2105;figdash:2012;oneeighth:215b;threeeighths:215c;fiveeighths:215d;seveneighths:215e;trademark:2122;leftsinglequotemark:2018;rightsinglequotemark:2019;leftdoublequotemark:201c;rightdoublequotemark:201d;prescription:211e;permille:2030;minutes:2032;seconds:2033;latincross:271d;club:2663;diamond:2666;heart:2665;maltesecross:2720;dagger:2020;doubledagger:2021;checkmark:2713;ballotcross:2717;musicalsharp:266f;musicalflat:266d;malesymbol:2642;femalesymbol:2640;telephone:260e;telephonerecorder:2315;phonographcopyright:2117;caret:2038;singlelowquotemark:201a;doublelowquotemark:201e;EuroSign:20ac;"
+    end
+
+    fn hex_value(text: string, start: int): int
+    begin
+        var value: int := 0
+        var i: int := start
+        if i >= str.length(text) { return -1 }
+        while i < str.length(text) {
+            var c: int := str.char(text, i)
+            var digit: int := -1
+            if c >= 48 && c <= 57 { digit := c - 48 }
+            if c >= 97 && c <= 102 { digit := c - 87 }
+            if c >= 65 && c <= 70 { digit := c - 55 }
+            if digit < 0 { return -1 }
+            value := value * 16 + digit
+            i := i + 1
+        }
+        return value
+    end
+
+    // The Unicode code point of a keysym name, or 0.
+    fn codepoint(name: string): int
+    begin
+        var size: int := str.length(name)
+        if size = 0 { return 0 }
+        if size = 1 { return str.char(name, 0) }
+        if size >= 5 && str.char(name, 0) = 85 {
+            var u: int := hex_value(name, 1)
+            if u > 0 { return u }
+        }
+        if size > 2 && str.char(name, 0) = 48 && str.char(name, 1) = 120 {
+            var k: int := hex_value(name, 2)
+            if k >= 16777216 { return k - 16777216 }
+            if k >= 32 && k <= 255 { return k }
+            return 0
+        }
+        var table: string := names()
+        var at: int := str.find(table, ";" + name + ":")
+        if at < 0 { return 0 }
+        var start: int := at + size + 2
+        var finish: int := start
+        while finish < str.length(table) && str.char(table, finish) != 59 { finish := finish + 1 }
+        return hex_value(str.slice(table, start, finish), 0)
+    end
+
+    fn find_from(text: string, needle: string, start: int, limit: int): int
+    begin
+        var n: int := str.length(needle)
+        var first: int := str.char(needle, 0)
+        var i: int := start
+        while i + n <= limit {
+            if str.char(text, i) = first {
+                var j: int := 1
+                while j < n && str.char(text, i + j) = str.char(needle, j) { j := j + 1 }
+                if j = n { return i }
+            }
+            i := i + 1
+        }
+        return -1
+    end
+
+    fn space(c: int): int
+    begin
+        if c = 32 || c = 9 || c = 10 || c = 13 { return 1 }
+        return 0
+    end
+
+    fn skip_space(text: string, i: int, limit: int): int
+    begin
+        var at: int := i
+        while at < limit && space(str.char(text, at)) = 1 { at := at + 1 }
+        return at
+    end
+
+    // Reads `<NAME>` at i (i points at '<'); returns the index after '>' or -1, the name in out[0].
+    fn key_name(text: string, i: int, limit: int, out: *[1]string): int
+    begin
+        if i >= limit || str.char(text, i) != 60 { return -1 }
+        var finish: int := i + 1
+        while finish < limit && str.char(text, finish) != 62 { finish := finish + 1 }
+        if finish >= limit { return -1 }
+        (*out)[0] := str.slice(text, i + 1, finish)
+        return finish + 1
+    end
+
+    fn store_list(map: *xkbmap.Keymap, text: string, open: int, close: int, code: int, group: int)
+    begin
+        var level: int := 0
+        var i: int := open + 1
+        while i < close && level < 4 {
+            i := skip_space(text, i, close)
+            var start: int := i
+            while i < close && str.char(text, i) != 44 && space(str.char(text, i)) = 0 { i := i + 1 }
+            if i > start {
+                var cp: int := codepoint(str.slice(text, start, i))
+                (*map.chars)[(code * 4 + group) * 4 + level] := cp
+            }
+            while i < close && str.char(text, i) != 44 { i := i + 1 }
+            i := i + 1
+            level := level + 1
+        }
+    end
+
+    // Parses an XKB keymap text; returns a keymap (loaded = 0 if nothing usable was found).
+    fn parse(text: string): *xkbmap.Keymap
+    begin
+        var map: *xkbmap.Keymap := alloc(16)
+        map.chars := alloc(4224 * 8)
+        map.loaded := 0
+        var size: int := str.length(text)
+        var keycodesAt: int := find_from(text, "xkb_keycodes", 0, size)
+        var symbolsAt: int := find_from(text, "xkb_symbols", 0, size)
+        if keycodesAt < 0 || symbolsAt < 0 { return map }
+        var keycodesEnd: int := find_from(text, "xkb_types", keycodesAt, size)
+        if keycodesEnd < 0 { keycodesEnd := symbolsAt }
+        var keyNames: *[1024]string := alloc(1024 * 8)
+        var keyCodes: *[1024]int := alloc(1024 * 8)
+        var count: int := 0
+        var name: *[1]string := alloc(8)
+        var i: int := keycodesAt
+        while i < keycodesEnd && count < 1024 {
+            if str.char(text, i) = 60 {
+                var after: int := key_name(text, i, keycodesEnd, name)
+                if after < 0 { i := keycodesEnd }
+                else {
+                    var defined: string := (*name)[0]
+                    var at: int := skip_space(text, after, keycodesEnd)
+                    if at < keycodesEnd && str.char(text, at) = 61 {
+                        at := skip_space(text, at + 1, keycodesEnd)
+                        if at < keycodesEnd && str.char(text, at) = 60 {
+                            // alias <A> = <B>
+                            var target: int := key_name(text, at, keycodesEnd, name)
+                            var k: int := 0
+                            while k < count && target > 0 {
+                                if (*keyNames)[k] = (*name)[0] {
+                                    (*keyNames)[count] := defined
+                                    (*keyCodes)[count] := (*keyCodes)[k]
+                                    count := count + 1
+                                    k := count
+                                }
+                                k := k + 1
+                            }
+                            if target > 0 { at := target }
+                        }
+                        else {
+                            var value: int := 0
+                            var digits: int := 0
+                            while at < keycodesEnd && str.char(text, at) >= 48 && str.char(text, at) <= 57 {
+                                value := value * 10 + str.char(text, at) - 48
+                                digits := digits + 1
+                                at := at + 1
+                            }
+                            if digits > 0 {
+                                (*keyNames)[count] := defined
+                                (*keyCodes)[count] := value
+                                count := count + 1
+                            }
+                        }
+                    }
+                    i := at
+                }
+            }
+            else { i := i + 1 }
+        }
+        i := symbolsAt
+        while i < size {
+            var keyAt: int := find_from(text, "key <", i, size)
+            if keyAt < 0 { i := size }
+            else {
+                var after: int := key_name(text, keyAt + 4, size, name)
+                var open: int := find_from(text, "{", after, size)
+                var close: int := find_from(text, "}", open, size)
+                if after < 0 || open < 0 || close < 0 { i := size }
+                else {
+                    var code: int := -1
+                    var k: int := 0
+                    while k < count {
+                        if (*keyNames)[k] = (*name)[0] {
+                            code := (*keyCodes)[k]
+                            k := count
+                        }
+                        k := k + 1
+                    }
+                    if code >= 0 && code < 264 {
+                        var found: int := 0
+                        var at: int := open
+                        while at >= 0 && at < close {
+                            at := find_from(text, "symbols[", at, close)
+                            if at >= 0 {
+                                // symbols[Group2]= (xkbcomp) or symbols[2]= (libxkbcommon)
+                                var digitAt: int := at + 8
+                                if digitAt < close && str.char(text, digitAt) = 71 { digitAt := digitAt + 5 }
+                                var group: int := -1
+                                if digitAt < close { group := str.char(text, digitAt) - 49 }
+                                var listOpen: int := find_from(text, "[", find_from(text, "=", at, close), close)
+                                var listClose: int := find_from(text, "]", listOpen, close)
+                                if group >= 0 && group < 4 && listOpen > 0 && listClose > 0 {
+                                    store_list(map, text, listOpen, listClose, code, group)
+                                    found := 1
+                                    map.loaded := 1
+                                }
+                                at := listClose
+                            }
+                        }
+                        if found = 0 {
+                            var listOpen: int := find_from(text, "[", open, close)
+                            var listClose: int := -1
+                            if listOpen >= 0 { listClose := find_from(text, "]", listOpen, close) }
+                            if listOpen >= 0 && listClose > 0 {
+                                store_list(map, text, listOpen, listClose, code, 0)
+                                map.loaded := 1
+                            }
+                        }
+                    }
+                    i := close + 1
+                }
+            }
+        }
+        free(keyNames)
+        free(keyCodes)
+        free(name)
+        return map
+    end
+
+    fn entry(map: *xkbmap.Keymap, code: int, group: int, level: int): int
+    begin
+        return (*map.chars)[(code * 4 + group) * 4 + level]
+    end
+
+    fn letter(cp: int): int
+    begin
+        if (cp >= 65 && cp <= 90) || (cp >= 97 && cp <= 122) { return 1 }
+        if cp >= 192 && cp != 215 && cp != 247 { return 1 }
+        return 0
+    end
+
+    // The character typed by evdev key `evdev` (the Wayland key code) in layout `group` (0-3) with the
+    // given modifier states (0 or 1); 0 when the key types nothing.
+    fn char_for(map: *xkbmap.Keymap, evdev: int, group: int, shift: int, altgr: int, caps: int): int
+    begin
+        var code: int := evdev + 8
+        if @map = 0 || map.loaded = 0 || code < 0 || code >= 264 { return 0 }
+        var g: int := group
+        if g < 0 || g > 3 { g := 0 }
+        if entry(map, code, g, 0) = 0 && entry(map, code, g, 1) = 0 { g := 0 }
+        var level: int := shift + 2 * altgr
+        if level >= 2 && entry(map, code, g, 2) = 0 && entry(map, code, g, 3) = 0 { level := level - 2 }
+        if caps = 1 && level < 2 {
+            var low: int := entry(map, code, g, 0)
+            var high: int := entry(map, code, g, 1)
+            if low != high && high != 0 && letter(low) = 1 { level := 1 - level }
+        }
+        var cp: int := entry(map, code, g, level)
+        if cp = 0 && level = 1 { cp := entry(map, code, g, 0) }
+        return cp
+    end
+end

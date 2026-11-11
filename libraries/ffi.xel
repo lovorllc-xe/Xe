@@ -68,6 +68,17 @@ begin
         return ccall.symbol(library_handle, name)
     end
 
+    // Makes an Xe function callable from C (for callbacks such as qsort comparators or g_signal_connect handlers):
+    //     fn compare(a: *int, b: *int): int ...
+    //     ffi.call4(qsort, cast.addr(values), 5, 8, ffi.callback(&compare))
+    // The function must take only int, pointer or string parameters (up to 6) and return an int or pointer. On Linux
+    // and macOS the address is used directly (Xe already uses the C calling convention); on Windows a small
+    // converting thunk is returned (at most 32 callbacks per program).
+    fn callback(function: *void): int
+    begin
+        return ccall.callback(cast.addr(function))
+    end
+
     // The C calling convention of the platform being built for: "sysv" (Linux, macOS) or "ms" (Windows).
     fn convention(): string
     begin

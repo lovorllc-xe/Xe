@@ -30,7 +30,10 @@ begin
         var request: time.Timespec
         request.seconds := milliseconds / 1000
         request.nanoseconds := (milliseconds % 1000) * 1000000
-        syscall.invoke3(35, &request, 0, 0)
+        // a signal (for example the garbage collector pausing threads) interrupts nanosleep with EINTR (-4);
+        // the kernel stores the remaining time in the second argument, so sleep again for the rest
+        var result: int := syscall.invoke3(35, &request, &request, 0)
+        while result = -4 { result := syscall.invoke3(35, &request, &request, 0) }
     end
 
     // Monotonic nanosecond ticks, suitable for elapsed-time measurement.

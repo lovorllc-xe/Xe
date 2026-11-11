@@ -5,7 +5,7 @@ description: Write, debug, and review code in the Xe programming language (.xe s
 
 # Xe language
 
-Xe 2.2.0 is a statically checked language that compiles to native executables for Linux x86-64 (default), Windows x86-64 (`-p win`) and macOS x86-64 (`-p macos`, build only). The compiler is self-hosted (`compiler/*.xe`) and bootstraps from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip` (`scripts/bootstrap.sh`). The installed `xe` finds `std/`, `libraries/` and `platform/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 174 libraries are in `libraries/` (index: `docs/libraries.md`).
+Xe 2.3.0 is a statically checked language that compiles to native executables for Linux x86-64 (default), Windows x86-64 (`-p win`) and macOS x86-64 (`-p macos`, build only). The compiler is self-hosted (`compiler/*.xe`) and bootstraps from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip` (`scripts/bootstrap.sh`). The installed `xe` finds `std/`, `libraries/` and `platform/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 176 libraries are in `libraries/` (index: `docs/libraries.md`).
 
 **Trust the compiler.** When unsure, write a 10-line probe program and build it (about 20 ms). Diagnostics are precise: `file:line:col: error: message`, the source line and a caret.
 
@@ -25,7 +25,7 @@ xe -v                                # logo and version
 ```
 
 - `main` is `fn main(): int` (its result is the exit status). Extra files on the command line are combined into the build; `uses name` loads `name.xel` from beside the importing file, then from `--library-path`, `.xe/packages/*`, and the installed `libraries/` (a per-platform subfolder such as `libraries/win/` is searched first).
-- `-g` adds source line numbers for gdb (`gdb prog`, `break file.xe:LINE`, `bt`); debug builds are not optimized. Functions are named `xe` + their name in gdb (`xework` for `work`).
+- `-g` adds DWARF debug info for gdb: line numbers, function parameters and local variables with their types, records with fields (`gdb prog`, `break file.xe:LINE`, `bt`, `info args`, `info locals`, `p *node`). Debug builds are not optimized.
 - Cross builds need `llvm-mc`, `llvm-dlltool`, `lld-link` (Windows) or `llvm-mc`, `ld64.lld` (macOS). Run `--run` only for the platform you are on. Do not run Windows programs through Wine unless the user asks.
 - Repo tests: `XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh` (every `tests/*.xe` must build and exit 0). Never claim a build or test passed unless you ran it.
 
@@ -67,9 +67,7 @@ fn main(): int
 begin
     var p: Point
     p.x := 3
-    var i: int := 0
-    while i < 10 {
-        i := i + 1
+    for i := 1 to 10 {
         if i % 2 = 0 { continue }
         if i > LIMIT * 2 { break }
         tally := tally + geo.sq(i)
@@ -89,22 +87,23 @@ end
 
 - `:=` assigns, `=` compares. `==` is a lexer error. `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>` exist.
 - Big blocks use `begin ... end` (functions, records, modules, `switch`, enums), small ones use `{ }` (`if`, `else`, `while`). `begin` and `end` are keywords (not usable as function names, and so are `fn`, `var`, `const`, `global`, `enum`, `type`, `module`, `uses`).
-- One loop: `while`. `break`/`continue` leave/restart the innermost `while`. They are rejected in a loop whose body contains `defer` or `gc.begin`.
-- A newline ends a statement. To continue a statement on the next line end the line with `;`.
-- `flt` literals need a decimal point (`3.0`); mixed int/flt arithmetic converts to flt, but assigning an int to a `flt` variable needs `cast.flt(i)`.
-- `"text" + 5` is wrong; use `"text" + str.number(5)` or `writeln("text", 5)`. Strings compare by content with `=`.
-- Pointers: `p.field` auto-dereferences; `*p`, `&x`, `@p` (address as int, so `@p = 0` is the null test); arrays through pointers: `(*arrPtr)[i]`.
+- Loops: `while cond { }` and `for i := a to b { }` / `for i := b downto a step 2 { }` (inclusive bounds; `i` is a new int scoped to the loop). `break`/`continue` leave/restart the innermost loop (`continue` in a `for` runs the step) (pending `defer`s of the body run, its `gc.begin` regions close). `goto label` jumps to `label:` (alone on a line) in the same function; not in functions with `defer`/`gc.begin`.
+- A newline ends a statement, except inside `( )` / `[ ]` (long calls may span lines). Elsewhere, end a line with `;` to continue it.
+- Literals: `0xFF`, `0b1010`, `1_000_000`, `1e9` (flt), `'a'` (int 97), `null`, `sizeof(T)`. Ints convert to `flt` in assignments and mixed arithmetic; `cast.int(f)` truncates.
+- `"text" + 5` is a compile error; use `"text" + str.number(5)` or `writeln("text", 5)`. Strings compare by content with `=`. `file.read(path)` reads a whole file; `strconv.parse_int` parses.
+- Pointers: `p.field` auto-dereferences; `*p`, `&x`, `@p` (address as int); null test `p = null` or `@p = 0`; arrays through pointers: `(*arrPtr)[i]`.
 - Casts are functions: `cast.flt(int)`, `cast.int(flt)`, `cast.ptr(int)`, `cast.addr(ptr)`; chain `cast.ptr(cast.addr(p))` to reinterpret a pointer.
 - Function pointers: `&name` is the address; call with `func.call0..5(ptr, int/pointer args)` (`uses func`). Closures: `uses closure`, the function's first parameter receives the data pointer.
 - Globals: `global name: Type := init` (also inside a `module`), `global const NAME: T := expr` (macro-like: replaced by its value), `enum Name begin a b := 5 c end` -> `Name.a`... A global name must not be reused for a function, type or module name; a parameter or local with the same name hides the global inside that function.
 - Generics: `type Pair<A, B>: record ... end`, `fn largest<T>(...)`; type arguments are written explicitly (`Pair<int, string>`, `largest<int>(1, 2)`); top-level only.
-- `uses` resolves relative to the importing file first. Names that match built-ins (`new`, `delete`, `read`, `write`, `free`) must be called qualified when they are module functions.
+- `uses` resolves relative to the importing file first; import order does not matter. A module may name functions `read`, `write`, `free`, `new`, `delete`: inside the module the unqualified call is the module's function; top-level functions cannot use those names.
 - Out-of-range array access prints `array index out of bounds` and exits with 1. `result.panic(msg)` prints `panic: msg` and exits with 2.
-- A global or heap pointer keeps memory alive; the GC is conservative mark-and-sweep and does not run while threads are active.
+- A global or heap pointer keeps memory alive; the GC is conservative mark-and-sweep. On Linux it also runs while threads are alive (it pauses them with SIGPWR; sleeps resume, `poll` may return early with EINTR) and `gc.begin` regions are per thread. On Windows it waits until worker threads finish.
+- FFI callbacks: `ffi.callback(&fn)` gives C a function pointer (qsort comparators, GTK signals). Text: `truetype` draws real fonts; the `canvas` 8x14 font is only for quick debugging. Vulkan: put static vertex data in `vulkan.buffer_device` + `buffer_upload` (`buffer_new` is host memory, slow for the GPU to read every frame).
 
 ## Platform-specific code
 
-Write the same code for every platform. The compiler picks `libraries/<platform>/<name>.xel` before `libraries/<name>.xel`, so a library like `window` (neutral) uses `native`, `ffi` uses `ccall`, `audio` uses `audiodev`, `vulkan` uses `vkloader`/`vkplatform`, each implemented per platform under `libraries/linux|win|macos/`. Add a new platform piece the same way. Linux windows use X11 by default (`XE_BACKEND=wayland` or `window.open_wayland` for native Wayland); Windows uses Win32; macOS has no window backend yet. `platform/<name>/shim.s` supplies the entry point and Linux-syscall emulation for Windows/macOS.
+Write the same code for every platform. The compiler picks `libraries/<platform>/<name>.xel` before `libraries/<name>.xel`, so a library like `window` (neutral) uses `native`, `ffi` uses `ccall`, `audio` uses `audiodev`, `vulkan` uses `vkloader`/`vkplatform`, each implemented per platform under `libraries/linux|win|macos/`. Add a new platform piece the same way. Linux windows use X11 by default (`XE_BACKEND=wayland` or `window.open_wayland` for native Wayland, which follows the compositor's keyboard layout); Windows uses Win32; macOS has no window backend yet. `platform/<name>/shim.s` supplies the entry point and Linux-syscall emulation for Windows/macOS.
 
 ## Compiler work (compiler/)
 

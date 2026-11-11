@@ -122,6 +122,8 @@ xe.syscall:
  je .LwsZero
  cmp rax, 62
  je .LwsKill
+ cmp rax, 89
+ je .LwsReadlink
  mov rax, -38
  jmp .LwsDone
 
@@ -1124,6 +1126,17 @@ xe.syscall:
 .LwsAffOk:
  mov qword ptr [rdx], rax
  mov eax, 8
+ jmp .LwsDone
+
+# readlink(path, buffer, size): only "/proc/self/exe" (the path of this program) is supported
+.LwsReadlink:
+ xor ecx, ecx
+ mov rdx, rsi
+ mov r8, qword ptr [rbp-16]
+ call qword ptr [rip+__imp_GetModuleFileNameA]
+ test eax, eax
+ jnz .LwsDone
+ mov rax, -2
  jmp .LwsDone
 
 # kill(pid, signal): only the "is it alive" check (signal 0) for our own process is supported

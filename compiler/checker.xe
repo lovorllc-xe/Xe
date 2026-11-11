@@ -38,7 +38,6 @@ begin
         return 1
     end
 
-
     fn typeLabel(type: string): string
     begin
         if str.length(type) = 0 { return "an invalid value" }
@@ -269,6 +268,92 @@ begin
         return 0
     end
 
+    // Can the code generator produce code for this expression in the way its type needs?
+    fn codeFor(source: string, pool: *[12582912]int, functionId: int, id: int): int
+    begin
+        if id < 0 { return 1 }
+        var type: string := valueType(source, pool, functionId, id)
+        if str.length(type) = 0 { return 0 }
+        if type = "flt" { return str.length(codegen.floatExpression(source, pool, functionId, id)) > 0 }
+        if type = "string" || type = "str" { return str.length(codegen.stringExpression(source, pool, functionId, id)) > 0 }
+        if str.char(type, 0) = 91 { return str.length(codegen.arrayAddress(source, pool, functionId, id)) > 0 }
+        if codegen.recordWordCount(source, type) > 0 { return str.length(codegen.recordAddress(source, pool, functionId, id)) > 0 }
+        return str.length(codegen.integerExpression(source, pool, functionId, id)) > 0
+    end
+
+    // The innermost sub-expression whose code cannot be generated, or -1.
+    fn culprit(source: string, pool: *[12582912]int, functionId: int, id: int): int
+    begin
+        if id < 0 { return -1 }
+        var kind: int := ast.read(pool, id, 0)
+        if kind = ast.unaryKind() || kind = ast.memberKind() || kind = ast.binaryKind() || kind = ast.indexKind() {
+            var left: int := ast.read(pool, id, 3)
+            if left >= 0 && codeFor(source, pool, functionId, left) = 0 {
+                var inner: int := culprit(source, pool, functionId, left)
+                if inner >= 0 { return inner }
+            }
+        }
+        if kind = ast.binaryKind() || kind = ast.indexKind() {
+            var right: int := ast.read(pool, id, 4)
+            if right >= 0 && codeFor(source, pool, functionId, right) = 0 {
+                var inner: int := culprit(source, pool, functionId, right)
+                if inner >= 0 { return inner }
+            }
+        }
+        if kind = ast.callKind() {
+            var argument: int := ast.read(pool, id, 6)
+            while argument >= 0 {
+                if codeFor(source, pool, functionId, argument) = 0 {
+                    var inner: int := culprit(source, pool, functionId, argument)
+                    if inner >= 0 { return inner }
+                }
+                argument := ast.read(pool, argument, 5)
+            }
+        }
+        if codeFor(source, pool, functionId, id) = 0 { return id }
+        return -1
+    end
+
+    // A short description of an expression node for error messages.
+    fn construct(source: string, pool: *[12582912]int, functionId: int, id: int): string
+    begin
+        var kind: int := ast.read(pool, id, 0)
+        var type: string := valueType(source, pool, functionId, id)
+        if kind = ast.callKind() {
+            var called: int := ast.read(pool, id, 3)
+            var name: string := str.slice(source, ast.read(pool, called, 1), ast.read(pool, called, 2))
+            var types: string := str.builder("")
+            var argument: int := ast.read(pool, id, 6)
+            while argument >= 0 {
+                if str.length(types) > 0 { types := str.append(types, ", ") }
+                types := str.append(types, typeLabel(valueType(source, pool, functionId, argument)))
+                argument := ast.read(pool, argument, 5)
+            }
+            return "the call " + name + "(" + types + ") with result " + typeLabel(type)
+        }
+        if kind = ast.unaryKind() {
+            var operand: int := ast.read(pool, id, 3)
+            var operation: int := ast.read(pool, id, 10)
+            if operation = 38 { return "'&' (address) of a value of type " + typeLabel(valueType(source, pool, functionId, operand)) }
+            if operation = 64 { return "'@' of a value of type " + typeLabel(valueType(source, pool, functionId, operand)) }
+            return "operator '" + operatorText(operation) + "' on " + typeLabel(valueType(source, pool, functionId, operand))
+        }
+        if kind = ast.binaryKind() { return "operator '" + operatorText(ast.read(pool, id, 10)) + "' on " + typeLabel(valueType(source, pool, functionId, ast.read(pool, id, 3))) + " and " + typeLabel(valueType(source, pool, functionId, ast.read(pool, id, 4))) }
+        if kind = ast.memberKind() { return "the field '." + str.slice(source, ast.read(pool, id, 7), ast.read(pool, id, 8)) + "' of type " + typeLabel(type) }
+        if kind = ast.indexKind() { return "an array element of type " + typeLabel(type) }
+        if kind = ast.nameKind() { return "'" + str.slice(source, ast.read(pool, id, 1), ast.read(pool, id, 2)) + "' of type " + typeLabel(type) }
+        return "a value of type " + typeLabel(type)
+    end
+
+    // Reports `what` is not supported, naming the innermost construct that the code generator cannot handle.
+    fn unsupported(source: string, pool: *[12582912]int, functionId: int, offset: int, what: string, value: int): int
+    begin
+        var bad: int := culprit(source, pool, functionId, value)
+        if bad >= 0 { return diag.report(source, pool, expressionStart(pool, bad), what + " is not supported: the compiler cannot generate code for " + construct(source, pool, functionId, bad) + " here; store it in a local variable first, or split the expression") }
+        if value >= 0 { return diag.report(source, pool, offset, what + " is not supported: " + construct(source, pool, functionId, value) + " cannot be used in this position") }
+        return diag.report(source, pool, offset, what + " is not supported")
+    end
+
     fn mismatch(source: string, pool: *[12582912]int, offset: int, what: string, expected: string, actual: string): int
     begin
         var hint: string := ""
@@ -295,7 +380,7 @@ begin
             if explain(source, pool, functionId, value) = 1 { return 0 }
             var actual: string := valueType(source, pool, functionId, value)
             if value >= 0 && actual != type && str.length(actual) > 0 { return mismatch(source, pool, expressionStart(pool, value), "'" + name + "'", type, actual) }
-            return diag.report(source, pool, offset, "this initializer for '" + name + "' is not supported")
+            return unsupported(source, pool, functionId, offset, "this initializer for '" + name + "' (type " + typeLabel(type) + ")", value)
         }
         if kind = ast.assignKind() {
             var target: int := ast.read(pool, statement, 3)
@@ -307,19 +392,19 @@ begin
             if str.length(targetType) = 0 { return diag.report(source, pool, offset, "the left side of ':=' cannot be assigned to") }
             if codegen.argumentTypeMatches(targetType, actual) = 0 && str.length(actual) > 0 { return mismatch(source, pool, expressionStart(pool, value), "the target", targetType, actual) }
             if str.length(targetType) > 0 && str.char(targetType, 0) = 42 { return diag.report(source, pool, expressionStart(pool, value), "a pointer allocated inside a gc region cannot be stored in a variable that outlives the region") }
-            return diag.report(source, pool, offset, "this assignment is not supported")
+            return unsupported(source, pool, functionId, offset, "assigning to a target of type " + typeLabel(targetType), value)
         }
         if kind = ast.returnKind() {
             var value: int := ast.read(pool, statement, 6)
             var functionName: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
-            var resultType: string := codegen.functionResultType(source, pool, functionId, functionName)
+            var resultType: string := codegen.functionResultType(source, pool, functionId, codegen.qualifiedFunctionName(source, pool, functionId))
             if value < 0 { return diag.report(source, pool, offset, "function '" + functionName + "' must return a value of type " + typeLabel(resultType)) }
             if resultType = "void" { return diag.report(source, pool, expressionStart(pool, value), "function '" + functionName + "' has no result type, so it cannot return a value") }
             if explain(source, pool, functionId, value) = 1 { return 0 }
             var actual: string := valueType(source, pool, functionId, value)
-            if codegen.argumentTypeMatches(resultType, actual) = 0 && str.length(actual) > 0 { return mismatch(source, pool, expressionStart(pool, value), "the result of '" + functionName + "'", resultType, actual) }
+            if codegen.argumentTypeMatches(resultType, actual) = 0 && str.length(actual) > 0 && (str.char(resultType, 0) != 42 || isNullPointerValue(source, pool, value) = 0) { return mismatch(source, pool, expressionStart(pool, value), "the result of '" + functionName + "'", resultType, actual) }
             if str.length(resultType) > 0 && str.char(resultType, 0) = 42 { return diag.report(source, pool, expressionStart(pool, value), "a pointer allocated inside a gc region cannot be returned from it") }
-            return diag.report(source, pool, offset, "this return value is not supported")
+            return unsupported(source, pool, functionId, offset, "this return value (function result " + typeLabel(resultType) + ")", value)
         }
         if kind = ast.expressionKind() || kind = ast.deferKind() {
             var expression: int := ast.read(pool, statement, 6)
@@ -331,12 +416,13 @@ begin
                 if name = "write" || name = "writeln" {
                     var argument: int := ast.read(pool, expression, 6)
                     while argument >= 0 {
+                        if str.length(codegen.writeArgumentCode(source, pool, functionId, "write", argument, offset)) = 0 && culprit(source, pool, functionId, argument) >= 0 { return unsupported(source, pool, functionId, offset, "printing this value", argument) }
                         if str.length(codegen.writeArgumentCode(source, pool, functionId, "write", argument, offset)) = 0 { return diag.report(source, pool, expressionStart(pool, argument), "cannot print a value of type " + typeLabel(valueType(source, pool, functionId, argument))) }
                         argument := ast.read(pool, argument, 5)
                     }
                 }
                 if name = "read" || name = "readln" { return diag.report(source, pool, offset, "'" + name + "' needs exactly one variable of type int, flt or string") }
-                return diag.report(source, pool, offset, "this call is not supported")
+                return unsupported(source, pool, functionId, offset, "this call", expression)
             }
             return diag.report(source, pool, offset, "this expression does nothing as a statement; did you mean ':=' to assign?")
         }
@@ -734,8 +820,13 @@ begin
                         }
                         else {
                             if kind = ast.loopKind() {
+                                // a for loop owns its variable (field 4) and step (field 7)
+                                var loopScope: int := *symbolCount
+                                if ast.read(pool, statement, 4) >= 0 && bindStatements(source, pool, functionId, ast.read(pool, statement, 4), symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
                                 if bindExpression(source, pool, functionId, ast.read(pool, statement, 3), symbols, symbolCount, regionDepth) = 0 { return 0 }
                                 if bindBlock(source, pool, functionId, ast.read(pool, statement, 6), symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
+                                if ast.read(pool, statement, 4) >= 0 && bindStatements(source, pool, functionId, ast.read(pool, statement, 7), symbols, symbolCount, offsetWords, nodeCount, regionDepth) = 0 { return 0 }
+                                *symbolCount := loopScope
                             }
                             else {
                                 if kind = ast.gcKind() {
@@ -771,7 +862,7 @@ begin
         var symbols: [4096]int
         var symbolCount: int := 0
         var functionName: string := str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4))
-        var resultType: string := codegen.functionResultType(source, pool, functionId, functionName)
+        var resultType: string := codegen.functionResultType(source, pool, functionId, codegen.qualifiedFunctionName(source, pool, functionId))
         var hidden: int := 0
         if codegen.indirectResult(source, resultType) = 1 { hidden := 1 }
         var offsetWords: int := codegen.parameterCount(source, pool, functionId) + hidden
@@ -787,6 +878,15 @@ begin
         if str.length(codegen.integerExpression(source, pool, functionId, expression)) > 0 { result := 1 }
         (*cache)[expression] := state + 1 + result * 2
         return result
+    end
+
+    // A flt target accepts a flt value, or an int value (converted to flt).
+    fn floatValueFails(source: string, pool: *[12582912]int, functionId: int, value: int, cache: *[1048576]int): int
+    begin
+        var type: string := codegen.expressionType(source, pool, functionId, value)
+        if type = "flt" && floatCodeAvailable(source, pool, functionId, value, cache) = 1 { return 0 }
+        if type = "int" && integerCodeAvailable(source, pool, functionId, value, cache) = 1 && floatCodeAvailable(source, pool, functionId, value, cache) = 1 { return 0 }
+        return 1
     end
 
     fn floatCodeAvailable(source: string, pool: *[12582912]int, functionId: int, expression: int, cache: *[1048576]int): int
@@ -833,32 +933,32 @@ begin
                     if value >= 0 && codegen.arrayExpressionType(source, pool, functionId, value) = 0 { return failStatement(source, pool, statement, kind) }
                 }
                 else {
-                if type = "int" {
-                    if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0) {
-                        return failStatement(source, pool, statement, kind)
-                    }
-                }
-                else {
-                    if type = "flt" {
-                        if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                    if type = "int" {
+                        if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0) {
+                            return failStatement(source, pool, statement, kind)
+                        }
                     }
                     else {
-                        if type = "string" || type = "str" {
-                            if value >= 0 && (codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                        if type = "flt" {
+                            if value >= 0 && (floatValueFails(source, pool, functionId, value, cache) = 1) { return failStatement(source, pool, statement, kind) }
                         }
                         else {
-                            if codegen.recordWordCount(source, type) > 0 {
-                                if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != type || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0) { return failStatement(source, pool, statement, kind) }
+                            if type = "string" || type = "str" {
+                                if value >= 0 && (codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
                             }
                             else {
-                                if str.char(type, 0) = 42 {
-                                    if value >= 0 && ((codegen.argumentTypeMatches(type, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                                if codegen.recordWordCount(source, type) > 0 {
+                                    if value >= 0 && (codegen.expressionType(source, pool, functionId, value) != type || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0) { return failStatement(source, pool, statement, kind) }
                                 }
-                                else { return failStatement(source, pool, statement, kind) }
+                                else {
+                                    if str.char(type, 0) = 42 {
+                                        if value >= 0 && ((codegen.argumentTypeMatches(type, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0) { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else { return failStatement(source, pool, statement, kind) }
+                                }
                             }
                         }
                     }
-                }
                 }
             }
             else {
@@ -870,7 +970,7 @@ begin
                         var elementType: string := codegen.expressionType(source, pool, functionId, target)
                         if str.length(codegen.arrayElementAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
                         if elementType = "flt" {
-                            if codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            if floatValueFails(source, pool, functionId, value, cache) = 1 { return failStatement(source, pool, statement, kind) }
                         }
                         else {
                             if elementType = "string" || elementType = "str" {
@@ -881,12 +981,12 @@ begin
                                     if (codegen.argumentTypeMatches(elementType, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                 }
                                 else {
-                                if codegen.recordWordCount(source, elementType) > 0 {
-                                    if codegen.expressionType(source, pool, functionId, value) != elementType || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
-                                }
-                                else {
-                                    if elementType != "int" || codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                                }
+                                    if codegen.recordWordCount(source, elementType) > 0 {
+                                        if codegen.expressionType(source, pool, functionId, value) != elementType || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else {
+                                        if elementType != "int" || codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    }
                                 }
                             }
                         }
@@ -898,78 +998,78 @@ begin
                                 if integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                             }
                             else {
-                            if targetType = "flt" {
-                                if integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                            }
-                            else {
-                                if str.length(targetType) = 0 || (targetType != "int" && str.char(targetType, 0) != 42) || integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.argumentTypeMatches(targetType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                            }
-                        }
-                            }
-                        else {
-                        if ast.read(pool, target, 0) = ast.memberKind() {
-                            var memberType: string := codegen.expressionType(source, pool, functionId, target)
-                            if str.length(codegen.memberAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
-                            if memberType = "flt" {
-                                if codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                            }
-                            else {
-                                if memberType = "int" {
-                                    if codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                if targetType = "flt" {
+                                    if integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || floatValueFails(source, pool, functionId, value, cache) = 1 { return failStatement(source, pool, statement, kind) }
                                 }
                                 else {
-                                    if memberType = "string" || memberType = "str" {
-                                        if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                                    }
-                                    else {
-                                        if str.length(memberType) > 0 && str.char(memberType, 0) = 42 {
-                                            if codegen.argumentTypeMatches(memberType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                                        }
-                                        else { return failStatement(source, pool, statement, kind) }
-                                    }
+                                    if str.length(targetType) = 0 || (targetType != "int" && str.char(targetType, 0) != 42) || integerCodeAvailable(source, pool, functionId, ast.read(pool, target, 3), cache) = 0 || codegen.argumentTypeMatches(targetType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                 }
                             }
                         }
                         else {
-                            if ast.read(pool, target, 0) != ast.nameKind() { return failStatement(source, pool, statement, kind) }
-                            var name: string := str.slice(source, ast.read(pool, target, 1), ast.read(pool, target, 2))
-                            var offset: int := codegen.boundLocalOffset(source, pool, functionId, target)
-                            var type: string := codegen.boundLocalType(source, pool, functionId, target)
-                            if offset < 0 && str.length(codegen.qualifiedFieldAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
-                            var declaration: int := ast.read(pool, target, 11)
-                            if str.length(type) > 0 && str.char(type, 0) = 42 && declaration >= 0 && pointerRegionDepth(source, pool, functionId, value, regionDepth) > ast.read(pool, declaration, 10) / 65536 { return failStatement(source, pool, statement, kind) }
-                            if str.length(type) > 0 && str.char(type, 0) = 91 {
-                                if codegen.arrayExpressionType(source, pool, functionId, value) = 0 { return failStatement(source, pool, statement, kind) }
-                            }
-                            else {
-                                if type = "flt" {
-                                    if codegen.expressionType(source, pool, functionId, value) != "flt" || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                            if ast.read(pool, target, 0) = ast.memberKind() {
+                                var memberType: string := codegen.expressionType(source, pool, functionId, target)
+                                if str.length(codegen.memberAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
+                                if memberType = "flt" {
+                                    if floatValueFails(source, pool, functionId, value, cache) = 1 { return failStatement(source, pool, statement, kind) }
                                 }
                                 else {
-                                    if type = "string" || type = "str" {
-                                        if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    if memberType = "int" {
+                                        if codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                     }
                                     else {
-                                        if type = "int" {
-                                            if codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                        if memberType = "string" || memberType = "str" {
+                                            if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                         }
                                         else {
-                            if codegen.recordWordCount(source, type) > 0 {
-                                if codegen.expressionType(source, pool, functionId, value) != type || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
-                            }
-                            else { if str.length(type) = 0 || str.char(type, 0) != 42 || (codegen.argumentTypeMatches(type, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) } }
+                                            if str.length(memberType) > 0 && str.char(memberType, 0) = 42 {
+                                                if codegen.argumentTypeMatches(memberType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                            }
+                                            else { return failStatement(source, pool, statement, kind) }
                                         }
                                     }
                                 }
                             }
-                        }
+                            else {
+                                if ast.read(pool, target, 0) != ast.nameKind() { return failStatement(source, pool, statement, kind) }
+                                var name: string := str.slice(source, ast.read(pool, target, 1), ast.read(pool, target, 2))
+                                var offset: int := codegen.boundLocalOffset(source, pool, functionId, target)
+                                var type: string := codegen.boundLocalType(source, pool, functionId, target)
+                                if offset < 0 && str.length(codegen.qualifiedFieldAddress(source, pool, functionId, target)) = 0 { return failStatement(source, pool, statement, kind) }
+                                var declaration: int := ast.read(pool, target, 11)
+                                if str.length(type) > 0 && str.char(type, 0) = 42 && declaration >= 0 && pointerRegionDepth(source, pool, functionId, value, regionDepth) > ast.read(pool, declaration, 10) / 65536 { return failStatement(source, pool, statement, kind) }
+                                if str.length(type) > 0 && str.char(type, 0) = 91 {
+                                    if codegen.arrayExpressionType(source, pool, functionId, value) = 0 { return failStatement(source, pool, statement, kind) }
+                                }
+                                else {
+                                    if type = "flt" {
+                                        if floatValueFails(source, pool, functionId, value, cache) = 1 { return failStatement(source, pool, statement, kind) }
+                                    }
+                                    else {
+                                        if type = "string" || type = "str" {
+                                            if codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                        }
+                                        else {
+                                            if type = "int" {
+                                                if codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                            }
+                                            else {
+                                                if codegen.recordWordCount(source, type) > 0 {
+                                                    if codegen.expressionType(source, pool, functionId, value) != type || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) }
+                                                }
+                                                else { if str.length(type) = 0 || str.char(type, 0) != 42 || (codegen.argumentTypeMatches(type, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) } }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 else {
                     if kind = ast.returnKind() {
                         var value: int := ast.read(pool, statement, 6)
-                        var resultType: string := codegen.functionResultType(source, pool, functionId, str.slice(source, ast.read(pool, functionId, 3), ast.read(pool, functionId, 4)))
+                        var resultType: string := codegen.functionResultType(source, pool, functionId, codegen.qualifiedFunctionName(source, pool, functionId))
                         if str.length(resultType) > 0 && str.char(resultType, 0) = 42 && value >= 0 && pointerRegionDepth(source, pool, functionId, value, regionDepth) > 0 { return failStatement(source, pool, statement, kind) }
                         if resultType = "flt" {
                             if value < 0 || floatCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
@@ -982,20 +1082,20 @@ begin
                                 else { if value < 0 || codegen.expressionType(source, pool, functionId, value) != resultType || str.length(codegen.recordAddress(source, pool, functionId, value)) = 0 { return failStatement(source, pool, statement, kind) } }
                             }
                             else {
-                            if resultType = "string" || resultType = "str" {
-                                if value < 0 || codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
-                            }
-                            else {
-                                if resultType = "int" {
-                                if value < 0 || codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                if resultType = "string" || resultType = "str" {
+                                    if value < 0 || codegen.stringExpressionType(source, pool, functionId, value) = 0 || stringCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                 }
                                 else {
-                                    if str.length(resultType) > 0 && str.char(resultType, 0) = 42 {
-                                        if value < 0 || codegen.argumentTypeMatches(resultType, codegen.expressionType(source, pool, functionId, value)) = 0 || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                    if resultType = "int" {
+                                        if value < 0 || codegen.expressionType(source, pool, functionId, value) != "int" || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                     }
-                                    else { if resultType = "void" && value >= 0 { return failStatement(source, pool, statement, kind) } }
+                                    else {
+                                        if str.length(resultType) > 0 && str.char(resultType, 0) = 42 {
+                                            if value < 0 || (codegen.argumentTypeMatches(resultType, codegen.expressionType(source, pool, functionId, value)) = 0 && isNullPointerValue(source, pool, value) = 0) || integerCodeAvailable(source, pool, functionId, value, cache) = 0 { return failStatement(source, pool, statement, kind) }
+                                        }
+                                        else { if resultType = "void" && value >= 0 { return failStatement(source, pool, statement, kind) } }
+                                    }
                                 }
-                            }
                             }
                         }
                     }
@@ -1032,6 +1132,8 @@ begin
                             }
                             else {
                                 if kind = ast.loopKind() {
+                                    if ast.read(pool, statement, 4) >= 0 && validateStatements(source, pool, functionId, ast.read(pool, statement, 4), nodeCount, regionDepth, cache) = 0 { return 0 }
+                                    if ast.read(pool, statement, 4) >= 0 && validateStatements(source, pool, functionId, ast.read(pool, statement, 7), nodeCount, regionDepth, cache) = 0 { return 0 }
                                     if codegen.expressionType(source, pool, functionId, ast.read(pool, statement, 3)) != "int" || integerCodeAvailable(source, pool, functionId, ast.read(pool, statement, 3), cache) = 0 { return failStatement(source, pool, statement, kind) }
                                     if validateBlock(source, pool, functionId, ast.read(pool, statement, 6), nodeCount, regionDepth, cache) = 0 { return failStatement(source, pool, statement, kind) }
                                 }
@@ -1055,7 +1157,7 @@ begin
                                             }
                                             if arm >= 0 || fallback > 1 { return failStatement(source, pool, statement, kind) }
                                         }
-                                        else { if kind != ast.assemblyKind() && kind != ast.breakKind() && kind != ast.continueKind() { return failStatement(source, pool, statement, kind) } }
+                                        else { if kind != ast.assemblyKind() && kind != ast.breakKind() && kind != ast.continueKind() && kind != ast.labelKind() && kind != ast.gotoKind() { return failStatement(source, pool, statement, kind) } }
                                     }
                                 }
                             }
@@ -1124,8 +1226,8 @@ begin
         return 1
     end
 
-    // 'break' and 'continue' must be inside a while loop, and the loop must not hold 'defer' or 'gc.begin'
-    // (leaving the loop early would skip their cleanup).
+    // 'break' and 'continue' must be inside a while loop (pending defers and gc regions of the loop body
+    // are run/closed before the jump; see codegen).
     fn validateLoopControl(source: string, pool: *[12582912]int, nodeCount: int): int
     begin
         var id: int := 0
@@ -1145,15 +1247,34 @@ begin
                     candidate := candidate + 1
                 }
                 if best < 0 { return diag.report(source, pool, position, "'" + word + "' can only be used inside a 'while' loop") }
-                var body: int := ast.read(pool, best, 6)
-                var inner: int := 0
-                while inner < nodeCount {
-                    var innerKind: int := ast.read(pool, inner, 0)
-                    if (innerKind = ast.deferKind() || innerKind = ast.gcKind()) && ast.read(pool, inner, 9) = owner && ast.read(pool, inner, 1) >= ast.read(pool, body, 1) && ast.read(pool, inner, 1) < ast.read(pool, body, 2) {
-                        return diag.report(source, pool, position, "'" + word + "' cannot be used in a loop that contains 'defer' or 'gc.begin' (it would skip the cleanup); move that code into a function")
+            }
+            id := id + 1
+        }
+        return 1
+    end
+
+    // Every goto needs a label of that name in the same function; functions with defer or gc.begin cannot use goto
+    // (a jump could skip their cleanup).
+    fn validateGoto(source: string, pool: *[12582912]int, nodeCount: int): int
+    begin
+        var id: int := 0
+        while id < nodeCount {
+            var kind: int := ast.read(pool, id, 0)
+            if kind = ast.gotoKind() || kind = ast.labelKind() {
+                var owner: int := ast.read(pool, id, 9)
+                var name: string := str.slice(source, ast.read(pool, id, 3), ast.read(pool, id, 4))
+                var labels: int := 0
+                var other: int := 0
+                while other < nodeCount {
+                    if ast.read(pool, other, 9) = owner {
+                        var otherKind: int := ast.read(pool, other, 0)
+                        if otherKind = ast.labelKind() && str.slice(source, ast.read(pool, other, 3), ast.read(pool, other, 4)) = name { labels := labels + 1 }
+                        if (otherKind = ast.deferKind() || otherKind = ast.gcKind()) && kind = ast.gotoKind() { return diag.report(source, pool, ast.read(pool, id, 1), "'goto' cannot be used in a function that contains 'defer' or 'gc.begin' (the jump could skip their cleanup)") }
                     }
-                    inner := inner + 1
+                    other := other + 1
                 }
+                if kind = ast.gotoKind() && labels = 0 { return diag.report(source, pool, ast.read(pool, id, 1), "no label '" + name + ":' in this function") }
+                if kind = ast.labelKind() && labels > 1 { return diag.report(source, pool, ast.read(pool, id, 1), "label '" + name + "' is defined more than once in this function") }
             }
             id := id + 1
         }
@@ -1167,6 +1288,7 @@ begin
         }
         if program[2] > 4096 { return diag.report(source, pool, 0, "too many functions (limit 4096)") }
         if validateLoopControl(source, pool, nodeCount) = 0 { return 0 }
+        if validateGoto(source, pool, nodeCount) = 0 { return 0 }
         var id: int := program[1]
         var visited: int := 0
         var mainFound: int := 0

@@ -458,8 +458,11 @@ begin
             }
             if kind = ast.loopKind() {
                 handled := 1
+                // a for loop: its declaration runs once, its step every iteration
+                if ast.read(pool, statement, 4) >= 0 { scanStatements(source, pool, c, ast.read(pool, statement, 4), depth, 0) }
                 scanExpression(source, pool, c, ast.read(pool, statement, 3), depth + 1)
                 scanBlock(source, pool, c, ast.read(pool, statement, 6), depth + 1)
+                if ast.read(pool, statement, 4) >= 0 { scanStatements(source, pool, c, ast.read(pool, statement, 7), depth + 1, 0) }
             }
             if kind = ast.returnKind() {
                 handled := 1
@@ -1860,8 +1863,10 @@ begin
             if kind = ast.loopKind() {
                 var top: string := label(c)
                 var test: string := label(c)
+                if ast.read(pool, statement, 4) >= 0 { output := str.append(output, statements(source, pool, c, ast.read(pool, statement, 4))) }
                 output := str.append(output, " jmp " + test + "\n .p2align 4\n" + top + ":\n")
                 output := str.append(output, block(source, pool, c, ast.read(pool, statement, 6)))
+                if ast.read(pool, statement, 4) >= 0 { output := str.append(output, statements(source, pool, c, ast.read(pool, statement, 7))) }
                 output := str.append(output, test + ":\n")
                 output := str.append(output, branchTrue(source, pool, c, ast.read(pool, statement, 3), top))
             }

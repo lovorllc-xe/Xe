@@ -70,7 +70,7 @@ begin
             if item[0] = token.endKind() || item[1] >= finish { position := finish }
             else {
                 if item[0] = token.nameKind() {
-                    if textEquals(source, item[1], item[2], "while") = 1 { hasLoop := 1 }
+                    if textEquals(source, item[1], item[2], "while") = 1 || textEquals(source, item[1], item[2], "for") = 1 { hasLoop := 1 }
                     if item[1] >= declaration && sameSpan(source, item[1], item[2], wantedFirst, wantedFinish) = 1 { last := item[2] }
                 }
                 position := item[2]
@@ -104,8 +104,30 @@ begin
         return 0
     end
 
+    // A function body that contains an `asm` block gets no register allocation: inline assembly commonly ends with
+    // `leave; ret`, which would skip the epilogue that restores callee-saved registers.
+    fn containsAssembly(source: string, start: int, finish: int): int
+    begin
+        var key: string := "asm:" + str.number(start) + ":" + str.number(finish)
+        if memo.has(key) = 1 { return memo.number(memo.get(key)) }
+        var found: int := 0
+        var position: int := start
+        var line: int := 1
+        while position < finish && found = 0 {
+            var item: [4]int := lexer.scan(source, position, line)
+            if item[0] = token.endKind() || item[1] >= finish { position := finish }
+            else {
+                if item[0] = token.assemblyKind() { found := 1 }
+                position := item[2]
+                line := item[3]
+            }
+        }
+        return memo.putNumber(key, found)
+    end
+
     fn registerIndex(source: string, start: int, finish: int, wanted: string, before: int): int
     begin
+        if containsAssembly(source, start, finish) = 1 { return -1 }
         // Keep register allocation available for medium sized hot functions
         // while bounding the repeated lexical scans used by this allocator.
         if finish - start > 2048 { return -1 }
@@ -188,6 +210,7 @@ begin
     fn registerCountSlow(source: string, start: int, finish: int): int
     begin
         if finish - start > 2048 { return 0 }
+        if containsAssembly(source, start, finish) = 1 { return 0 }
         var ends: [5]int
         var slotInit: int := 0
         while slotInit < 5 {

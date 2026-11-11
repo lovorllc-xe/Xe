@@ -290,6 +290,625 @@ begin
         return "ms"
     end
 
+    // ---- callbacks: C code calls a thunk with the Windows convention, the thunk calls the Xe function with the
+    // System V convention (rdi, rsi, rdx, rcx, r8, r9) that Xe uses. 32 thunks, 64 bytes apart.
+    fn callback_table(): int
+    begin
+        asm {
+            lea rax, [rip+.LxeCbTargets]
+            leave
+            ret
+            .data
+            .balign 8
+        .LxeCbTargets:
+            .skip 256
+            .text
+        }
+        return 0
+    end
+
+    fn callback_thunks(): int
+    begin
+        asm {
+            lea rax, [rip+.LxeCbThunk0]
+            leave
+            ret
+            .balign 64
+        .LxeCbThunk0:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+0]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk1:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+8]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk2:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+16]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk3:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+24]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk4:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+32]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk5:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+40]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk6:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+48]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk7:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+56]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk8:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+64]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk9:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+72]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk10:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+80]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk11:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+88]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk12:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+96]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk13:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+104]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk14:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+112]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk15:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+120]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk16:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+128]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk17:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+136]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk18:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+144]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk19:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+152]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk20:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+160]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk21:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+168]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk22:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+176]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk23:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+184]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk24:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+192]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk25:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+200]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk26:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+208]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk27:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+216]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk28:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+224]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk29:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+232]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk30:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+240]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+            .balign 64
+        .LxeCbThunk31:
+            push rbp
+            mov rbp, rsp
+            push rdi
+            push rsi
+            mov rdi, rcx
+            mov rsi, rdx
+            mov rdx, r8
+            mov rcx, r9
+            mov r8, qword ptr [rbp+48]
+            mov r9, qword ptr [rbp+56]
+            mov rax, qword ptr [rip+.LxeCbTargets+248]
+            call rax
+            pop rsi
+            pop rdi
+            pop rbp
+            ret
+        }
+        return 0
+    end
+
+    fn callback(target: int): int
+    begin
+        var table: *void := cast.ptr(callback_table())
+        var slot: int := 0
+        while slot < 32 {
+            var current: int := runtime.hw.read32(table + slot * 8) | (runtime.hw.read32(table + slot * 8 + 4) << 32)
+            if current = target || current = 0 {
+                runtime.hw.write32(table + slot * 8, target & 4294967295)
+                runtime.hw.write32(table + slot * 8 + 4, (target >> 32) & 4294967295)
+                return callback_thunks() + slot * 64
+            }
+            slot := slot + 1
+        }
+        return 0
+    end
+
     fn loadlibrary_address(): int
     begin
         asm {

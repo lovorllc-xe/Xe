@@ -48,7 +48,8 @@ begin
         var request: *int := alloc(16)
         *request := nanoseconds / 1000000000
         *(request + 1) := nanoseconds % 1000000000
-        syscall.invoke3(35, request, 0, 0)
+        var result: int := syscall.invoke3(35, request, request, 0)
+        while result = -4 { result := syscall.invoke3(35, request, request, 0) }
         free(request)
     end
 

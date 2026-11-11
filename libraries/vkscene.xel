@@ -174,26 +174,29 @@ begin
         free(scene)
     end
 
-    fn add_vertex(buffer: *vulkan.Buffer, index: int, x: flt, y: flt, z: flt, nx: flt, ny: flt, nz: flt, r: flt, g: flt, b: flt)
+    fn add_vertex(data: *void, index: int, x: flt, y: flt, z: flt, nx: flt, ny: flt, nz: flt, r: flt, g: flt, b: flt)
     begin
         var at: int := index * 36
-        ffi.put_float32(buffer.data, at, x)
-        ffi.put_float32(buffer.data, at + 4, y)
-        ffi.put_float32(buffer.data, at + 8, z)
-        ffi.put_float32(buffer.data, at + 12, nx)
-        ffi.put_float32(buffer.data, at + 16, ny)
-        ffi.put_float32(buffer.data, at + 20, nz)
-        ffi.put_float32(buffer.data, at + 24, r)
-        ffi.put_float32(buffer.data, at + 28, g)
-        ffi.put_float32(buffer.data, at + 32, b)
+        ffi.put_float32(data, at, x)
+        ffi.put_float32(data, at + 4, y)
+        ffi.put_float32(data, at + 8, z)
+        ffi.put_float32(data, at + 12, nx)
+        ffi.put_float32(data, at + 16, ny)
+        ffi.put_float32(data, at + 20, nz)
+        ffi.put_float32(data, at + 24, r)
+        ffi.put_float32(data, at + 28, g)
+        ffi.put_float32(data, at + 32, b)
     end
 
-    // Uploads a gfx3d mesh (flat-shaded: every triangle gets its own face normal) in one color (0.0 - 1.0).
+    // Uploads a gfx3d mesh (flat-shaded: every triangle gets its own face normal) in one color (0.0 - 1.0) into
+    // the GPU's own memory (device-local), so drawing it does not cross the bus every frame.
     fn model(vk: *vulkan.Vulkan, mesh: *gfx3d.Mesh, r: flt, g: flt, b: flt): *vkscene.Model
     begin
         var m: *vkscene.Model := alloc(32)
         m.count := mesh.triangle_count * 3
-        m.vertices := vulkan.buffer_new(vk, m.count * 36 + 36)
+        var bytes: int := m.count * 36 + 36
+        var staging: *void := alloc(bytes)
+        runtime.mem.set(staging, 0, bytes)
         var t: int := 0
         while t < mesh.triangle_count {
             var ia: int := (*mesh.indices)[t * 3] * 3
@@ -203,11 +206,15 @@ begin
             var pb: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ib], (*mesh.vertices)[ib + 1], (*mesh.vertices)[ib + 2])
             var pc: gfx3d.Vec3 := gfx3d.vec3((*mesh.vertices)[ic], (*mesh.vertices)[ic + 1], (*mesh.vertices)[ic + 2])
             var n: gfx3d.Vec3 := gfx3d.normalize(gfx3d.cross(gfx3d.vsub(pb, pa), gfx3d.vsub(pc, pa)))
-            add_vertex(m.vertices, t * 3, pa.x, pa.y, pa.z, n.x, n.y, n.z, r, g, b)
-            add_vertex(m.vertices, t * 3 + 1, pb.x, pb.y, pb.z, n.x, n.y, n.z, r, g, b)
-            add_vertex(m.vertices, t * 3 + 2, pc.x, pc.y, pc.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(staging, t * 3, pa.x, pa.y, pa.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(staging, t * 3 + 1, pb.x, pb.y, pb.z, n.x, n.y, n.z, r, g, b)
+            add_vertex(staging, t * 3 + 2, pc.x, pc.y, pc.z, n.x, n.y, n.z, r, g, b)
             t := t + 1
         }
+        m.vertices := vulkan.buffer_device(vk, bytes, 128)
+        if @m.vertices = 0 { m.vertices := vulkan.buffer_new(vk, bytes) }
+        vulkan.buffer_upload(vk, m.vertices, staging, bytes)
+        free(staging)
         return m
     end
 

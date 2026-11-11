@@ -31,7 +31,18 @@
   "enum"
   "break"
   "continue"
+  "goto"
+  "to"
+  "downto"
+  "step"
 ] @keyword.xe
+
+(label_statement name: (identifier) @label.xe)
+(goto_statement label: (identifier) @label.xe)
+((identifier) @constant.builtin.xe
+  (#any-of? @constant.builtin.xe "null" "true" "false"))
+((identifier) @keyword.xe
+  (#eq? @keyword.xe "sizeof"))
 
 ; Types ------------------------------------------------------------------
 (primitive_type) @type.xe
@@ -65,6 +76,7 @@
 (string) @string.xe
 (escape_sequence) @string.escape.xe
 (number) @number.xe
+(char) @string.special.xe
 
 ; Operators --------------------------------------------------------------
 [

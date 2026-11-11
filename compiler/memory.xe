@@ -4,7 +4,14 @@ begin
     //   * Small objects (up to 32 KiB) live in size-class pages and are
     //     recycled through per-class free lists.
     //   * Large objects get their own page runs, returned to the OS on free.
-    //   * gc.begin/gc.end regions are chunked bump arenas released in bulk.
+    //   * gc.begin/gc.end regions are chunked bump arenas released in bulk; every thread has its own region stack.
+    //   * Thread state (main: .LxeMainThread; workers: a heap record) is 4160 bytes:
+    //     +0 tid, +8 stack block, +16 result, +24 clone tid word, +32 exiting, +40 parked epoch,
+    //     +48 region depth, +56 parked rsp, +64 region stack (128 entries of 32 bytes).
+    //     A worker stack is 1 MiB aligned inside a heap block; its lowest words hold the record and a magic, so
+    //     .LxeCurrentThread finds the record from rsp. Other stacks (the main thread, foreign threads) use .LxeMainThread.
+    //   * With threads alive (Linux), a collection stops the world: every other thread gets SIGPWR and parks in
+    //     .LxeGcSigHandler (its registers are saved on its own stack, which is scanned) until the epoch changes.
     //   * A conservative mark-and-sweep collector reclaims unreachable
     //     blocks automatically. Explicit free() still releases immediately.
     // Every block keeps the 24-byte header the rest of the runtime expects:
@@ -53,8 +60,16 @@ begin
 .quad 0
 .LxeMarkOverflow:
 .quad 0
-.LxeRegionDepth:
+.LxeGcEpoch:
 .quad 0
+.LxeRegionsActive:
+.quad 0
+.LxeGcThreadAware:
+.quad 0
+.LxeGcSignalReady:
+.quad 0
+.LxeGcSigAct:
+.skip 32
 .LxeClassRecip:
 .zero 1024
 .LxeFreeHeads:
@@ -63,8 +78,9 @@ begin
 .skip 1024
 .LxeClassLimit:
 .skip 1024
-.LxeRegions:
-.skip 8192
+.align 64
+.LxeMainThread:
+.skip 4160
 .section .text
 "
     end
@@ -275,7 +291,46 @@ begin
 
     fn allocate(): string
     begin
-        return "xe.alloc:
+        return ".LxeCurrentThread:
+ mov rax, rsp
+ cmp rax, qword ptr [rip+.LxeMemBase]
+ jb .LxeCurrentMain
+ cmp rax, qword ptr [rip+.LxeMemTop]
+ jae .LxeCurrentMain
+ and rax, -1048576
+ cmp rax, qword ptr [rip+.LxeMemBase]
+ jb .LxeCurrentMain
+ push rcx
+ mov rcx, 6369527427473155172
+ cmp qword ptr [rax+8], rcx
+ pop rcx
+ jne .LxeCurrentMain
+ mov rax, qword ptr [rax]
+ ret
+.LxeCurrentMain:
+ lea rax, [rip+.LxeMainThread]
+ ret
+.LxeAllocGlobal:
+ push rbp
+ mov rbp, rsp
+ push rbx
+ push r12
+ push r13
+ push r14
+ mov r12, rdi
+ test rdi, rdi
+ js .LxeAllocFail0
+ mov rax, 1099511627776
+ cmp rdi, rax
+ ja .LxeAllocFail0
+ call .LxeMemLockAcquire
+ cmp qword ptr [rip+.LxeMemBase], 0
+ jne .LxeAllocGeneral
+ call .LxeMemInit
+ test rax, rax
+ jz .LxeAllocFail
+ jmp .LxeAllocGeneral
+xe.alloc:
  push rbp
  mov rbp, rsp
  push rbx
@@ -295,8 +350,13 @@ begin
  test rax, rax
  jz .LxeAllocFail
 .LxeAllocReady:
- cmp qword ptr [rip+.LxeRegionDepth], 0
+ cmp qword ptr [rip+.LxeRegionsActive], 0
+ je .LxeAllocGeneral
+ call .LxeCurrentThread
+ mov rbx, rax
+ cmp qword ptr [rbx+48], 0
  jne .LxeAllocRegion
+.LxeAllocGeneral:
  mov rdi, r12
  call .LxeMemClass
  test rax, rax
@@ -373,7 +433,12 @@ begin
  shr rax, 48
  shl rcx, 10
  add rcx, qword ptr [rip+.LxeMemBits]
- bts qword ptr [rcx], rax
+ mov rdx, rax
+ shr rdx, 6
+ lea rcx, [rcx+rdx*8]
+ mov rdx, qword ptr [rcx]
+ bts rdx, rax
+ mov qword ptr [rcx], rdx
  lea rax, [r13-24]
  mov qword ptr [rbx], rax
  mov qword ptr [rbx+8], 0
@@ -425,11 +490,10 @@ begin
 .LxeAllocRegion:
  lea r13, [r12+39]
  and r13, -16
- mov rbx, qword ptr [rip+.LxeRegionDepth]
- dec rbx
- shl rbx, 5
- lea rcx, [rip+.LxeRegions]
- add rbx, rcx
+ mov rax, qword ptr [rbx+48]
+ dec rax
+ shl rax, 5
+ lea rbx, [rbx+rax+64]
  mov rax, qword ptr [rbx+8]
  test rax, rax
  jz .LxeAllocRegionChunk
@@ -550,8 +614,13 @@ begin
  mov rcx, r8
  shl rcx, 10
  add rcx, qword ptr [rip+.LxeMemBits]
- btr qword ptr [rcx], rax
+ mov rdx, rax
+ shr rdx, 6
+ lea rcx, [rcx+rdx*8]
+ mov rdx, qword ptr [rcx]
+ btr rdx, rax
  jnc .LxeFreeDone
+ mov qword ptr [rcx], rdx
  imul rax, r9
  mov rdx, r8
  shl rdx, 16
@@ -623,12 +692,207 @@ xe.alloc.aligned:
         return ".LxeGcMaybe:
  cmp qword ptr [rip+.LxeGcDisabled], 0
  jne .LxeGcMaybeSkip
- cmp qword ptr [rip+.LxeThreadsActive], 0
- jne .LxeGcMaybeSkip
  cmp qword ptr [rip+.LxeStackBase], 0
  je .LxeGcMaybeSkip
- jmp .LxeGcCollect
+ cmp qword ptr [rip+.LxeThreadsActive], 0
+ je .LxeGcCollect
+ cmp qword ptr [rip+.LxeGcThreadAware], 0
+ jne .LxeGcCollectWorld
 .LxeGcMaybeSkip:
+ ret
+.LxeGcInstallSignal:
+ mov qword ptr [rip+.LxeGcSignalReady], 1
+ lea rax, [rip+.LxeGcSigHandler]
+ mov qword ptr [rip+.LxeGcSigAct], rax
+ mov qword ptr [rip+.LxeGcSigAct+8], 335544320
+ lea rax, [rip+.LxeGcSigRestorer]
+ mov qword ptr [rip+.LxeGcSigAct+16], rax
+ mov qword ptr [rip+.LxeGcSigAct+24], 0
+ mov edi, 30
+ lea rsi, [rip+.LxeGcSigAct]
+ xor edx, edx
+ mov r10d, 8
+ mov eax, 13
+ syscall
+ test rax, rax
+ jnz .LxeGcInstallDone
+ mov qword ptr [rip+.LxeGcThreadAware], 1
+.LxeGcInstallDone:
+ ret
+.LxeGcSigRestorer:
+ mov eax, 15
+ syscall
+ ud2
+.LxeGcSigHandler:
+ call .LxeCurrentThread
+ mov rcx, qword ptr [rip+.LxeGcEpoch]
+ mov qword ptr [rax+56], rsp
+ mov qword ptr [rax+40], rcx
+.LxeGcSigWait:
+ push rcx
+ lea rdi, [rip+.LxeGcEpoch]
+ mov esi, 128
+ mov edx, ecx
+ xor r10d, r10d
+ mov eax, 202
+ syscall
+ pop rcx
+ cmp qword ptr [rip+.LxeGcEpoch], rcx
+ je .LxeGcSigWait
+ ret
+.LxeGcCollectWorld:
+ push rbp
+ mov rbp, rsp
+ push rbx
+ push r12
+ push r13
+ push r14
+ push r15
+ push rax
+ push rcx
+ push rdx
+ push rsi
+ push rdi
+ push r8
+ push r9
+ push r10
+ push r11
+ sub rsp, 8
+.LxeGcWorldLock:
+ mov eax, 1
+ xchg qword ptr [rip+.LxeThreadLock], rax
+ test rax, rax
+ jz .LxeGcWorldLocked
+ pause
+ jmp .LxeGcWorldLock
+.LxeGcWorldLocked:
+ mov eax, 186
+ syscall
+ mov r13, rax
+ mov eax, 39
+ syscall
+ mov r14, rax
+ lock inc qword ptr [rip+.LxeGcEpoch]
+ mov r15, qword ptr [rip+.LxeGcEpoch]
+ cmp r13, r14
+ je .LxeGcWorldSignalWorkers
+ mov rdi, r14
+ mov rsi, r14
+ mov edx, 30
+ mov eax, 234
+ syscall
+.LxeGcWorldSignalWorkers:
+ lea rbx, [rip+.LxeThreadRecords]
+ mov r12d, 1024
+.LxeGcWorldSignalLoop:
+ mov rax, qword ptr [rbx+8]
+ test rax, rax
+ jz .LxeGcWorldSignalNext
+ cmp qword ptr [rax+32], 0
+ jne .LxeGcWorldSignalNext
+ mov esi, dword ptr [rax+24]
+ test esi, esi
+ jz .LxeGcWorldSignalNext
+ cmp rsi, r13
+ je .LxeGcWorldSignalNext
+ mov rdi, r14
+ mov edx, 30
+ mov eax, 234
+ syscall
+.LxeGcWorldSignalNext:
+ add rbx, 16
+ dec r12d
+ jnz .LxeGcWorldSignalLoop
+.LxeGcWorldWait:
+ xor r12d, r12d
+ cmp r13, r14
+ je .LxeGcWorldWaitWorkers
+ cmp qword ptr [rip+.LxeMainThread+40], r15
+ je .LxeGcWorldWaitWorkers
+ inc r12d
+.LxeGcWorldWaitWorkers:
+ lea rbx, [rip+.LxeThreadRecords]
+ mov ecx, 1024
+.LxeGcWorldWaitLoop:
+ mov rax, qword ptr [rbx+8]
+ test rax, rax
+ jz .LxeGcWorldWaitNext
+ cmp qword ptr [rax+32], 0
+ jne .LxeGcWorldWaitNext
+ mov edx, dword ptr [rax+24]
+ test edx, edx
+ jz .LxeGcWorldWaitNext
+ cmp rdx, r13
+ je .LxeGcWorldWaitNext
+ cmp qword ptr [rax+40], r15
+ je .LxeGcWorldWaitNext
+ inc r12d
+.LxeGcWorldWaitNext:
+ add rbx, 16
+ dec ecx
+ jnz .LxeGcWorldWaitLoop
+ test r12d, r12d
+ jz .LxeGcWorldStopped
+ mov eax, 24
+ syscall
+ jmp .LxeGcWorldWait
+.LxeGcWorldStopped:
+ call .LxeGcCollect
+ lock inc qword ptr [rip+.LxeGcEpoch]
+ lea rdi, [rip+.LxeGcEpoch]
+ mov esi, 129
+ mov edx, 2147483647
+ xor r10d, r10d
+ mov eax, 202
+ syscall
+ mov qword ptr [rip+.LxeThreadLock], 0
+ add rsp, 8
+ pop r11
+ pop r10
+ pop r9
+ pop r8
+ pop rdi
+ pop rsi
+ pop rdx
+ pop rcx
+ pop rax
+ pop r15
+ pop r14
+ pop r13
+ pop r12
+ pop rbx
+ pop rbp
+ ret
+.LxeGcRegionRootsOf:
+ push rbx
+ push r12
+ push r14
+ mov r14, rdi
+ xor r12d, r12d
+.LxeGcRegionRoots:
+ cmp r12, qword ptr [r14+48]
+ jae .LxeGcRegionRootsDone
+ mov rbx, r12
+ shl rbx, 5
+ add rbx, r14
+ mov rbx, qword ptr [rbx+64]
+.LxeGcRegionChunk:
+ test rbx, rbx
+ jz .LxeGcRegionNext
+ lea rdi, [rbx+16]
+ mov rsi, qword ptr [rbx+8]
+ shl rsi, 16
+ add rsi, rbx
+ call .LxeGcScanRange
+ mov rbx, qword ptr [rbx]
+ jmp .LxeGcRegionChunk
+.LxeGcRegionNext:
+ inc r12
+ jmp .LxeGcRegionRoots
+.LxeGcRegionRootsDone:
+ pop r14
+ pop r12
+ pop rbx
  ret
 .LxeGcMark:
  mov rax, rdi
@@ -674,10 +938,16 @@ xe.alloc.aligned:
  mov rcx, r8
  shl rcx, 10
  add rcx, qword ptr [rip+.LxeMemBits]
- bt qword ptr [rcx], rax
+ mov rdx, rax
+ shr rdx, 6
+ lea rcx, [rcx+rdx*8]
+ mov rdx, qword ptr [rcx]
+ bt rdx, rax
  jnc .LxeGcMarkNo
- bts qword ptr [rcx+512], rax
+ mov rdx, qword ptr [rcx+512]
+ bts rdx, rax
  jc .LxeGcMarkNo
+ mov qword ptr [rcx+512], rdx
  mov rcx, qword ptr [rip+.LxeMarkTop]
  cmp rcx, qword ptr [rip+.LxeMarkLimit]
  jae .LxeGcMarkOverflow
@@ -776,8 +1046,20 @@ xe.alloc.aligned:
  mov qword ptr [rip+.LxeMarkOverflow], 0
  mov rax, qword ptr [rip+.LxeMarkStack]
  mov qword ptr [rip+.LxeMarkTop], rax
+ call .LxeCurrentThread
+ lea rcx, [rip+.LxeMainThread]
  mov rdi, rsp
+ cmp rax, rcx
+ je .LxeGcScanMainStack
+ mov rdi, qword ptr [rip+.LxeMainThread+56]
+.LxeGcScanMainStack:
  mov rsi, qword ptr [rip+.LxeStackBase]
+ test rdi, rdi
+ jz .LxeGcScanMainDone
+ call .LxeGcScanRange
+.LxeGcScanMainDone:
+ lea rdi, [rip+.LxeThreadRecords]
+ lea rsi, [rdi+16384]
  call .LxeGcScanRange
  lea rdi, [rip+.LxeGlobals]
  lea rsi, [rdi+2048]
@@ -788,28 +1070,22 @@ xe.alloc.aligned:
  mov rsi, qword ptr [rip+.LxeUserRootsEnd]
  call .LxeGcScanRange
 .LxeGcNoUserRoots:
- xor r12d, r12d
-.LxeGcRegionRoots:
- cmp r12, qword ptr [rip+.LxeRegionDepth]
- jae .LxeGcRegionRootsDone
- mov rbx, r12
- shl rbx, 5
- lea rcx, [rip+.LxeRegions]
- mov rbx, qword ptr [rcx+rbx]
-.LxeGcRegionChunk:
- test rbx, rbx
- jz .LxeGcRegionNext
- lea rdi, [rbx+16]
- mov rsi, qword ptr [rbx+8]
- shl rsi, 16
- add rsi, rbx
- call .LxeGcScanRange
- mov rbx, qword ptr [rbx]
- jmp .LxeGcRegionChunk
-.LxeGcRegionNext:
- inc r12
- jmp .LxeGcRegionRoots
-.LxeGcRegionRootsDone:
+ lea rdi, [rip+.LxeMainThread]
+ call .LxeGcRegionRootsOf
+ xor r14d, r14d
+.LxeGcThreadRegions:
+ cmp r14, 1024
+ jae .LxeGcThreadRegionsDone
+ mov rax, r14
+ shl rax, 4
+ lea rcx, [rip+.LxeThreadRecords]
+ mov rdi, qword ptr [rcx+rax+8]
+ inc r14
+ test rdi, rdi
+ jz .LxeGcThreadRegions
+ call .LxeGcRegionRootsOf
+ jmp .LxeGcThreadRegions
+.LxeGcThreadRegionsDone:
  call .LxeGcDrain
  cmp qword ptr [rip+.LxeMarkOverflow], 0
  jne .LxeGcFinish
@@ -843,11 +1119,17 @@ xe.alloc.aligned:
 .LxeGcSweepBlock:
  cmp r11, r10
  jae .LxeGcSweepNext
- bt qword ptr [rbx], r11
+ mov rsi, r11
+ shr rsi, 6
+ lea rsi, [rbx+rsi*8]
+ mov rdi, qword ptr [rsi]
+ bt rdi, r11
  jnc .LxeGcSweepBlockNext
- bt qword ptr [rbx+512], r11
+ mov rax, qword ptr [rsi+512]
+ bt rax, r11
  jc .LxeGcSweepLiveBlock
- btr qword ptr [rbx], r11
+ btr rdi, r11
+ mov qword ptr [rsi], rdi
  mov rax, r11
  imul rax, r9
  add rax, r8
@@ -929,16 +1211,18 @@ xe.alloc.aligned:
  test rax, rax
  jz .LxeRegionPushFail
 .LxeRegionPushReady:
- mov rax, qword ptr [rip+.LxeRegionDepth]
- cmp rax, 256
+ call .LxeCurrentThread
+ mov rbx, rax
+ mov rax, qword ptr [rbx+48]
+ cmp rax, 128
  jae .LxeRegionPushFail
  shl rax, 5
- lea rcx, [rip+.LxeRegions]
- add rax, rcx
+ lea rax, [rbx+rax+64]
  mov qword ptr [rax], 0
  mov qword ptr [rax+8], 0
  mov qword ptr [rax+16], 0
- inc qword ptr [rip+.LxeRegionDepth]
+ inc qword ptr [rbx+48]
+ lock inc qword ptr [rip+.LxeRegionsActive]
  call .LxeMemLockRelease
  mov eax, 1
  pop r12
@@ -966,13 +1250,15 @@ xe.alloc.aligned:
  push r11
  push rbx
  call .LxeMemLockAcquire
- cmp qword ptr [rip+.LxeRegionDepth], 0
+ call .LxeCurrentThread
+ mov rcx, rax
+ cmp qword ptr [rcx+48], 0
  je .LxeRegionPopDone
- dec qword ptr [rip+.LxeRegionDepth]
- mov rbx, qword ptr [rip+.LxeRegionDepth]
+ dec qword ptr [rcx+48]
+ lock dec qword ptr [rip+.LxeRegionsActive]
+ mov rbx, qword ptr [rcx+48]
  shl rbx, 5
- lea rcx, [rip+.LxeRegions]
- add rcx, rbx
+ lea rcx, [rcx+rbx+64]
  mov rbx, qword ptr [rcx]
  mov qword ptr [rcx], 0
 .LxeRegionPopChunk:
@@ -1002,10 +1288,15 @@ xeruntime.gc.collect:
  mov rbp, rsp
  call .LxeMemLockAcquire
  mov qword ptr [rip+.LxeGcFreed], 0
- cmp qword ptr [rip+.LxeThreadsActive], 0
- jne .LxeGcCollectSkip
  cmp qword ptr [rip+.LxeStackBase], 0
  je .LxeGcCollectSkip
+ cmp qword ptr [rip+.LxeThreadsActive], 0
+ je .LxeGcCollectNow
+ cmp qword ptr [rip+.LxeGcThreadAware], 0
+ je .LxeGcCollectSkip
+ call .LxeGcCollectWorld
+ jmp .LxeGcCollectSkip
+.LxeGcCollectNow:
  call .LxeGcCollect
 .LxeGcCollectSkip:
  call .LxeMemLockRelease

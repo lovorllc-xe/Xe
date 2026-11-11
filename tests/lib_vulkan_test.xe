@@ -176,6 +176,22 @@ begin
         vkscene.release(scene)
     }
     failed := failed + texture_check(vk)
+    // device-local buffers: upload through staging and read back
+    var device_buffer: *vulkan.Buffer := vulkan.buffer_device(vk, 64, 32)
+    failed := failed + expect("device buffer", @device_buffer != 0)
+    if @device_buffer != 0 {
+        var numbers: *void := alloc(64)
+        var k: int := 0
+        while k < 16 {
+            ffi.put32(numbers, k * 4, k * 3)
+            k := k + 1
+        }
+        failed := failed + expect("device upload", vulkan.buffer_upload(vk, device_buffer, numbers, 64) = 0)
+        runtime.mem.set(numbers, 0, 64)
+        failed := failed + expect("device download", vulkan.buffer_download(vk, device_buffer, numbers, 64) = 0 && ffi.get32(numbers, 5 * 4) = 15 && ffi.get32(numbers, 15 * 4) = 45)
+        vulkan.buffer_free(vk, device_buffer)
+        free(numbers)
+    }
     vulkan.close(vk)
     if failed = 0 { writeln("vulkan ok") }
     return failed

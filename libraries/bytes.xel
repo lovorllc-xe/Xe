@@ -1,4 +1,5 @@
 // bytes: growable byte buffers with little/big-endian integer access.
+uses syscall
 module bytes
 begin
     type Buffer: record
@@ -189,6 +190,45 @@ begin
         if a.size != b.size { return 0 }
         if a.size = 0 { return 1 }
         return runtime.mem.compare(a.data, b.data, a.size) = 0
+    end
+
+    // Reads a whole file, binary-safe (NUL bytes included); null when it cannot be opened.
+    // For text, file.read(path) returns the contents as a string.
+    fn read_file(path: string): *bytes.Buffer
+    begin
+        var fd: int := syscall.invoke6(257, -100, path, 0, 0, 0, 0)
+        if fd < 0 { return null }
+        var size: int := syscall.invoke3(8, fd, 0, 2)
+        syscall.invoke3(8, fd, 0, 0)
+        var buffer: *bytes.Buffer := new()
+        if size > 0 { reserve(buffer, size) }
+        var done: int := 0
+        var reading: int := 1
+        while reading = 1 {
+            if done + 65536 > buffer.capacity - 1 { reserve(buffer, done + 65536) }
+            var n: int := syscall.invoke3(0, fd, buffer.data + done, buffer.capacity - 1 - done)
+            if n <= 0 { reading := 0 }
+            else { done := done + n }
+        }
+        syscall.invoke3(3, fd, 0, 0)
+        buffer.size := done
+        return buffer
+    end
+
+    // Writes the buffer to a file (created or truncated); 1 on success.
+    fn write_file(path: string, buffer: *bytes.Buffer): int
+    begin
+        var fd: int := syscall.invoke6(257, -100, path, 577, 420, 0, 0)
+        if fd < 0 { return 0 }
+        var done: int := 0
+        var ok: int := 1
+        while done < buffer.size && ok = 1 {
+            var n: int := syscall.invoke3(1, fd, buffer.data + done, buffer.size - done)
+            if n <= 0 { ok := 0 }
+            else { done := done + n }
+        }
+        syscall.invoke3(3, fd, 0, 0)
+        return ok
     end
 
     fn release(buffer: *bytes.Buffer)
