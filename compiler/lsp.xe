@@ -269,6 +269,36 @@ begin
         return value
     end
 
+    // The files to check, quoted for the shell. A document listed in a SOURCES file next to it (one file name per
+    // line, as in compiler/SOURCES) belongs to a multi-file program: check all of them, with the edited copy in its
+    // place. Otherwise the document is checked alone.
+    fn checkFiles(path: string, directory: string, temporary: string): string
+    begin
+        var name: string := str.slice(path, str.length(directory) + 1, str.length(path))
+        var sources: string := file.read(directory + "/SOURCES")
+        var files: string := str.builder("")
+        var found: int := 0
+        var start: int := 0
+        var i: int := 0
+        while i <= str.length(sources) {
+            if i = str.length(sources) || str.char(sources, i) = 10 {
+                var entry: string := trimText(str.slice(sources, start, i))
+                if str.length(entry) > 0 {
+                    if entry = name {
+                        files := str.append(files, " '" + temporary + "'")
+                        found := 1
+                    } else {
+                        files := str.append(files, " '" + directory + "/" + entry + "'")
+                    }
+                }
+                start := i + 1
+            }
+            i := i + 1
+        }
+        if found = 0 { return "'" + temporary + "'" }
+        return files
+    end
+
     fn diagnostics(server: *lsp.Server, uri: string, text: string)
     begin
         var path: string := uriPath(uri)
@@ -276,7 +306,7 @@ begin
         var temporary: string := directory + "/.xe-lsp-check.xe"
         var report: string := "/tmp/xe-lsp-report-" + str.number(syscall.invoke3(39, 0, 0, 0)) + ".txt"
         file.write(temporary, text)
-        var command: string := "'" + server.executable + "' --check '" + temporary + "' -q 2> '" + report + "' > /dev/null"
+        var command: string := "'" + server.executable + "' --check " + checkFiles(path, directory, temporary) + " -q 2> '" + report + "' > /dev/null"
         process.run("XE_HOME='" + server.home + "' " + command)
         var output: string := file.read(report)
         process.run("rm -f '" + temporary + "' '" + report + "'")
