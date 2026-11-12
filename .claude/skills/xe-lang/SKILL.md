@@ -17,10 +17,11 @@ Xe 2.3.0 is a statically checked language that compiles to native executables fo
 ```
 xe --build prog.xe -o prog [-p linux|win|macos] [-g] [-q] [--keep-asm] [--library-path DIR]
 xe --run prog.xe [-- args...]        # build to a temp file and run (Linux)
-xe --check prog.xe                   # type-check only
+xe --check prog.xe [more.xe...]      # type-check only (pass every file of a multi-file program)
 xe fmt [--check] [--stdout] files... # format (re-indent) sources
 xe pkg init|add|install|update|list  # git dependencies listed in xe.pkg, installed in .xe/packages
-xe lsp                               # language server on stdin/stdout (diagnostics, formatting, definition, completion)
+xe lsp                               # language server on stdin/stdout (diagnostics, formatting, definition, completion);
+                                     # a file listed in a SOURCES file beside it is checked together with the whole list
 xe -v                                # logo and version
 ```
 
@@ -107,7 +108,7 @@ Write the same code for every platform. The compiler picks `libraries/<platform>
 
 ## Compiler work (compiler/)
 
-- Source order is `compiler/SOURCES`. After changing the compiler: `scripts/bootstrap.sh` (checks the self-hosting fixpoint), then `scripts/update-seed.sh` so a fresh checkout can still bootstrap. Do not use new syntax in `compiler/*.xe` until the seed contains it.
+- Source order is `compiler/SOURCES`. A compiler file does not check alone (`xe --check compiler/main.xe` reports undefined functions from the other files); check the whole program with `cd compiler && xe --check $(cat SOURCES)`. After changing the compiler: `scripts/bootstrap.sh` (checks the self-hosting fixpoint), then `scripts/update-seed.sh` so a fresh checkout can still bootstrap. Do not use new syntax in `compiler/*.xe` until the seed contains it.
 - The parser and code generators work on source text spans. New language features are mostly lowered before parsing: `desugar.xe` (globals, consts, enums), `generics.xe` (instantiation); `for` headers are rewritten by `desugar.forLoops` to `for var i: int := A to B step S` and then parsed natively (`parser.forLoop`: loop node field 4 = declaration, 3 = condition, 7 = step); `break`/`continue`/`else if`/`goto` are native too (parser, checker, `codegen.xe`, `fast.xe`). Statement nodes use 0, not -1, for unused fields 7/8, so gate optional children on another field. `format.xe`, `lsp.xe` and the `pkg` command live in `main.xe`'s driver.
 - Keep the compiler self-hosted and native (no C or C++ in the toolchain).
 - The installed compiler uses its own copy of the libraries (`<prefix>/lib/xelang`). After changing `std/`, `libraries/` (including `libraries/linux|win|macos/`) or `platform/`, rerun `install/install.sh` before testing other projects with `xe`, or set `XE_HOME` to the repo. A mismatch shows up as "call to undefined function" inside an installed library.
