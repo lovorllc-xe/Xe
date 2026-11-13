@@ -12,7 +12,7 @@ languages = ["Xe"]
 
 [grammars.xe]
 # Zed fetches the grammar with git, so `rev` must be a commit that
-# contains zed-xe/tree-sitter-xe. Update it after changing the grammar.
+# contains Extensions/zed-xe/tree-sitter-xe. Update it after changing the grammar.
 repository = "file:///home/lovro/Documents/Projects/Xe/Xe"
-rev = "e9893e4627aa1cebe0080e147da3b9aec46876cd"
-path = "zed-xe/tree-sitter-xe"
+rev = "30ce76ea9b1014deb22453d11fc75e73bc028005"
+path = "Extensions/zed-xe/tree-sitter-xe"

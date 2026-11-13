@@ -1,163 +1,73 @@
 # Xe
 
-**Xe 2.3.0** is a statically checked systems and application language that
-compiles straight to native executables for Linux x86-64 (and cross-builds for
-Windows x86-64; macOS x86-64 builds but is untested). The compiler is written
-in Xe and **builds itself**: a checked-in assembly seed plus GNU `as` and `ld`
-are all you need — no C or C++ compiler.
+Xe is a statically checked language that compiles straight to native executables. It targets Linux x86-64 and
+cross-builds for Windows and macOS. The compiler is written in Xe and **builds itself**: a checked-in assembly seed plus
+GNU `as`, `ld` and `gzip` are all it needs, with no C or C++ compiler involved.
 
-Source files use `.xe`; importable libraries use `.xel`. Xe has two block
-styles on purpose: `begin … end` for big blocks (functions, modules, types)
-and `{ … }` for small ones (`if`, `while`).
+The syntax is Pascal-like: `begin … end` for big blocks (functions, modules, records), `{ … }` for small ones (`if`,
+`while`, `for`), `:=` to assign and `=` to compare.
 
 ```xe
 uses strings
 
 fn main(): int
 begin
-    var words: string := "xe is small and fast"
-    writeln(strings.to_upper(words))
+    for i := 1 to 3 {
+        writeln(i, " ", strings.to_upper("hello from xe"))
+    }
     return 0
 end
 ```
 
-## Platforms
-
-One source builds for every platform; only the `-p` flag changes:
-
-```
-xe --build app.xe -o app            # Linux (default)
-xe --build app.xe -o app.exe -p win   # Windows x86-64
-xe --build app.xe -o app -p macos     # macOS x86-64 (see below)
-```
-
-Programs and libraries (including `window`, `canvas`, `gui`, `game`) are identical on every platform; the compiler picks the
-platform's `native` layer from `libraries/<platform>/`, and a small runtime layer (`platform/<platform>/`) provides the entry
-point and system calls. Cross-building on Linux needs: Windows `llvm-mc`, `llvm-dlltool`, `lld-link`; macOS `llvm-mc`, `ld64.lld`.
-
-| | Linux | Windows | macOS |
-|---|---|---|---|
-| Console programs, files, memory, GC, threads | yes | yes | builds; **not run on real hardware**; no threads |
-| Sockets, HTTP, directories, stat, file mapping | yes | yes (Winsock, FindFirstFile, ...) | no |
-| Processes | `process`, `subprocess` | `process.run/spawn/wait` only (no pipes yet) | no |
-| epoll, inotify, signals | yes | no (signals: stubs) | no |
-| Windows/GUI (`window`) | X11 (default) or Wayland | Win32 | **no native backend yet** (`window.open` returns null) |
-| Audio (`audio`) | ALSA | winmm | generators and WAV files only |
-| Vulkan (compute, graphics, textures, swapchain) | yes (tested on an Intel Arc GPU) | builds, **not run** | builds, **not run**; no window surface |
-
-Honesty note: the Windows target was exercised during development under Wine (console programs, the garbage collector,
-threads, sockets, files, directories, one Win32 window with input events); it has not been tried on real Windows. The
-macOS target only produces a binary. `tests/run_windows_tests.sh` re-runs the test suite under Wine if you have it.
-
-## What is new in 2.x
-
-- **2.3.** Fixes from real use:
-  - **rbx corruption fixed** (the generated global accessor zeroed the caller's `rbx`).
-  - **Literals:** `0xFF`, `0b1010`, `1_000_000`, `1e9`, `'a'`, `null` and `sizeof(T)`.
-  - **Control flow and calls:** `for i := 0 to n - 1 { }` (also `downto` and `step`), `goto`, calls that span lines inside `( )`, and `break`/`continue` in loops with `defer` or `gc.begin`.
-  - **Conversions and access:** `var f: flt := 3` converts the int. `call().field`, `&` of a `flt` local as an argument, and `return null` work.
-  - **Module functions** may be named `read`/`write`/`free`/`new`/`delete`.
-  - **Errors** name the construct that can't be compiled.
-  - **gdb (`-g`)** shows arguments, locals and record fields.
-  - **The GC runs while threads are alive** (Linux), and `gc.begin` regions are per thread.
-  - **FFI callbacks:** `ffi.callback`, for example to connect GTK signals or pass a qsort comparator.
-  - **`truetype`:** anti-aliased fonts of any size.
-  - **Wayland keyboard layouts:** `xkbmap`, with AltGr and several layouts.
-  - **New calls:** `bytes.read_file`/`write_file`, and `vulkan.buffer_device` + `buffer_upload`. `math.sqrt` is now one instruction.
-  - **Faster allocator bitmaps.**
-  - **`tools/release.xe`** builds every release package.
-- **Language features (2.2).** `else if`, `break`/`continue`, global variables and constants
-  (`global x: int := 0`, `global const N: int := 10`), `enum`, generics (`type Pair<A, B>`, `fn largest<T>`,
-  `largest<int>(a, b)`), casts (`cast.flt`, `cast.int`, `cast.ptr`, `cast.addr`), function pointers and closures
-  (`func`, `closure`), errors as values (`result`). None of the existing syntax changed. See
-  [The language in one screen](#the-language-in-one-screen).
-- **Tooling (2.2).** `xe fmt` (formatter), `xe lsp` (language server: diagnostics, formatting, go to definition, completion;
-  [docs/editors.md](docs/editors.md)), `xe pkg` (git dependencies in `xe.pkg`), `xe --build -g` (source line numbers for
-  gdb), `xe --build -p win|macos` (cross builds).
-- **Self-hosted bootstrap.** `scripts/bootstrap.sh` assembles
-  `bootstrap/xe-seed.s.gz`, rebuilds the compiler twice and checks that both
-  generations emit byte-identical assembly. (The old C++ bootstrap was removed.)
-- **Real error messages.** Every diagnostic carries `file:line:col`, the source
-  line and a caret, and says what was expected:
-
-  ```
-  app.xe:4:13: error: undefined name 'totl'
-   4 |     writeln(totl + 1)
-     |             ^
-  ```
-- **A new memory manager and garbage collector.** Size-class arena allocator,
-  a conservative mark-and-sweep collector (`runtime.gc.collect()`,
-  `runtime.gc.enable()`, `runtime.gc.stats(which)`), scoped regions
-  (`gc.begin { … } gc.end`), thread-safe allocation, double-free protection and
-  `free(0)` as a no-op. See the `heapstats` library.
-- **More intuitive pointers.** Record fields auto-dereference through pointers
-  (`node.next`, not `(*node).next`); pointer locals live in registers;
-  `*p`, `&x`, `@p` (address as an int, e.g. `@p = 0` for a null check).
-- **Graphics, GUI and games.** `canvas` (2D drawing, text, sprites), `image` (PNG, baseline JPEG, BMP, PPM), `window` + `wayland` + `x11`
-  (windows, keyboard, mouse over native Wayland or X11, no libwayland or libX11), `gui` (immediate-mode widgets), `gfx3d` (software 3D:
-  meshes, matrices, z-buffer, OBJ files), `game` (collisions, tile maps, sprites, particles), and **Vulkan**:
-  `vulkan` (any GPU, any platform: compute, graphics, textures, swapchains), `vkwindow`, `vkscene` (GPU-lit 3D
-  scenes) and `ffi` (call any C library). See [Graphics](#graphics-gui-and-games).
-- **176 libraries** covering containers, math, text, encodings, hashing and
-  crypto, compression, files and OS, concurrency, networking and HTTP. See
-  [docs/libraries.md](docs/libraries.md).
-- **Faster compiler and faster programs.** Compile results are memoized, the
-  register allocator is cached per declaration, constant `/` and `%` are
-  strength-reduced (including power-of-two moduli above 2³¹), and string and
-  allocator fast paths were rewritten.
-- **Benchmarks.** `benchmarks/` has 239 cases and a tkinter GUI comparing Xe
-  with C++, Go, Rust and Python. See [Benchmarks](#benchmarks) for the honest
-  numbers.
-- **`xe --version` / `xe -v`** prints the colored logo. The ASCII art lives in
-  `logo/ascii/xe.ans`.
+Current version: **2.3.0**.
 
 ## Install
 
-### From the release tarball (no compiler needed)
+**From a release package** (no compiler needed):
 
 ```sh
 tar xzf xe-2.3.0-linux-x86_64.tar.gz
 cd xe-2.3.0-linux-x86_64
-./install.sh                 # ~/.local     (or: sudo ./install.sh → /usr/local)
+./install.sh                 # installs into ~/.local   (sudo ./install.sh → /usr/local)
 xe --version
 ```
 
-`PREFIX=/opt/xe ./install.sh` installs elsewhere; `./uninstall.sh` removes it.
-Build the packages yourself with the release tool. It asks for the Xe root folder and writes `dist/xe-<version>-{linux-x86_64.tar.gz,
-windows-x86_64.zip, windows-arm64.zip, macos-arm64.tar.gz}`:
+`PREFIX=/opt/xe ./install.sh` installs elsewhere, and `./uninstall.sh` removes it.
 
-```sh
-xe --run tools/release.xe
-```
-
-Xe has no ARM64 code generator yet. The ARM packages therefore contain x86-64 programs, which Windows on ARM runs through its x64
-emulation and Apple Silicon Macs run through Rosetta 2. Each package says so in a text file.
-
-### From the repository
+**From this repository:**
 
 ```sh
 ./install/install.sh
 ```
 
-This needs only `as`, `ld` and `gzip`. It bootstraps from the seed, verifies the
-fixpoint, installs `xe` and the libraries, and runs the test suite.
+This bootstraps the compiler from the seed, checks that it reproduces itself exactly, installs `xe` with its libraries,
+and runs the test suite. Run it again after pulling changes so the installed libraries stay in step with the compiler.
 
 ## Build and run
 
 ```sh
 xe hello.xe              # builds ./hello
-xe --build hello.xe -o hello
-xe --run hello.xe        # build into a temporary file and run
-xe --check app.xe        # type-check only
-xe --build app.xe -g     # add source line numbers for gdb
-xe fmt src/*.xe          # re-indent source files (--check lists the ones that need it)
-xe pkg add name URL      # install a git dependency into .xe/packages (listed in xe.pkg)
-xe lsp                   # language server (see docs/editors.md)
-xe --emit-asm app.xe     # inspect the generated assembly
-xe --help
+xe --build app.xe -o app # same, with an explicit output name
+xe --run app.xe          # build into a temporary file and run
+xe --check app.xe        # type-check only (list every file of a multi-file program)
+xe --build app.xe -g     # debug info for gdb: lines, arguments, locals, record fields
+xe fmt src/*.xe          # re-indent source files (--check only lists them)
+xe pkg add name URL      # add a git dependency (listed in xe.pkg, installed in .xe/packages)
+xe lsp                   # language server for editors
+xe --emit-asm app.xe     # show the generated assembly
+xe --help                # everything else, including freestanding PE and bare-metal output
 ```
 
-`xe --help` also lists the freestanding PE and bare-metal modes.
+A program starts at `fn main(): int`; its result is the exit status. `uses name` imports `name.xel`, looked up next to
+the importing file, then in `--library-path` folders, `.xe/packages`, and the installed libraries.
+
+Errors point at the exact spot and say what was expected:
+
+```
+app.xe:4:13: error: undefined name 'totl'
+ 4 |     writeln(totl + 1)
+   |             ^
+```
 
 ## The language in one screen
 
@@ -170,55 +80,77 @@ begin
     y: int
 end
 
+global const LIMIT: int := 5
+
+enum Color
+begin
+    red
+    green := 5
+end
+
 fn length2(p: *Point): int
 begin
-    return p.x * p.x + p.y * p.y        // fields auto-dereference
+    return p.x * p.x + p.y * p.y        // fields auto-dereference through pointers
+end
+
+fn largest<T>(a: T, b: T): T            // generics take explicit type arguments
+begin
+    if a > b { return a }
+    return b
 end
 
 fn main(): int
 begin
-    var p: *Point := alloc(16)
-    defer free(p)
+    var p: *Point := alloc(sizeof(Point))
+    defer free(p)                       // runs when the function returns
     p.x := 3
     p.y := 4
     var scores: *intlist.List := intlist.new()
-    var i: int := 0
-    while i < 5 {
+    for i := 0 to LIMIT - 1 {
+        if i = 2 { continue }
         intlist.push(scores, i * length2(p))
-        i := i + 1
     }
-    if intlist.len(scores) = 5 { writeln("ok") } else { writeln("bad") }
+    if intlist.len(scores) = 4 {
+        writeln("ok ", largest<int>(3, 9), " ", Color.green)
+    } else if p = null {
+        writeln("no point")
+    } else {
+        writeln("bad")
+    }
     return 0
 end
 ```
 
-- `:=` assigns, `=` compares; there is no `==` or `for`. `while` is the only loop, with `break` and `continue`.
-- `if … { } else if … { } else { }` and `while … { }` for small blocks, `begin … end` for big ones.
-- `global counter: int := 0`, `global const LIMIT: int := 100`, `enum Color begin red green := 5 end` (`Color.green`).
-- Generics are explicit: `type Pair<A, B>: record ... end`, `fn largest<T>(a: T, b: T): T`, used as `Pair<int, string>` and
-  `largest<int>(3, 9)`.
-- Casts are functions (`cast.flt(i)`, `cast.int(f)`, `cast.ptr(address)`, `cast.addr(p)`); function pointers are `&name` with
-  `func.call1(ptr, x)`; `closure` pairs a function with data; `result` has `ok`/`fail`/`unwrap`/`panic`.
-- Types: `int`, `flt`, `string`, `*T`, `[N]T`, records, aliases.
-- `alloc`/`free`, `defer`, `gc.begin { } gc.end` regions, `thread.start`/`thread.join`.
-- Module functions named `new`, `delete`, `read`, `write` or `free` are shadowed
-  by builtins; call them qualified (`intlist.new()`), and the checker warns
-  when you declare one.
+- **Types:** `int` (64-bit), `flt` (64-bit float), `string`, pointers `*T`, fixed arrays `[N]T`, records and aliases.
+- **Literals:** `0xFF`, `0b1010`, `1_000_000`, `2.5e-3`, `'a'` (an int), `null`, `sizeof(T)`.
+- **Control flow:** `if`/`else if`/`else`, `while`, `for i := a to b` (also `downto` and `step`; bounds are inclusive),
+  `break`, `continue`, `switch … case … default … end`, `goto label`.
+- **Memory:** `alloc`/`free`, `defer`, a conservative garbage collector, and `gc.begin { } gc.end` regions that free
+  everything allocated inside them at once.
+- **Program structure:** `module name begin … end`, `global` variables and `global const` constants, `enum`, generics
+  (`type Pair<A, B>`, `fn largest<T>`).
+- **Escape hatches:** casts are functions (`cast.flt`, `cast.int`, `cast.ptr`, `cast.addr`); `&name` is a function
+  pointer (`func`, `closure`); `ffi` calls C libraries and accepts callbacks; `asm { }` embeds assembly.
+- **Threads:** `thread.start(&worker, arg)` and `thread.join(id)`.
+- `==` is an error, and `"text" + 5` is too (write `"text" + str.number(5)`, or pass both to `writeln`).
 
-The full reference is in [docs/documentation.txt](docs/documentation.txt).
+The full reference is [docs/documentation.txt](docs/documentation.txt).
 
 ## Libraries
 
-176 libraries ship in `libraries/`: containers (`intlist`, `strmap`, `heap`,
-`lru`, `trie`, …), numerics (`bigint`, `rational`, `matrix`, `fft`, `stats`),
-text (`regex`, `fmt`, `csv`, `markdown`, `template`), encodings and crypto
-(`base64`, `sha256`, `hmac`, `chacha20`, `uuid`), compression (`inflate`,
-`lzss`, `huffman`), OS (`path`, `dir`, `subprocess`, `epoll`, `inotify`,
-`mmapfile`), concurrency (`mutex`, `channel`, `waitgroup`, `parallel`),
-networking (`tcp`, `udp`, `dns`, `http`, `httpserver`) and more. Import with
-`uses name`. The index is [docs/libraries.md](docs/libraries.md).
+176 libraries ship in `libraries/`:
+- **Containers:** `intlist`, `strmap`, `heap`, `lru`, `trie`, …
+- **Numerics:** `bigint`, `rational`, `matrix`, `fft`, `stats`
+- **Text:** `regex`, `fmt`, `csv`, `json`, `markdown`, `template`
+- **Encodings and crypto:** `base64`, `sha256`, `hmac`, `chacha20`, `uuid`
+- **Compression:** `inflate`, `lzss`, `huffman`
+- **OS:** `path`, `dir`, `subprocess`, `epoll`, `inotify`, `mmapfile`
+- **Concurrency:** `mutex`, `channel`, `waitgroup`, `parallel`
+- **Networking:** `tcp`, `udp`, `dns`, `http`, `httpserver`
 
-## Graphics, GUI and games
+The full list with descriptions is [docs/libraries.md](docs/libraries.md).
+
+## Graphics, GUI, audio
 
 ```xe
 uses gui
@@ -229,90 +161,128 @@ begin
     var ui: *gui.Gui := gui.new(win)
     var clicks: int := 0
     while window.is_open(win) {
-        window.poll(win)                       // events -> mouse, keyboard
+        window.poll(win)                       // mouse and keyboard events
         gui.start(ui)
         if gui.button(ui, 20, 20, 140, 30, "clicked " + str.number(clicks)) { clicks := clicks + 1 }
-        gui.finish(ui)                         // draw + present
+        gui.finish(ui)                         // draw and present
         window.limit_fps(win, 60)
     }
     return 0
 end
 ```
 
-- **Text:** `truetype` loads `.ttf` fonts (or `truetype.load_system(1)` for a monospace system font) and draws
-  anti-aliased UTF-8 text of any pixel size onto a canvas; glyphs are cached per size.
-- **2D:** `canvas` draws pixels, lines, rectangles, circles, triangles, quick 8x14 bitmap text, alpha
-  blending and sprites; `image` loads/saves PNG, BMP and PPM; `game` adds collisions, tile maps, animation,
-  particles and a fixed-timestep helper.
-- **3D:** `gfx3d` is a complete software renderer (vectors, 4x4 matrices, perspective camera, z-buffer, flat
-  shading, wireframes, cube/sphere/torus/plane generators, `.obj` loader).
-- **GUI:** `gui` is immediate-mode: widgets are function calls (`button`, `checkbox`, `radio`, `slider`,
-  `textbox`, `list`, `progress`, `panel`, auto-layout variants).
-- **Vulkan:** `vulkan` works on every platform and GPU. The Vulkan loader is opened at run time (`libvulkan.so.1`,
-  `vulkan-1.dll`, or `libvulkan.1.dylib` / MoltenVK), so programs build without a Vulkan SDK and `vulkan.open` simply
-  returns null where Vulkan is missing. Nothing is assumed about the GPU: the device (discrete, integrated, virtual,
-  software; `XE_VK_DEVICE` overrides), queue family, memory types, depth format, swapchain format and present mode are
-  chosen from what the driver reports, and MoltenVK's portability extensions are enabled. It covers buffers, SPIR-V
-  shader modules, compute (`compute_new/bind/run`), graphics (render passes, pipelines with uniform buffers,
-  textures with optional mipmaps and blending, vertex/index buffers, push constants, dynamic viewport),
-  synchronization with fences/semaphores, offscreen targets with read-back, and **window swapchains**:
-  `vkwindow.new(vk, win, depth, vsync)` presents straight into a `window` on Linux (X11/XWayland) and Windows, and
-  falls back to rendering offscreen and copying where a surface is not available (macOS, native Wayland windows).
-  `vkscene` gives ready-made lit 3D on the GPU. Compile shaders with `glslc`. `XE_VK_VALIDATION=1` turns on the
-  Khronos validation layer when installed. Verified here only on an Intel Arc GPU under Linux (compute, graphics,
-  textures, uniforms, swapchain with resize, and the offscreen fallback); the Windows and macOS paths build but were
-  not run, and other vendors' GPUs were not available to test.
-- Windows use X11 by default on Linux (also on Wayland sessions, through XWayland); `XE_BACKEND=wayland` or `window.open_wayland` selects native Wayland, and Wayland is used automatically if X11 is unavailable. Native Wayland follows the compositor's keymap (any XKB layout, AltGr, several layouts); GNOME gives Wayland windows no title bar.
-- **Audio:** `audio` plays 16-bit sound (`audio.open`, `audio.play`, tone/square/noise generators, a mixer) through ALSA on Linux and winmm on Windows, and reads/writes WAV files everywhere.
+- **Windows:** `window` opens a window with keyboard and mouse input. It uses X11 on Linux by default (through XWayland
+  on Wayland sessions); `XE_BACKEND=wayland` or `window.open_wayland` uses native Wayland, which follows the
+  compositor's keyboard layout. On Windows it uses Win32. No libX11 or libwayland is needed.
+- **2D:** `canvas` (pixels, lines, shapes, sprites, alpha blending, a small bitmap font), `truetype` (anti-aliased
+  `.ttf` text of any size), `image` (PNG, baseline JPEG, BMP, PPM), `game` (collisions, tile maps, animation, particles).
+- **GUI:** `gui` is immediate-mode: every widget is a function call (`button`, `checkbox`, `radio`, `slider`, `textbox`,
+  `list`, `progress`, `panel`).
+- **3D in software:** `gfx3d` (matrices, perspective camera, z-buffer, shading, mesh generators, `.obj` loader).
+- **Vulkan:** `vulkan` loads the Vulkan driver at run time, so no SDK is needed to build, and `vulkan.open` returns null
+  where Vulkan is missing. It picks the device, memory types and formats from what the driver reports. It covers
+  compute, graphics pipelines, textures, uniforms, offscreen rendering and window swapchains (`vkwindow`); `vkscene`
+  draws lit 3D meshes. Upload static vertex data with `vulkan.buffer_device` + `buffer_upload`; `buffer_new` is host
+  memory, which the GPU reads slowly. Compile shaders with `glslc`. `XE_VK_VALIDATION=1` turns on validation layers.
+- **Audio:** `audio` plays 16-bit sound through ALSA (Linux) or winmm (Windows), with tone/noise generators, a mixer, and
+  WAV files.
 
-## Benchmarks
+## Platforms
+
+The same source builds for every platform; only `-p` changes:
 
 ```sh
-python3 benchmarks/gui.py            # GUI: run, filter, inspect
-python3 benchmarks/runner.py --runs 30 --compile-runs 3   # headless
+xe --build app.xe -o app              # Linux x86-64 (default)
+xe --build app.xe -o app.exe -p win   # Windows x86-64
+xe --build app.xe -o app -p macos     # macOS x86-64
 ```
 
-239 cases: 22 kernels at about 11 sizes each (from 1-element "nanosecond"
-cases to ones that run for milliseconds), 4 monolithic multi-kernel programs and
-3 multithreaded families. Each program prints a checksum that must match across
-Xe, C++ (`g++ -O3`), Go, Rust (`rustc -C opt-level=3`) and Python. Compile time
-is the mean of several builds; execution time is the mean of 30 process runs
-(fork, exec, run, exit). Times are shown in ns, µs, ms and s.
+Cross-building on Linux needs the LLVM tools: `llvm-mc`, `llvm-dlltool` and `lld-link` for Windows; `llvm-mc` and
+`ld64.lld` for macOS. Platform differences live in `libraries/<platform>/` and `platform/<platform>/`, so programs
+don't need `if windows` code.
 
-Results of the last full run are in `benchmarks/results/latest.json` and are
-summarized in [benchmarks/README.md](benchmarks/README.md), including where Xe
-does **not** reach the fastest language.
+| | Linux | Windows | macOS |
+|---|---|---|---|
+| Console programs, files, memory, GC | yes | yes | builds, untested |
+| Threads | yes | yes | no |
+| Sockets, HTTP, directories | yes | yes | no |
+| Processes | `process`, `subprocess` | `process.run/spawn/wait` (no pipes) | no |
+| epoll, inotify, signals | yes | no | no |
+| Windows and GUI | X11 or Wayland | Win32 | no window backend yet |
+| Audio playback | ALSA | winmm | no (WAV files only) |
+| Vulkan | yes (tested on Intel Arc) | builds, untested | builds, untested |
 
-## Tests
+Linux is the tested platform. The Windows build has run console programs, threads, sockets, files and a Win32 window,
+but not on real Windows hardware. The macOS build produces a binary that has never been run. There is no ARM64 code
+generator: the ARM release packages contain x86-64 programs for Windows-on-ARM's x64 emulation and for Rosetta 2.
+
+## Editors
+
+`xe lsp` gives any editor diagnostics, formatting, go to definition and completion. Setup for Zed, VS Code and others is
+in [docs/editors.md](docs/editors.md). `Extensions/zed-xe/` and `Extensions/vscode-xe/` add syntax highlighting.
+
+## Working on Xe
 
 ```sh
-XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 21 programs; every one must build and exit 0
+scripts/bootstrap.sh                               # build build/xe from the seed and check the fixpoint
+XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh   # 21 test programs; each must build and exit 0
+scripts/update-seed.sh                             # after changing compiler/*.xe: refresh the seed
+xe --run tools/release.xe                          # build release packages for every platform into dist/
 ```
 
-## Repository layout
+The compiler sources must only use syntax the seed already understands. Commit the compiler change and refresh the seed
+before using new syntax in `compiler/*.xe`.
 
-- `compiler/` — the self-hosted compiler (`SOURCES` lists the build order).
-- `bootstrap/xe-seed.s.gz` — assembly seed; refresh with `scripts/update-seed.sh`.
-- `std/`, `libraries/` — the automatic `io`/`mem` modules and the `.xel` libraries (`libraries/linux|win|macos/` hold the per-platform layers).
-- `platform/` — per-platform runtime layer (entry point and system-call emulation for Windows and macOS).
-- `tests/` — integration programs and the runner.
-- `benchmarks/` — kernels, generator, runner and GUI.
-- `logo/` — `png/` source logo and `ascii/xe.ans` colored ASCII art.
-- `install/`, `scripts/`, `tools/` — installers, bootstrap, seed and release tooling (`tools/release.xe` builds all packages).
-- `docs/` — documentation, library index, editor setup.
-- `vscode-xe/`, `zed-xe/` — syntax highlighting for editors.
+| Folder | Contents |
+|---|---|
+| `compiler/` | the self-hosted compiler (`SOURCES` lists the files in build order) |
+| `bootstrap/` | `xe-seed.s.gz`, the assembly the first build starts from |
+| `std/`, `libraries/` | the automatic `io`/`mem` modules and the `.xel` libraries (per-platform pieces in `libraries/linux`, `win`, `macos`) |
+| `platform/` | entry point and system-call layer for Windows and macOS |
+| `tests/` | test programs and the runner |
+| `docs/` | language reference, library index, editor setup |
+| `install/`, `scripts/`, `tools/` | installer, bootstrap and seed scripts, release tool |
+| `Extensions/` | Zed and VS Code extensions |
+| `logo/` | logo image and the ASCII art shown by `xe --version` |
 
 ## Limits
 
-- **Targets:** Linux x86-64 is complete and tested. Windows x86-64 cross-builds and was exercised under Wine only (see the
-  Platforms table for what is missing there). macOS x86-64 builds a binary that has not been run, and has no window or
-  thread support. There is no ARM64 back end (on Apple Silicon the macOS binary would need Rosetta).
-- **Language:** generics are instantiated copies with explicit type arguments (top-level only); globals are reached
-  through a hidden pointer (slightly slower than locals); `goto` is not allowed in functions with `defer` or `gc.begin`;
-  function pointers and FFI callbacks carry int/pointer/string arguments only.
-- **Runtime:** HTTP is plain `http://` (no TLS). The garbage collector is conservative. On Linux it pauses other threads
-  with SIGPWR while it collects (`nanosleep` resumes; `poll`/`epoll_wait` may return early with EINTR). On Windows it
-  still waits until worker threads finish.
-- **Graphics:** no macOS window backend; native Wayland windows cannot present Vulkan frames (they use the offscreen
-  fallback); TrueType text has no kerning or hinting and no CFF (.otf) outlines.
-- **Debugging:** `-g` gives gdb line numbers, arguments, locals and record fields; arrays show as their first element type.
+- **Targets:** only Linux x86-64 is fully tested (see [Platforms](#platforms)). There is no ARM64 back end.
+- **Language:** generics need explicit type arguments and are top-level only. `goto` is not allowed in functions that
+  use `defer` or `gc.begin`. Function pointers and FFI callbacks pass int, pointer and string arguments only. Globals
+  are slightly slower than locals.
+- **Runtime:** HTTP is plain `http://` (no TLS). The garbage collector is conservative. On Linux it briefly pauses other
+  threads while collecting (so `poll`/`epoll_wait` may return early with EINTR); on Windows it waits until worker
+  threads finish.
+- **Graphics:** no macOS window backend; native Wayland windows show Vulkan output through an offscreen copy; TrueType
+  text has no kerning, hinting or `.otf` (CFF) support.
+
+## Changes
+
+**2.3**
+- Fixed: rbx register corruption around global variables.
+- New syntax:
+  - `for` loops;
+  - hex, binary and character literals, `_` separators and exponents;
+  - `null`, `sizeof`, `goto`;
+  - calls spanning several lines.
+- `break`/`continue` work with `defer` and `gc.begin`; `var f: flt := 3` converts the int.
+- Module functions may be named `read`, `write`, `free`, `new` or `delete`.
+- The garbage collector runs while threads are alive, and `gc.begin` regions are per thread.
+- `-g` shows arguments, locals and record fields in gdb.
+- Errors name the construct they reject.
+- New libraries: `ffi.callback`, `truetype`, `xkbmap` (Wayland keyboard layouts).
+- New calls: `bytes.read_file`/`write_file`, `vulkan.buffer_device`/`buffer_upload`.
+- The language server checks multi-file programs listed in a `SOURCES` file.
+- New release tool: `tools/release.xe`.
+
+**2.2**
+- `else if`, `break`/`continue`, globals and constants, `enum`, generics, casts, function pointers, closures, `result`.
+- Tools: `xe fmt`, `xe lsp`, `xe pkg`, `-g`, and cross builds with `-p`.
+
+**2.0–2.1**
+- The compiler became self-hosted, bootstrapping from an assembly seed instead of the old C++ compiler.
+- Precise error messages.
+- New allocator and garbage collector.
+- Auto-dereferencing pointers.
+- Graphics, GUI, audio and Vulkan libraries.

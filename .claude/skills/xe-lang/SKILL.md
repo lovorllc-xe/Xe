@@ -5,7 +5,7 @@ description: Write, debug, and review code in the Xe programming language (.xe s
 
 # Xe language
 
-Xe 2.3.0 is a statically checked language that compiles to native executables for Linux x86-64 (default), Windows x86-64 (`-p win`) and macOS x86-64 (`-p macos`, build only). The compiler is self-hosted (`compiler/*.xe`) and bootstraps from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip` (`scripts/bootstrap.sh`). The installed `xe` finds `std/`, `libraries/` and `platform/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 179 libraries are in `libraries/` (index: `docs/libraries.md`).
+Xe 2.3.0 is a statically checked language that compiles to native executables for Linux x86-64 (default), Windows x86-64 (`-p win`) and macOS x86-64 (`-p macos`, build only). The compiler is self-hosted (`compiler/*.xe`) and bootstraps from `bootstrap/xe-seed.s.gz` with only `as`, `ld` and `gzip` (`scripts/bootstrap.sh`). The installed `xe` finds `std/`, `libraries/` and `platform/` in `<prefix>/lib/xelang` (or `$XE_HOME`). 176 libraries are in `libraries/` (index: `docs/libraries.md`).
 
 **Trust the compiler.** When unsure, write a 10-line probe program and build it (about 20 ms). Diagnostics are precise: `file:line:col: error: message`, the source line and a caret.
 
@@ -28,6 +28,7 @@ xe -v                                # logo and version
 - `main` is `fn main(): int` (its result is the exit status). Extra files on the command line are combined into the build; `uses name` loads `name.xel` from beside the importing file, then from `--library-path`, `.xe/packages/*`, and the installed `libraries/` (a per-platform subfolder such as `libraries/win/` is searched first).
 - `-g` adds DWARF debug info for gdb: line numbers, function parameters and local variables with their types, records with fields (`gdb prog`, `break file.xe:LINE`, `bt`, `info args`, `info locals`, `p *node`). Debug builds are not optimized.
 - Cross builds need `llvm-mc`, `llvm-dlltool`, `lld-link` (Windows) or `llvm-mc`, `ld64.lld` (macOS). Run `--run` only for the platform you are on. Do not run Windows programs through Wine unless the user asks.
+- Editor extensions are in `Extensions/zed-xe` and `Extensions/vscode-xe`.
 - Repo tests: `XE=$PWD/build/xe XE_HOME=$PWD tests/run_tests.sh` (every `tests/*.xe` must build and exit 0). Never claim a build or test passed unless you ran it.
 
 ## Canonical shape

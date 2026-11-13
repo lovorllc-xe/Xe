@@ -47,11 +47,11 @@ Add to `settings.json`:
 }
 ```
 
-(`zed-xe/` is the Zed extension with syntax highlighting; its tree-sitter grammar predates `global`, `enum`, generics, `break` and `continue`.)
+(`Extensions/zed-xe/` is the Zed extension: highlighting, auto-indent, outline and the language server. Its compiled tree-sitter parser predates the 2.3 syntax (`for`, `goto`, character literals); `grammar.js` has it, and `npx tree-sitter-cli generate --abi 14` in `Extensions/zed-xe/tree-sitter-xe` regenerates the parser.)
 
 ## VS Code
 
-`vscode-xe/` gives syntax highlighting and snippets. For the language server use any generic LSP client extension (for example "Generic LSP Client") with the command `xe` and the argument `lsp` for the language id `xe`.
+`Extensions/vscode-xe/` gives syntax highlighting and snippets. For the language server use any generic LSP client extension (for example "Generic LSP Client") with the command `xe` and the argument `lsp` for the language id `xe`.
 
 ## Formatting from the command line
 

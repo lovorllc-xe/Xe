@@ -25,7 +25,7 @@ Suggested `settings.json`:
 ```
 
 ```
-zed-xe/
+Extensions/zed-xe/
 ├── extension.toml          extension manifest
 ├── languages/xe/           Zed language config + tree-sitter queries
 ├── tree-sitter-xe/         tree-sitter grammar (grammar.js + generated src/)
@@ -34,9 +34,9 @@ zed-xe/
 
 ## Install (dev extension)
 
-1. Commit `zed-xe/` and put that commit's SHA in `rev` in `extension.toml`
+1. Commit `Extensions/zed-xe/` and put that commit's SHA in `rev` in `extension.toml`
    (Zed fetches the grammar with git, so it must be committed).
-2. In Zed: command palette → `zed: install dev extension` → pick `zed-xe/`.
+2. In Zed: command palette → `zed: install dev extension` → pick `Extensions/zed-xe/`.
 
 ## Xe Vibrant colours (syntax only)
 
@@ -63,9 +63,9 @@ so other languages and the rest of your theme are not affected.
 ## Changing the grammar
 
 ```sh
-cd zed-xe/tree-sitter-xe
+cd Extensions/zed-xe/tree-sitter-xe
 npx tree-sitter-cli generate --abi 14
-npx tree-sitter-cli parse ../../libraries/*.xel   # sanity check
+npx tree-sitter-cli parse ../../../libraries/*.xel   # sanity check
 ```
 
 Then commit, update `rev`, and rebuild the dev extension in Zed.
