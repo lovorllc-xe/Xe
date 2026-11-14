@@ -16,6 +16,7 @@ libs.zip
 .vscode/
 .claude/*
 !.claude/skills/
+.claude/
 
 #tools
 release.xe
